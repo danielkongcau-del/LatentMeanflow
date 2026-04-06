@@ -1,0 +1,95 @@
+model:
+  base_learning_rate: 1.0e-4
+  target: latent_meanflow.trainers.latent_flow_trainer.LatentFlowTrainer
+  params:
+    objective_name: alphaflow
+    tokenizer_config_path: configs/autoencoder_semantic_pair_256.yaml
+    tokenizer_ckpt_path: logs/autoencoder/checkpoints/last.ckpt
+    sample_posterior: false
+    freeze_tokenizer: true
+    use_class_condition: false
+    class_label_key: class_label
+    log_sample_nfe: 2
+    monitor: val/alphaflow_loss
+    backbone_config:
+      target: latent_meanflow.models.backbones.latent_interval_velocity_convnet.LatentIntervalVelocityConvNet
+      params:
+        model_channels: 128
+        time_embed_dim: 256
+        num_res_blocks: 4
+        dropout: 0.0
+        time_conditioning: t_delta
+    objective_config:
+      target: latent_meanflow.objectives.alphaflow.AlphaFlowObjective
+      params:
+        time_eps: 1.0e-4
+        min_delta: 1.0e-3
+        loss_type: mse
+        alpha_schedule_config:
+          target: latent_meanflow.objectives.alphaflow.SigmoidAlphaScheduler
+          params:
+            start_step: 5000
+            end_step: 60000
+            gamma: 25.0
+            clamp_eta: 0.05
+    sampler_config:
+      target: latent_meanflow.samplers.interval.IntervalFlowSampler
+      params:
+        default_nfe: 1
+        two_step_time: 0.5
+
+data:
+  target: main.DataModuleFromConfig
+  params:
+    batch_size: 8
+    num_workers: 4
+    wrap: false
+    train:
+      target: latent_meanflow.data.semantic_pair.MultiSemanticImageMaskPairDataset
+      params:
+        roots:
+          - data/remote
+        split: train
+        size: 256
+        image_dir: images
+        mask_dir: masks
+        gray_to_class_id:
+          36: 0
+          73: 1
+          109: 2
+          146: 3
+          182: 4
+          219: 5
+          255: 6
+        ignore_index: -1
+    validation:
+      target: latent_meanflow.data.semantic_pair.MultiSemanticImageMaskPairDataset
+      params:
+        roots:
+          - data/remote
+        split: val
+        size: 256
+        image_dir: images
+        mask_dir: masks
+        gray_to_class_id:
+          36: 0
+          73: 1
+          109: 2
+          146: 3
+          182: 4
+          219: 5
+          255: 6
+        ignore_index: -1
+
+lightning:
+  callbacks:
+    image_logger:
+      target: latent_meanflow.callbacks.semantic_logger.SemanticPairImageLogger
+      params:
+        disabled: false
+        batch_frequency: 100
+        max_images: 4
+        latest_only: true
+        ignore_index: -1
+  trainer:
+    benchmark: true

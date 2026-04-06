@@ -7,28 +7,30 @@ from ldm.util import instantiate_from_config
 from latent_meanflow.models.tokenizer import SemanticTokenizerAdapter
 
 
-class LatentFMTrainer(pl.LightningModule):
+class LatentFlowTrainer(pl.LightningModule):
     def __init__(
         self,
         tokenizer_config_path,
         tokenizer_ckpt_path,
         backbone_config,
         objective_config,
+        sampler_config,
+        objective_name=None,
         sample_posterior=False,
         freeze_tokenizer=True,
         use_class_condition=False,
         class_label_key="class_label",
-        log_sample_steps=16,
-        monitor="val/fm_loss",
+        log_sample_nfe=2,
+        monitor="val/loss",
     ):
         super().__init__()
-        self.save_hyperparameters(ignore=["backbone_config", "objective_config"])
+        self.save_hyperparameters(ignore=["backbone_config", "objective_config", "sampler_config"])
 
         self.sample_posterior = bool(sample_posterior)
         self.freeze_tokenizer = bool(freeze_tokenizer)
         self.use_class_condition = bool(use_class_condition)
         self.class_label_key = str(class_label_key)
-        self.log_sample_steps = int(log_sample_steps)
+        self.log_sample_nfe = int(log_sample_nfe)
         self.monitor = str(monitor)
         self.learning_rate = 1.0e-4
 
@@ -49,6 +51,12 @@ class LatentFMTrainer(pl.LightningModule):
             backbone_cfg["params"]["condition_num_classes"] = self.num_classes
         self.backbone = instantiate_from_config(backbone_cfg)
         self.objective = instantiate_from_config(objective_config)
+        self.sampler = instantiate_from_config(sampler_config)
+        self.objective_name = (
+            str(objective_name)
+            if objective_name is not None
+            else getattr(self.objective, "name", self.objective.__class__.__name__.lower())
+        )
 
     def _get_condition(self, batch):
         if not self.use_class_condition:
@@ -59,57 +67,90 @@ class LatentFMTrainer(pl.LightningModule):
             )
         return batch[self.class_label_key].long()
 
+    def _prepare_time(self, value, device, dtype):
+        if value is None:
+            return None
+        return value.to(device=device, dtype=dtype)
+
+    def predict_field(self, z_t, t=None, condition=None, r=None, delta_t=None):
+        if condition is not None:
+            condition = condition.to(device=z_t.device, dtype=torch.long)
+        r = self._prepare_time(r, device=z_t.device, dtype=z_t.dtype)
+        t = self._prepare_time(t, device=z_t.device, dtype=z_t.dtype)
+        delta_t = self._prepare_time(delta_t, device=z_t.device, dtype=z_t.dtype)
+        return self.backbone(z_t, t=t, condition=condition, r=r, delta_t=delta_t)
+
     def encode_batch(self, batch):
         return self.tokenizer.encode_batch(batch, sample_posterior=self.sample_posterior)
 
     def decode_latents(self, z):
         return self.tokenizer.decode_latents(z)
 
-    def sample_latents(self, batch_size, num_steps=32, device=None, condition=None, noise=None, nfe=None):
+    def sample_latents(self, batch_size, nfe=None, device=None, condition=None, noise=None):
         if device is None:
             device = self.device
-        if nfe is not None:
-            num_steps = int(nfe)
         if condition is not None:
             condition = condition.to(device=device, dtype=torch.long)
-        if noise is None:
-            noise = torch.randn(
-                batch_size,
-                self.latent_channels,
-                *self.latent_spatial_shape,
-                device=device,
-            )
-        z = noise
-        time_grid = torch.linspace(1.0, 0.0, int(num_steps) + 1, device=device)
-        for step_idx in range(len(time_grid) - 1):
-            t_curr = time_grid[step_idx].expand(batch_size)
-            delta_t = time_grid[step_idx + 1] - time_grid[step_idx]
-            velocity = self.backbone(z, t_curr, condition=condition)
-            z = z + delta_t * velocity
-        return z
+        latent_shape = (self.latent_channels, *self.latent_spatial_shape)
+        return self.sampler.sample(
+            model_fn=self.predict_field,
+            batch_size=batch_size,
+            latent_shape=latent_shape,
+            device=device,
+            condition=condition,
+            noise=noise,
+            nfe=nfe,
+        )
 
-    def forward(self, batch):
+    def forward(self, batch, objective_step=None):
         encoded = self.encode_batch(batch)
         x_lat = encoded["z"]
         condition = self._get_condition(batch)
-        objective_outputs = self.objective(self.backbone, x_lat, condition=condition)
+        if objective_step is None:
+            objective_step = int(self.global_step)
+        objective_outputs = self.objective(
+            self.predict_field,
+            x_lat,
+            condition=condition,
+            global_step=objective_step,
+        )
         return {
             "x_lat": x_lat,
             "posterior": encoded["posterior"],
             **objective_outputs,
         }
 
+    def _collect_log_scalars(self, split, loss_dict):
+        metrics = {}
+        for name, value in loss_dict.items():
+            if isinstance(value, torch.Tensor):
+                if value.ndim != 0:
+                    continue
+                metrics[f"{split}/{name}"] = value
+            elif isinstance(value, (int, float)):
+                metrics[f"{split}/{name}"] = torch.tensor(float(value), device=self.device)
+        return metrics
+
     def shared_step(self, batch, split):
-        outputs = self(batch)
-        fm_loss = outputs["fm_loss"]
+        outputs = self(batch, objective_step=int(self.global_step))
+        loss_dict = outputs.get("loss_dict", {"loss": outputs["loss"], "total_loss": outputs["loss"]})
+        metrics = self._collect_log_scalars(split, loss_dict)
         self.log(
-            f"{split}/fm_loss",
-            fm_loss,
+            f"{split}/loss",
+            outputs["loss"],
             prog_bar=True,
             logger=True,
             on_step=(split == "train"),
             on_epoch=True,
         )
+        if metrics:
+            self.log_dict(
+                metrics,
+                prog_bar=False,
+                logger=True,
+                on_step=(split == "train"),
+                on_epoch=True,
+            )
         return outputs
 
     def training_step(self, batch, batch_idx):
@@ -118,7 +159,7 @@ class LatentFMTrainer(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         outputs = self.shared_step(batch, split="val")
-        return outputs["fm_loss"]
+        return outputs["loss"]
 
     def configure_optimizers(self):
         lr = float(getattr(self, "learning_rate", 1.0e-4))
@@ -137,7 +178,7 @@ class LatentFMTrainer(pl.LightningModule):
             condition = condition[:batch_size]
         sampled_latents = self.sample_latents(
             batch_size=batch_size,
-            num_steps=self.log_sample_steps,
+            nfe=self.log_sample_nfe,
             device=self.device,
             condition=condition,
         )
