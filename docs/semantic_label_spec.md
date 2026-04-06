@@ -72,6 +72,32 @@ Planned project-layer semantic loaders should:
 - validate unknown or out-of-spec raw values
 - keep `class_label` and `class_name` optional and independent from semantic labels
 
+## Example Config Snippet
+
+Planned project-layer semantic dataset configuration:
+
+```yaml
+data:
+  target: latent_meanflow.data.semantic_pair.MultiSemanticImageMaskPairDataset
+  params:
+    roots:
+      - data/remote
+    split: train
+    image_dir: images
+    mask_dir: masks
+    gray_to_class_id:
+      36: 0
+      73: 1
+      109: 2
+      146: 3
+      182: 4
+      219: 5
+      255: 6
+    ignore_index: -1
+```
+
+The same argument can also be loaded from a JSON or YAML spec file that contains `gray_to_class_id` and an optional `ignore_index`.
+
 Planned, not implemented yet:
 
 - a project-layer semantic dataset module
