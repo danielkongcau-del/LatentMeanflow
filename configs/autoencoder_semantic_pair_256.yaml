@@ -1,0 +1,85 @@
+model:
+  base_learning_rate: 1.0e-4
+  target: latent_meanflow.models.semantic_autoencoder.SemanticPairAutoencoder
+  params:
+    monitor: "val/total_loss"
+    embed_dim: 4
+    num_classes: 7
+    sample_posterior: true
+    lossconfig:
+      target: latent_meanflow.models.semantic_autoencoder.SemanticPairLoss
+      params:
+        rgb_l1_weight: 1.0
+        rgb_lpips_weight: 0.0
+        mask_ce_weight: 1.0
+        mask_dice_weight: 0.0
+        mask_focal_weight: 0.0
+        kl_weight: 1.0e-6
+        ignore_index: -1
+        focal_gamma: 2.0
+        ce_label_smoothing: 0.0
+    ddconfig:
+      double_z: true
+      z_channels: 4
+      resolution: 256
+      in_channels: 10
+      out_ch: 10
+      ch: 128
+      ch_mult: [1, 2, 4]
+      num_res_blocks: 2
+      attn_resolutions: []
+      dropout: 0.0
+
+data:
+  target: main.DataModuleFromConfig
+  params:
+    batch_size: 8
+    num_workers: 4
+    wrap: false
+    train:
+      target: latent_meanflow.data.semantic_pair.MultiSemanticImageMaskPairDataset
+      params:
+        roots:
+          - data/remote
+        split: train
+        size: 256
+        image_dir: images
+        mask_dir: masks
+        gray_to_class_id:
+          36: 0
+          73: 1
+          109: 2
+          146: 3
+          182: 4
+          219: 5
+          255: 6
+        ignore_index: -1
+    validation:
+      target: latent_meanflow.data.semantic_pair.MultiSemanticImageMaskPairDataset
+      params:
+        roots:
+          - data/remote
+        split: val
+        size: 256
+        image_dir: images
+        mask_dir: masks
+        gray_to_class_id:
+          36: 0
+          73: 1
+          109: 2
+          146: 3
+          182: 4
+          219: 5
+          255: 6
+        ignore_index: -1
+
+lightning:
+  callbacks:
+    image_logger:
+      target: main.ImageLogger
+      params:
+        disabled: true
+        batch_frequency: 50
+        latest_only: true
+  trainer:
+    benchmark: true
