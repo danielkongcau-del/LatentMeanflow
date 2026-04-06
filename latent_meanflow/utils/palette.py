@@ -162,3 +162,15 @@ def colorize_mask_index(mask_index, num_classes, palette_spec=None, ignore_index
             )
         output[valid_mask] = palette[valid_values]
     return output
+
+
+def overlay_color_mask_on_image(image_rgb_uint8, color_mask_uint8, alpha=0.4):
+    image_rgb_uint8 = np.asarray(image_rgb_uint8, dtype=np.uint8)
+    color_mask_uint8 = np.asarray(color_mask_uint8, dtype=np.uint8)
+    if image_rgb_uint8.shape != color_mask_uint8.shape:
+        raise ValueError(
+            f"Image and color mask must have the same shape, got {image_rgb_uint8.shape} and {color_mask_uint8.shape}"
+        )
+    alpha = float(alpha)
+    blended = (1.0 - alpha) * image_rgb_uint8.astype(np.float32) + alpha * color_mask_uint8.astype(np.float32)
+    return np.clip(blended, 0.0, 255.0).astype(np.uint8)

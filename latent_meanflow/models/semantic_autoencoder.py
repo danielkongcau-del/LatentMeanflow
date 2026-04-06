@@ -190,6 +190,8 @@ class SemanticPairAutoencoder(pl.LightningModule):
 
         self.loss = instantiate_from_config(lossconfig)
         self.learning_rate = 1.0e-4
+        self.latent_channels = self.embed_dim
+        self.latent_spatial_shape = tuple(int(v) for v in self.decoder.z_shape[2:])
 
         if monitor is not None:
             self.monitor = monitor
@@ -278,6 +280,30 @@ class SemanticPairAutoencoder(pl.LightningModule):
             "mask_logits": mask_logits,
             "total_loss": total_loss,
             "loss_dict": loss_dict,
+        }
+
+    def encode_batch(self, batch, sample_posterior=None):
+        image, mask_index, mask_onehot, joint_input = self.get_input(batch)
+        posterior = self.encode(joint_input)
+        if sample_posterior is None:
+            sample_posterior = self.sample_posterior
+        z = posterior.sample() if sample_posterior else posterior.mode()
+        return {
+            "z": z,
+            "posterior": posterior,
+            "image": image,
+            "mask_index": mask_index,
+            "mask_onehot": mask_onehot,
+            "joint_input": joint_input,
+        }
+
+    def decode_latents(self, z):
+        rgb_recon, mask_logits = self.decode(z)
+        mask_index = torch.argmax(mask_logits, dim=1)
+        return {
+            "rgb_recon": rgb_recon,
+            "mask_logits": mask_logits,
+            "mask_index": mask_index,
         }
 
     def shared_step(self, batch, split):

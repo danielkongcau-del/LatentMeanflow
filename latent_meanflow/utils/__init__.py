@@ -4,6 +4,7 @@ from .palette import (
     build_gray_value_stats,
     build_mapping_template,
     colorize_mask_index,
+    overlay_color_mask_on_image,
     render_mapping_template,
     resolve_gray_to_class_id,
 )
@@ -14,6 +15,7 @@ __all__ = [
     "build_gray_value_stats",
     "build_mapping_template",
     "colorize_mask_index",
+    "overlay_color_mask_on_image",
     "render_mapping_template",
     "resolve_gray_to_class_id",
 ]
