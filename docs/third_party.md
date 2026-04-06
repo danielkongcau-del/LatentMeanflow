@@ -14,8 +14,18 @@ Local patches still kept inside the vendored fork:
   Lightning compatibility fixes plus 4-channel RGB+mask logging and class-label conditioning robustness.
 - `third_party/latent-diffusion/ldm/modules/encoders/modules.py`
   Added `ClassLabeler` for class-conditional training from dataset labels.
+- `third_party/latent-diffusion/taming-transformers/taming/modules/transformer/mingpt.py`
+  Added a local fallback for `top_k_top_p_filtering` so newer `transformers` 4.x releases still work.
+- `third_party/latent-diffusion/taming-transformers/taming/data/utils.py`
+  Added a fallback for the removed `torch._six.string_classes`.
+- `third_party/latent-diffusion/ldm/modules/image_degradation/utils_image.py`
+  Replaced deprecated NumPy scalar aliases with modern built-in types.
+- `third_party/latent-diffusion/taming-transformers/taming/data/coco.py`
+  Replaced deprecated NumPy scalar aliases with modern built-in types.
 
 The preserved `.git_local_backup/` directories contain the original nested Git metadata so upstream history and provenance are still recoverable locally.
+
+`third_party/latent-diffusion/main.py` is the maintained training entrypoint for this repository. The older upstream script `third_party/latent-diffusion/taming-transformers/main.py` is still vendored, but is not part of the current LatentMeanflow training path and has not been fully ported to the modern Lightning CLI surface.
 
 ## `third_party/flow_matching`
 

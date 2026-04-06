@@ -28,7 +28,7 @@ AUTHOR = ",".join(
 )
 REQUIRES_PYTHON = ">=3.9.0"
 
-for line in open("flow_matching/__init__.py"):
+for line in open("flow_matching/__init__.py", encoding="utf-8"):
     line = line.strip()
     if "__version__" in line:
         context = {}
@@ -38,7 +38,7 @@ for line in open("flow_matching/__init__.py"):
 readme_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "README.md")
 
 try:
-    with open(readme_path) as f:
+    with open(readme_path, encoding="utf-8") as f:
         long_description = "\n" + f.read()
 except FileNotFoundError:
     long_description = DESCRIPTION

@@ -33,13 +33,23 @@ Each `image/` file should have a matching file stem in `mask/`.
 
 ## Environment
 
-Start from the vendored latent-diffusion environment and install dependencies in that environment:
+The maintained environment target for this repository is:
+
+- Python `3.10`
+- PyTorch `2.11.0+cu128`
+- torchvision `0.26.0+cu128`
+- a single Conda environment such as `lmf`
+
+After activating your environment, install PyTorch from the official CUDA 12.8 wheel index:
 
 ```bash
-conda env create -f third_party/latent-diffusion/environment.yaml
-conda activate ldm
-pip install -e third_party/latent-diffusion
-pip install -e third_party/latent-diffusion/taming-transformers
+python -m pip install --upgrade pip
+python -m pip install torch==2.11.0+cu128 torchvision==0.26.0+cu128 torchaudio==2.11.0+cu128 --index-url https://download.pytorch.org/whl/cu128
+python -m pip install -r requirements/lmf.txt
+python -m pip install -e third_party/latent-diffusion/taming-transformers
+python -m pip install -e third_party/latent-diffusion
+python -m pip install -e third_party/flow_matching
+python -m pip install git+https://github.com/openai/CLIP.git
 ```
 
 If LPIPS asks for VGG weights, place them with:

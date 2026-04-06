@@ -1,0 +1,17 @@
+numpy<2
+tqdm
+pillow
+omegaconf==2.3.0
+pytorch-lightning==2.5.6
+einops
+albumentations<2
+opencv-python
+imageio
+imageio-ffmpeg
+transformers==4.46.3
+kornia
+torchmetrics
+torch-fidelity
+matplotlib
+scikit-learn
+torchdiffeq
