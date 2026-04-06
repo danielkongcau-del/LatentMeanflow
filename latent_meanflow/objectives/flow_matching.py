@@ -1,19 +1,20 @@
 import torch.nn as nn
 
-from .common import rectified_path, regression_loss, sample_time
+from .common import build_time_sampler, rectified_path, regression_loss, sample_time
 
 
 class RectifiedFlowMatchingObjective(nn.Module):
     name = "fm"
     prediction_type = "instantaneous_velocity"
 
-    def __init__(self, time_eps=1.0e-4, loss_type="mse"):
+    def __init__(self, time_eps=1.0e-4, loss_type="mse", time_sampler_config=None):
         super().__init__()
         self.time_eps = float(time_eps)
         self.loss_type = str(loss_type)
+        self.time_sampler = build_time_sampler(time_sampler_config=time_sampler_config, time_eps=self.time_eps)
 
     def sample_time(self, batch_size, device):
-        return sample_time(batch_size, device=device, time_eps=self.time_eps)
+        return sample_time(batch_size, device=device, time_sampler=self.time_sampler)
 
     def make_path(self, x_lat, t, noise=None):
         z_t, target_velocity, noise = rectified_path(x_lat, t=t, noise=noise)

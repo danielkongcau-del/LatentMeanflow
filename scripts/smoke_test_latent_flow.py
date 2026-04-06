@@ -130,7 +130,14 @@ def build_trainer(objective_name, tokenizer_config, tokenizer_ckpt):
     if objective_name == "fm":
         objective_config = {
             "target": "latent_meanflow.objectives.flow_matching.RectifiedFlowMatchingObjective",
-            "params": {"time_eps": 1.0e-4, "loss_type": "mse"},
+            "params": {
+                "time_eps": 1.0e-4,
+                "loss_type": "mse",
+                "time_sampler_config": {
+                    "target": "latent_meanflow.objectives.common.UniformTimeSampler",
+                    "params": {"time_eps": 1.0e-4},
+                },
+            },
         }
         sampler_config = {
             "target": "latent_meanflow.samplers.ode.EulerFlowSampler",
@@ -139,7 +146,19 @@ def build_trainer(objective_name, tokenizer_config, tokenizer_ckpt):
     elif objective_name == "meanflow":
         objective_config = {
             "target": "latent_meanflow.objectives.meanflow.MeanFlowObjective",
-            "params": {"time_eps": 1.0e-4, "min_delta": 1.0e-3, "loss_type": "mse"},
+            "params": {
+                "time_eps": 1.0e-4,
+                "min_delta": 0.0,
+                "loss_type": "mse",
+                "r_equals_t_ratio": 0.25,
+                "weighting_mode": "paper_like",
+                "adaptive_weight_power": 0.75,
+                "adaptive_weight_bias": 1.0e-4,
+                "time_sampler_config": {
+                    "target": "latent_meanflow.objectives.common.LogitNormalTimeSampler",
+                    "params": {"loc": -2.0, "scale": 2.0, "time_eps": 1.0e-4},
+                },
+            },
         }
         sampler_config = {
             "target": "latent_meanflow.samplers.interval.IntervalFlowSampler",
@@ -150,15 +169,23 @@ def build_trainer(objective_name, tokenizer_config, tokenizer_ckpt):
             "target": "latent_meanflow.objectives.alphaflow.AlphaFlowObjective",
             "params": {
                 "time_eps": 1.0e-4,
-                "min_delta": 1.0e-3,
+                "min_delta": 0.0,
                 "loss_type": "mse",
+                "flow_matching_ratio": 0.25,
+                "weighting_mode": "alpha_adaptive",
+                "adaptive_weight_power": 0.75,
+                "adaptive_weight_bias": 1.0e-4,
+                "time_sampler_config": {
+                    "target": "latent_meanflow.objectives.common.UniformTimeSampler",
+                    "params": {"time_eps": 1.0e-4},
+                },
                 "alpha_schedule_config": {
                     "target": "latent_meanflow.objectives.alphaflow.SigmoidAlphaScheduler",
                     "params": {
                         "start_step": 0,
-                        "end_step": 8,
+                        "end_step": 32,
                         "gamma": 12.0,
-                        "clamp_eta": 0.01,
+                        "clamp_eta": 0.05,
                     },
                 },
             },
@@ -212,15 +239,23 @@ def write_alphaflow_config(root, tokenizer_config, tokenizer_ckpt):
                 "      target: latent_meanflow.objectives.alphaflow.AlphaFlowObjective",
                 "      params:",
                 "        time_eps: 1.0e-4",
-                "        min_delta: 1.0e-3",
+                "        min_delta: 0.0",
                 "        loss_type: mse",
+                "        flow_matching_ratio: 0.25",
+                "        weighting_mode: alpha_adaptive",
+                "        adaptive_weight_power: 0.75",
+                "        adaptive_weight_bias: 1.0e-4",
+                "        time_sampler_config:",
+                "          target: latent_meanflow.objectives.common.UniformTimeSampler",
+                "          params:",
+                "            time_eps: 1.0e-4",
                 "        alpha_schedule_config:",
                 "          target: latent_meanflow.objectives.alphaflow.SigmoidAlphaScheduler",
                 "          params:",
                 "            start_step: 0",
-                "            end_step: 8",
+                "            end_step: 32",
                 "            gamma: 12.0",
-                "            clamp_eta: 0.01",
+                "            clamp_eta: 0.05",
                 "    sampler_config:",
                 "      target: latent_meanflow.samplers.interval.IntervalFlowSampler",
                 "      params:",

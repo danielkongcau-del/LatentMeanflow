@@ -1,7 +1,13 @@
 import torch
 import torch.nn as nn
 
-from .common import expand_time_like, rectified_path, regression_loss, sample_interval
+from .common import (
+    build_time_sampler,
+    expand_time_like,
+    rectified_path,
+    sample_interval,
+    weighted_regression_loss,
+)
 
 
 def meanflow_jvp(model_fn, z_t, r, t, velocity, condition=None):
@@ -22,19 +28,36 @@ class MeanFlowObjective(nn.Module):
     name = "meanflow"
     prediction_type = "average_velocity"
 
-    def __init__(self, time_eps=1.0e-4, min_delta=1.0e-3, loss_type="mse"):
+    def __init__(
+        self,
+        time_eps=1.0e-4,
+        min_delta=1.0e-3,
+        loss_type="mse",
+        time_sampler_config=None,
+        r_equals_t_ratio=0.0,
+        weighting_mode="paper_like",
+        adaptive_weight_power=0.75,
+        adaptive_weight_bias=1.0e-4,
+    ):
         super().__init__()
         self.time_eps = float(time_eps)
         self.min_delta = float(min_delta)
         self.loss_type = str(loss_type)
+        self.r_equals_t_ratio = float(r_equals_t_ratio)
+        self.weighting_mode = str(weighting_mode)
+        self.adaptive_weight_power = float(adaptive_weight_power)
+        self.adaptive_weight_bias = float(adaptive_weight_bias)
+        self.time_sampler = build_time_sampler(time_sampler_config=time_sampler_config, time_eps=self.time_eps)
 
     def forward(self, model_fn, x_lat, condition=None, **kwargs):
         batch_size = x_lat.shape[0]
         r, t, delta_t = sample_interval(
             batch_size=batch_size,
             device=x_lat.device,
-            time_eps=self.time_eps,
+            time_sampler=self.time_sampler,
             min_delta=self.min_delta,
+            r_equals_t_ratio=self.r_equals_t_ratio,
+            dtype=x_lat.dtype,
         )
         z_t, velocity, noise = rectified_path(x_lat, t=t)
         average_velocity, total_derivative = meanflow_jvp(
@@ -46,7 +69,15 @@ class MeanFlowObjective(nn.Module):
             condition=condition,
         )
         target_field = velocity - expand_time_like(delta_t, x_lat) * total_derivative
-        loss = regression_loss(average_velocity, target_field.detach(), loss_type=self.loss_type)
+        loss, weighting_stats = weighted_regression_loss(
+            average_velocity,
+            target_field.detach(),
+            loss_type=self.loss_type,
+            weighting_mode=self.weighting_mode,
+            adaptive_power=self.adaptive_weight_power,
+            adaptive_bias=self.adaptive_weight_bias,
+        )
+        r_equals_t = torch.mean((delta_t == 0).float())
         return {
             "loss": loss,
             "meanflow_loss": loss,
@@ -54,6 +85,8 @@ class MeanFlowObjective(nn.Module):
                 "meanflow_loss": loss,
                 "total_loss": loss,
                 "delta_t_mean": delta_t.mean(),
+                "r_equals_t_ratio": r_equals_t,
+                **weighting_stats,
             },
             "r": r,
             "t": t,
@@ -64,4 +97,5 @@ class MeanFlowObjective(nn.Module):
             "pred_field": average_velocity,
             "target_field": target_field.detach(),
             "total_derivative": total_derivative,
+            "weighting_stats": weighting_stats,
         }

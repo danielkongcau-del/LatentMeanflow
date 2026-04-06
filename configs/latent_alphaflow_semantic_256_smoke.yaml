@@ -1,30 +1,51 @@
 model:
   base_learning_rate: 1.0e-4
-  target: latent_meanflow.trainers.latent_fm_trainer.LatentFMTrainer
+  target: latent_meanflow.trainers.latent_flow_trainer.LatentFlowTrainer
   params:
+    objective_name: alphaflow
     tokenizer_config_path: configs/autoencoder_semantic_pair_256.yaml
     tokenizer_ckpt_path: logs/autoencoder/checkpoints/last.ckpt
     sample_posterior: false
     freeze_tokenizer: true
     use_class_condition: false
     class_label_key: class_label
-    log_sample_steps: 16
+    log_sample_nfe: 2
+    monitor: val/alphaflow_loss
     backbone_config:
-      target: latent_meanflow.models.backbones.latent_velocity_convnet.LatentVelocityConvNet
+      target: latent_meanflow.models.backbones.latent_interval_velocity_convnet.LatentIntervalVelocityConvNet
       params:
         model_channels: 128
         time_embed_dim: 256
         num_res_blocks: 4
         dropout: 0.0
+        time_conditioning: t_delta
     objective_config:
-      target: latent_meanflow.objectives.flow_matching.RectifiedFlowMatchingObjective
+      target: latent_meanflow.objectives.alphaflow.AlphaFlowObjective
       params:
         time_eps: 1.0e-4
+        min_delta: 0.0
         loss_type: mse
+        r_equals_t_ratio: 0.0
+        flow_matching_ratio: 0.25
+        weighting_mode: alpha_adaptive
+        adaptive_weight_power: 0.75
+        adaptive_weight_bias: 1.0e-4
         time_sampler_config:
           target: latent_meanflow.objectives.common.UniformTimeSampler
           params:
             time_eps: 1.0e-4
+        alpha_schedule_config:
+          target: latent_meanflow.objectives.alphaflow.SigmoidAlphaScheduler
+          params:
+            start_step: 0
+            end_step: 1000
+            gamma: 12.0
+            clamp_eta: 0.05
+    sampler_config:
+      target: latent_meanflow.samplers.interval.IntervalFlowSampler
+      params:
+        default_nfe: 1
+        two_step_time: 0.5
 
 data:
   target: main.DataModuleFromConfig

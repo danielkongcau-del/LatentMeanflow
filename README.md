@@ -1,14 +1,22 @@
 # LatentMeanflow
 
-LatentMeanflow currently ships a legacy binary-mask / 4-channel latent diffusion baseline and a planned migration path toward a paired RGB image + multiclass semantic mask latent flow model. The active runtime remains a patched copy of CompVis `latent-diffusion`; the target research direction is `latent tokenizer -> latent flow matching -> MeanFlow / AlphaFlow`.
+LatentMeanflow now contains two parallel project-layer routes:
 
-See [docs/latentmeanflow_migration_plan.md](docs/latentmeanflow_migration_plan.md) for the staged migration plan and [docs/semantic_label_spec.md](docs/semantic_label_spec.md) for the planned semantic label contract.
+- a legacy binary-mask / 4-channel latent diffusion baseline
+- a semantic tokenizer + latent flow research path for paired `RGB image + multiclass semantic mask`
+
+The vendored runtime is still CompVis `latent-diffusion`, but the active project-layer research direction is:
+
+`semantic tokenizer -> latent FM -> latent MeanFlow / AlphaFlow`
+
+See [docs/latentmeanflow_migration_plan.md](docs/latentmeanflow_migration_plan.md) for the migration roadmap and [docs/semantic_label_spec.md](docs/semantic_label_spec.md) for the semantic mask contract.
 
 ## Repository Layout
 
 - `configs/`: project-owned training configs.
+- `configs/label_specs/`: reusable semantic label specifications shared by tokenizer and latent-flow configs.
 - `scripts/`: project-owned entry points for training, sampling, and utility setup.
-- `latent_meanflow/`: project-specific Python code such as dataset loaders.
+- `latent_meanflow/`: project-specific Python code such as dataset loaders, tokenizers, objectives, samplers, and trainers.
 - `docs/`: project documentation, including migration planning and label contracts.
 - `third_party/latent-diffusion/`: vendored upstream fork with local compatibility patches.
 - `third_party/flow_matching/`: vendored upstream reference code. It is the future reference base for latent FM / MeanFlow / AlphaFlow, but it is not on the current training path.
@@ -42,11 +50,19 @@ data/
 
 Each file in `images/` must have a same-stem partner in `masks/`.
 
-The current project-layer loader treats each mask as a grayscale image, thresholds it to binary foreground/background, and packs `RGB + mask` into a single 4-channel tensor. That behavior is legacy and only describes the current baseline.
+The legacy loader treats each mask as a grayscale image, thresholds it to binary foreground/background, and packs `RGB + mask` into a single 4-channel tensor. That behavior is intentionally preserved for the old baseline only.
 
 ### Planned semantic path
 
-The planned semantic route keeps `image_rgb` and `semantic_mask` as separate project-layer fields, uses an explicit label specification, and treats image-level `class_label` only as optional metadata. Multiclass semantic masks should not be reduced to binary foreground/background. See [docs/semantic_label_spec.md](docs/semantic_label_spec.md) for the planned contract.
+The semantic route keeps `image_rgb` and `semantic_mask` as separate project-layer fields, uses an explicit label specification, and treats image-level `class_label` only as optional metadata. Multiclass semantic masks are not reduced to binary foreground/background.
+
+The current shared label spec is:
+
+```text
+configs/label_specs/remote_semantic.yaml
+```
+
+All semantic tokenizer and latent-flow configs should reference that spec instead of duplicating `gray_to_class_id` mappings inline.
 
 ## Environment
 
@@ -77,7 +93,7 @@ python scripts/place_vgg16_weights.py --src /path/to/vgg16-397923af.pth
 
 ## Training
 
-### Legacy binary baseline
+### Legacy Binary-Mask / 4-Channel LDM Path
 
 Train the 4-channel autoencoder:
 
@@ -99,8 +115,64 @@ python scripts/sample_mask_image_pairs.py --ckpt logs/ldm/checkpoints/last.ckpt 
 
 These commands target the legacy binary / 4-channel baseline only. They do not implement the planned multiclass semantic latent flow path yet.
 
+### Semantic Tokenizer Path
+
+Train the project-layer semantic tokenizer / autoencoder:
+
+```bash
+python scripts/train_semantic_autoencoder.py --gpus 0
+```
+
+This path reads `image` and multiclass `mask` separately, reconstructs RGB with an RGB head, and reconstructs semantic masks with `K`-channel logits rather than a single grayscale mask channel.
+
+### Latent FM Path
+
+Train the latent flow-matching prior on semantic tokenizer latents:
+
+```bash
+python scripts/train_latent_meanflow.py --objective fm --gpus 0
+```
+
+### Latent MeanFlow / AlphaFlow Path
+
+Train the latent MeanFlow prior:
+
+```bash
+python scripts/train_latent_meanflow.py --objective meanflow --gpus 0
+```
+
+Train the recommended AlphaFlow curriculum:
+
+```bash
+python scripts/train_latent_meanflow.py --objective alphaflow --gpus 0
+```
+
+For quick validation or debugging, use the explicit smoke config:
+
+```bash
+python scripts/train_latent_meanflow.py --config configs/latent_alphaflow_semantic_256_smoke.yaml --gpus 0
+```
+
+Sample from a latent-flow checkpoint with `NFE=1` or `NFE=2`:
+
+```bash
+python scripts/sample_latent_flow.py --config configs/latent_alphaflow_semantic_256.yaml --ckpt /path/to/last.ckpt --nfe 1
+python scripts/sample_latent_flow.py --config configs/latent_alphaflow_semantic_256.yaml --ckpt /path/to/last.ckpt --nfe 2
+```
+
+The sampler writes:
+
+- `image/`
+- `mask_raw/`
+- `mask_color/`
+- `overlay/`
+
 ## Notes
 
-- Training logs are written to `logs/autoencoder/` and `logs/ldm/`.
+- Training logs are typically written to `logs/autoencoder/`, `logs/ldm/`, `logs/latent_fm/`, `logs/latent_meanflow/`, or `logs/latent_alphaflow/` depending on the entry point.
 - The root-level configs, scripts, docs, and dataset code are the project layer; avoid editing `third_party/` unless you are intentionally changing the vendored fork.
 - `third_party/flow_matching/` is kept isolated so future flow-matching work does not pollute the current latent-diffusion baseline.
+- The FM rectified path follows `z_t = (1 - t) x + t eps` and `v_t = eps - x`.
+- The MeanFlow implementation uses JVP with tangent `(v, 0, 1)` and `t_delta` conditioning by default.
+- The AlphaFlow implementation includes the `alpha^{-1}` prefactor and configurable curriculum, but `u_theta^-` is currently approximated with a detached online target branch rather than a separate EMA teacher. That is a project-layer engineering approximation, not a full paper-equivalent teacher setup.
+- The `logit_normal` interval sampler is also an engineering approximation of the paper-aligned time sampling policy: the code samples two scalar times independently from the chosen marginal distribution and sorts them into `(r, t)`.

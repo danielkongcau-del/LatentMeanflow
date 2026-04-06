@@ -113,6 +113,7 @@ class LatentFlowTrainer(pl.LightningModule):
             x_lat,
             condition=condition,
             global_step=objective_step,
+            target_model_fn=self.predict_field,
         )
         return {
             "x_lat": x_lat,
