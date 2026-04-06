@@ -18,15 +18,16 @@ model:
         out_channels: 4
         model_channels: 128
         attention_resolutions:
-        - 16
-        - 8
+          - 16
+          - 8
         num_res_blocks: 2
         channel_mult:
-        - 1
-        - 2
-        - 3
-        - 4
+          - 1
+          - 2
+          - 3
+          - 4
         num_head_channels: 32
+
 data:
   target: main.DataModuleFromConfig
   params:
@@ -34,14 +35,14 @@ data:
     num_workers: 4
     wrap: false
     train:
-      target: ldm.data.mask_image_pair.MaskImagePairDataset
+      target: latent_meanflow.data.mask_image_pair.MaskImagePairDataset
       params:
-        root: dataset/borner
+        root: data/borner
         split: train
         size: 256
     validation:
-      target: ldm.data.mask_image_pair.MaskImagePairDataset
+      target: latent_meanflow.data.mask_image_pair.MaskImagePairDataset
       params:
-        root: dataset/borner
+        root: data/borner
         split: val
         size: 256

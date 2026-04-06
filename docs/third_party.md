@@ -1,0 +1,24 @@
+# Vendored Code Notes
+
+## `third_party/latent-diffusion`
+
+This directory is a vendored fork of CompVis `latent-diffusion`. It remains the runtime base for training and sampling, but project-owned configs, scripts, and dataset code have been moved out to the repository root.
+
+Local patches still kept inside the vendored fork:
+
+- `third_party/latent-diffusion/main.py`
+  Lightning 2.x compatibility, fixed log directory names, extra logger fallbacks, pair-saving image logger support, and CUDA callback fixes.
+- `third_party/latent-diffusion/ldm/models/autoencoder.py`
+  Manual optimization for modern Lightning, 4-channel RGB+mask logging, and safer quantizer import fallback.
+- `third_party/latent-diffusion/ldm/models/diffusion/ddpm.py`
+  Lightning compatibility fixes plus 4-channel RGB+mask logging and class-label conditioning robustness.
+- `third_party/latent-diffusion/ldm/modules/encoders/modules.py`
+  Added `ClassLabeler` for class-conditional training from dataset labels.
+
+The preserved `.git_local_backup/` directories contain the original nested Git metadata so upstream history and provenance are still recoverable locally.
+
+## `third_party/flow_matching`
+
+This directory is a vendored copy of the upstream `flow_matching` repository. It is currently reference code only and is not on the active training path for the paired image-mask model.
+
+Keeping it under `third_party/` avoids mixing exploratory upstream code with the project layer.

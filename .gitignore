@@ -31,12 +31,17 @@ dist/
 *.safetensors
 
 # Project outputs and local data
+/data/
+/logs/
+/outputs/
 **/outputs/
 **/output_dir*/
 **/snapshots*/
-latent-diffusion/taming-transformers/data/
-flow_matching-main/examples/image_generation/data/
-flow_matching-main/examples/image_generation/outputs/
+third_party/latent-diffusion/dataset/
+third_party/latent-diffusion/logs/
+third_party/latent-diffusion/taming-transformers/data/
+third_party/flow_matching/examples/image_generation/data/
+third_party/flow_matching/examples/image_generation/outputs/
 
 # Backups for nested repository metadata
 **/.git_local_backup/

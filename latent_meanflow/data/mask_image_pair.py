@@ -130,7 +130,7 @@ class MultiMaskImagePairDataset(Dataset):
         total = 0
         for root, name in zip(roots, class_names):
             class_id = self.class_to_idx[name]
-            ds = MaskImagePairDataset(
+            dataset = MaskImagePairDataset(
                 root=root,
                 split=split,
                 size=size,
@@ -142,8 +142,8 @@ class MultiMaskImagePairDataset(Dataset):
                 class_id=class_id,
                 class_name=name,
             )
-            self.datasets.append(ds)
-            total += len(ds)
+            self.datasets.append(dataset)
+            total += len(dataset)
             self.cumulative_lengths.append(total)
 
         if total == 0:

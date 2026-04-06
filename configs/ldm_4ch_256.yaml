@@ -12,10 +12,10 @@ model:
     cond_stage_key: class_label
     image_size: 64
     channels: 4
-    cond_stage_trainable: False
-    concat_mode: False
+    cond_stage_trainable: false
+    concat_mode: false
     conditioning_key: adm
-    scale_by_std: True
+    scale_by_std: true
     monitor: val/loss_simple_ema
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel
@@ -26,23 +26,23 @@ model:
         model_channels: 128
         num_classes: 4
         attention_resolutions:
-        - 8
-        - 4
-        - 2
+          - 8
+          - 4
+          - 2
         num_res_blocks: 2
         channel_mult:
-        - 1
-        - 2
-        - 3
-        - 4
+          - 1
+          - 2
+          - 3
+          - 4
         num_head_channels: 32
     first_stage_config:
       target: ldm.models.autoencoder.AutoencoderKL
       params:
         embed_dim: 4
-        ckpt_path: D:\GithubClones\latent-diffusion\logs\autoencoder\last.ckpt
+        ckpt_path: null
         ddconfig:
-          double_z: True
+          double_z: true
           z_channels: 4
           resolution: 256
           in_channels: 4
@@ -62,27 +62,27 @@ model:
 data:
   target: main.DataModuleFromConfig
   params:
-    batch_size: 96
+    batch_size: 4
     num_workers: 4
     wrap: false
     train:
-      target: ldm.data.mask_image_pair.MultiMaskImagePairDataset
+      target: latent_meanflow.data.mask_image_pair.MultiMaskImagePairDataset
       params:
         roots:
-        - dataset/borner
-        - dataset/corn
-        - dataset/tomato
-        - dataset/worm
+          - data/borner
+          - data/corn
+          - data/tomato
+          - data/worm
         split: train
         size: 256
     validation:
-      target: ldm.data.mask_image_pair.MultiMaskImagePairDataset
+      target: latent_meanflow.data.mask_image_pair.MultiMaskImagePairDataset
       params:
         roots:
-        - dataset/borner
-        - dataset/corn
-        - dataset/tomato
-        - dataset/worm
+          - data/borner
+          - data/corn
+          - data/tomato
+          - data/worm
         split: val
         size: 256
 
@@ -91,24 +91,24 @@ lightning:
     image_logger:
       target: main.ImageLogger
       params:
-        disabled: False
-        batch_frequency: 675
-        max_images: 400
-        increase_log_steps: False
-        latest_only: False
-        save_pairs: True
-        save_pairs_per_class: True
+        disabled: false
+        batch_frequency: 50
+        max_images: 32
+        increase_log_steps: false
+        latest_only: false
+        save_pairs: true
+        save_pairs_per_class: true
         pairs_per_class: 400
         num_classes: 4
         save_pairs_bases:
           - samples
         log_images_kwargs:
-          plot_diffusion_rows: False
-          plot_progressive_rows: False
-          plot_denoise_rows: False
-          inpaint: False
+          plot_diffusion_rows: false
+          plot_progressive_rows: false
+          plot_denoise_rows: false
+          inpaint: false
           return_keys:
             - samples_image
             - samples_mask
   trainer:
-    benchmark: True
+    benchmark: true
