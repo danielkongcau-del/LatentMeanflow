@@ -113,3 +113,52 @@ def render_mapping_template(template, output_format="yaml"):
     if output_format not in {"yaml", "yml"}:
         raise ValueError(f"Unsupported output format: {output_format}")
     return OmegaConf.to_yaml(OmegaConf.create(template), resolve=True)
+
+
+def build_default_palette(num_classes, ignore_index=None, ignore_color=(0, 0, 0)):
+    num_classes = int(num_classes)
+    palette = np.zeros((num_classes, 3), dtype=np.uint8)
+    for class_id in range(num_classes):
+        palette[class_id] = np.array(
+            [
+                (37 * class_id + 67) % 256,
+                (17 * class_id + 149) % 256,
+                (97 * class_id + 29) % 256,
+            ],
+            dtype=np.uint8,
+        )
+    return {
+        "palette": palette,
+        "ignore_index": None if ignore_index is None else int(ignore_index),
+        "ignore_color": np.array(ignore_color, dtype=np.uint8),
+    }
+
+
+def colorize_mask_index(mask_index, num_classes, palette_spec=None, ignore_index=None):
+    mask_index = np.asarray(mask_index)
+    if mask_index.ndim != 2:
+        raise ValueError(f"mask_index must be 2D, got shape {mask_index.shape}")
+
+    if palette_spec is None:
+        palette_spec = build_default_palette(num_classes, ignore_index=ignore_index)
+
+    palette = np.asarray(palette_spec["palette"], dtype=np.uint8)
+    resolved_ignore_index = (
+        ignore_index if ignore_index is not None else palette_spec.get("ignore_index", None)
+    )
+    ignore_color = np.asarray(palette_spec.get("ignore_color", (0, 0, 0)), dtype=np.uint8)
+
+    output = np.zeros(mask_index.shape + (3,), dtype=np.uint8)
+    valid_mask = np.ones(mask_index.shape, dtype=bool)
+    if resolved_ignore_index is not None:
+        valid_mask &= mask_index != int(resolved_ignore_index)
+        output[mask_index == int(resolved_ignore_index)] = ignore_color
+
+    if np.any(valid_mask):
+        valid_values = mask_index[valid_mask]
+        if np.min(valid_values) < 0 or np.max(valid_values) >= palette.shape[0]:
+            raise ValueError(
+                f"mask_index contains values outside palette range [0, {palette.shape[0] - 1}]"
+            )
+        output[valid_mask] = palette[valid_values]
+    return output

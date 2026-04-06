@@ -76,10 +76,12 @@ data:
 lightning:
   callbacks:
     image_logger:
-      target: main.ImageLogger
+      target: latent_meanflow.callbacks.semantic_logger.SemanticPairImageLogger
       params:
-        disabled: true
+        disabled: false
         batch_frequency: 50
+        max_images: 8
         latest_only: true
+        ignore_index: -1
   trainer:
     benchmark: true

@@ -334,10 +334,6 @@ class SemanticPairAutoencoder(pl.LightningModule):
         image, mask_index, _, _ = self.get_input(batch)
         pred_mask = torch.argmax(outputs["mask_logits"], dim=1, keepdim=True).float()
         target_mask = mask_index.unsqueeze(1).float()
-        if self.num_classes > 1:
-            scale = 2.0 / max(self.num_classes - 1, 1)
-            pred_mask = pred_mask * scale - 1.0
-            target_mask = target_mask * scale - 1.0
 
         return {
             "inputs_image": image.to(self.device),

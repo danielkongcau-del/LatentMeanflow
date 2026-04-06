@@ -18,6 +18,7 @@ for path in (REPO_ROOT, LDM_ROOT, TAMING_ROOT):
         sys.path.insert(0, path_str)
 
 from latent_meanflow.data.semantic_pair import MultiSemanticImageMaskPairDataset
+from latent_meanflow.callbacks.semantic_logger import SemanticPairImageLogger
 from latent_meanflow.models.semantic_autoencoder import SemanticPairAutoencoder
 
 
@@ -100,6 +101,33 @@ def main():
         assert total_loss.ndim == 0
         assert model.rgb_head[-1].weight.grad is not None
         assert model.mask_head[-1].weight.grad is not None
+
+        images = model.log_images(batch, sample_posterior=False)
+        assert images["inputs_image"].shape == (2, 3, 32, 32)
+        assert images["reconstructions_image"].shape == (2, 3, 32, 32)
+        assert images["inputs_mask_index"].shape == (2, 1, 32, 32)
+        assert images["reconstructions_mask_index"].shape == (2, 1, 32, 32)
+
+        logger = SemanticPairImageLogger(
+            batch_frequency=1,
+            max_images=2,
+            disabled=False,
+            latest_only=True,
+            ignore_index=-1,
+        )
+        logger.save_local(
+            save_dir=str(root),
+            split="train",
+            images=images,
+            global_step=0,
+            current_epoch=0,
+            batch_idx=0,
+            num_classes=4,
+        )
+        assert (root / "semantic_images" / "train" / "inputs_image.png").exists()
+        assert (root / "semantic_images" / "train" / "reconstructions_image.png").exists()
+        assert (root / "semantic_images" / "train" / "inputs_mask_index.png").exists()
+        assert (root / "semantic_images" / "train" / "reconstructions_mask_index.png").exists()
 
         print("Semantic autoencoder smoke test passed")
         print(f"z shape: {tuple(outputs['z'].shape)}")
