@@ -34,22 +34,20 @@ data:
       target: latent_meanflow.data.mask_image_pair.MultiMaskImagePairDataset
       params:
         roots:
-          - data/borner
-          - data/corn
-          - data/tomato
-          - data/worm
+          - data/remote
         split: train
         size: 256
+        image_dir: images
+        mask_dir: masks
     validation:
       target: latent_meanflow.data.mask_image_pair.MultiMaskImagePairDataset
       params:
         roots:
-          - data/borner
-          - data/corn
-          - data/tomato
-          - data/worm
+          - data/remote
         split: val
         size: 256
+        image_dir: images
+        mask_dir: masks
 
 lightning:
   callbacks:

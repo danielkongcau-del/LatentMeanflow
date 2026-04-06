@@ -24,7 +24,7 @@ model:
         in_channels: 4
         out_channels: 4
         model_channels: 128
-        num_classes: 4
+        num_classes: 1
         attention_resolutions:
           - 8
           - 4
@@ -69,22 +69,20 @@ data:
       target: latent_meanflow.data.mask_image_pair.MultiMaskImagePairDataset
       params:
         roots:
-          - data/borner
-          - data/corn
-          - data/tomato
-          - data/worm
+          - data/remote
         split: train
         size: 256
+        image_dir: images
+        mask_dir: masks
     validation:
       target: latent_meanflow.data.mask_image_pair.MultiMaskImagePairDataset
       params:
         roots:
-          - data/borner
-          - data/corn
-          - data/tomato
-          - data/worm
+          - data/remote
         split: val
         size: 256
+        image_dir: images
+        mask_dir: masks
 
 lightning:
   callbacks:
@@ -99,7 +97,7 @@ lightning:
         save_pairs: true
         save_pairs_per_class: true
         pairs_per_class: 400
-        num_classes: 4
+        num_classes: 1
         save_pairs_bases:
           - samples
         log_images_kwargs:

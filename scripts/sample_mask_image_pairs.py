@@ -73,8 +73,8 @@ def main():
     parser.add_argument("--ddim-steps", type=int, default=200)
     parser.add_argument("--ddim-eta", type=float, default=0.0)
     parser.add_argument("--mask-threshold", type=float, default=0.5)
-    parser.add_argument("--class-label", type=int, default=3, help="Use -1 for random labels.")
-    parser.add_argument("--n-classes", type=int, default=4)
+    parser.add_argument("--class-label", type=int, default=0, help="Use -1 for random labels.")
+    parser.add_argument("--n-classes", type=int, default=1)
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
