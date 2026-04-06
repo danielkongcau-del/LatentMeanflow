@@ -25,15 +25,16 @@ model:
         time_eps: 1.0e-4
         min_delta: 0.0
         loss_type: mse
-        r_equals_t_ratio: 0.25
+        # border_fm_ratio means the r=t border-case supervision ratio (L_FM').
+        border_fm_ratio: 0.75
         weighting_mode: paper_like
-        adaptive_weight_power: 0.75
+        adaptive_weight_power: 1.0
         adaptive_weight_bias: 1.0e-4
         time_sampler_config:
           target: latent_meanflow.objectives.common.LogitNormalTimeSampler
           params:
-            loc: -2.0
-            scale: 2.0
+            loc: -0.4
+            scale: 1.0
             time_eps: 1.0e-4
     sampler_config:
       target: latent_meanflow.samplers.interval.IntervalFlowSampler

@@ -35,14 +35,19 @@ class MeanFlowObjective(nn.Module):
         loss_type="mse",
         time_sampler_config=None,
         r_equals_t_ratio=0.0,
+        border_fm_ratio=None,
         weighting_mode="paper_like",
-        adaptive_weight_power=0.75,
+        adaptive_weight_power=1.0,
         adaptive_weight_bias=1.0e-4,
     ):
         super().__init__()
         self.time_eps = float(time_eps)
         self.min_delta = float(min_delta)
         self.loss_type = str(loss_type)
+        if border_fm_ratio is not None:
+            if float(r_equals_t_ratio) != 0.0 and float(r_equals_t_ratio) != float(border_fm_ratio):
+                raise ValueError("r_equals_t_ratio and border_fm_ratio disagree")
+            r_equals_t_ratio = border_fm_ratio
         self.r_equals_t_ratio = float(r_equals_t_ratio)
         self.weighting_mode = str(weighting_mode)
         self.adaptive_weight_power = float(adaptive_weight_power)
@@ -77,7 +82,7 @@ class MeanFlowObjective(nn.Module):
             adaptive_power=self.adaptive_weight_power,
             adaptive_bias=self.adaptive_weight_bias,
         )
-        r_equals_t = torch.mean((delta_t == 0).float())
+        border_fm_ratio = torch.mean((delta_t == 0).float())
         return {
             "loss": loss,
             "meanflow_loss": loss,
@@ -85,7 +90,8 @@ class MeanFlowObjective(nn.Module):
                 "meanflow_loss": loss,
                 "total_loss": loss,
                 "delta_t_mean": delta_t.mean(),
-                "r_equals_t_ratio": r_equals_t,
+                "border_fm_ratio": border_fm_ratio,
+                "r_equals_t_ratio": border_fm_ratio,
                 **weighting_stats,
             },
             "r": r,
@@ -98,4 +104,5 @@ class MeanFlowObjective(nn.Module):
             "target_field": target_field.detach(),
             "total_derivative": total_derivative,
             "weighting_stats": weighting_stats,
+            "border_fm_mask": delta_t == 0,
         }

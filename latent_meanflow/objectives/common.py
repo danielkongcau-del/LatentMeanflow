@@ -138,6 +138,46 @@ def regression_loss(prediction, target, loss_type="mse"):
     return per_sample_regression_error(prediction, target, loss_type=loss_type).mean()
 
 
+def compute_adaptive_weight(
+    base_error,
+    *,
+    weighting_mode="none",
+    adaptive_power=1.0,
+    adaptive_bias=1.0e-4,
+    alpha=None,
+):
+    weighting_mode = str(weighting_mode)
+    adaptive_power = float(adaptive_power)
+    adaptive_bias = float(adaptive_bias)
+
+    if weighting_mode == "none":
+        return torch.ones_like(base_error)
+
+    if weighting_mode == "paper_like":
+        # MeanFlow Eq. (22)-style adaptive weighting:
+        #   base_error = ||Δ||^2
+        #   w = 1 / (base_error + c)^p
+        return torch.pow(base_error + adaptive_bias, -adaptive_power)
+
+    if weighting_mode in {"alpha_adaptive_exact", "alpha_adaptive"}:
+        if alpha is None:
+            raise ValueError(f"weighting_mode='{weighting_mode}' requires alpha")
+        alpha = alpha.to(device=base_error.device, dtype=base_error.dtype)
+        # AlphaFlow exact reformulation from the base squared error:
+        #   base_error = ||Δ||^2
+        #   L_alpha = alpha^{-1} * ||Δ||^2
+        # Choosing the adaptive loss on L_alpha and rewriting it in terms of
+        # base_error yields:
+        #   w_alpha = alpha^p / (base_error + alpha * c)^p
+        # The final weighted objective is:
+        #   stopgrad(w_alpha) * alpha^{-1} * base_error
+        numerator = torch.pow(alpha, adaptive_power)
+        denominator = torch.pow(base_error + alpha * adaptive_bias, adaptive_power)
+        return numerator / denominator
+
+    raise ValueError(f"Unsupported weighting_mode: {weighting_mode}")
+
+
 def weighted_regression_loss(
     prediction,
     target,
@@ -145,8 +185,9 @@ def weighted_regression_loss(
     loss_type="mse",
     base_weight=None,
     weighting_mode="none",
-    adaptive_power=0.75,
+    adaptive_power=1.0,
     adaptive_bias=1.0e-4,
+    alpha=None,
 ):
     base_error = per_sample_regression_error(prediction, target, loss_type=loss_type)
     if base_weight is None:
@@ -154,15 +195,15 @@ def weighted_regression_loss(
     else:
         base_weight = base_weight.to(device=base_error.device, dtype=base_error.dtype)
 
-    scaled_error = base_weight * base_error
-    weighting_mode = str(weighting_mode)
-    if weighting_mode == "none":
-        adaptive_weight = torch.ones_like(scaled_error)
-    elif weighting_mode in {"adaptive", "paper_like", "alpha_adaptive"}:
-        adaptive_weight = torch.pow(scaled_error.detach() + float(adaptive_bias), -float(adaptive_power))
-    else:
-        raise ValueError(f"Unsupported weighting_mode: {weighting_mode}")
+    adaptive_weight = compute_adaptive_weight(
+        base_error,
+        weighting_mode=weighting_mode,
+        adaptive_power=adaptive_power,
+        adaptive_bias=adaptive_bias,
+        alpha=alpha,
+    ).detach()
 
+    scaled_error = base_weight * base_error
     weighted_error = adaptive_weight * scaled_error
     loss = weighted_error.mean()
     return loss, {

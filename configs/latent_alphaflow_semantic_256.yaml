@@ -2,6 +2,7 @@ model:
   base_learning_rate: 1.0e-4
   target: latent_meanflow.trainers.latent_flow_trainer.LatentFlowTrainer
   params:
+    # Paper-like AlphaFlow config. This is not a smoke config.
     objective_name: alphaflow
     tokenizer_config_path: configs/autoencoder_semantic_pair_256.yaml
     tokenizer_ckpt_path: logs/autoencoder/checkpoints/last.ckpt
@@ -25,10 +26,12 @@ model:
         time_eps: 1.0e-4
         min_delta: 0.0
         loss_type: mse
-        r_equals_t_ratio: 0.0
-        flow_matching_ratio: 0.25
-        weighting_mode: alpha_adaptive
-        adaptive_weight_power: 0.75
+        # trajectory_fm_ratio means alpha=1 trajectory flow matching (L_TFM).
+        trajectory_fm_ratio: 0.0
+        # border_fm_ratio means the r=t border-case supervision ratio (L_FM').
+        border_fm_ratio: 0.25
+        weighting_mode: alpha_adaptive_exact
+        adaptive_weight_power: 1.0
         adaptive_weight_bias: 1.0e-4
         time_sampler_config:
           target: latent_meanflow.objectives.common.LogitNormalTimeSampler

@@ -167,6 +167,28 @@ The sampler writes:
 - `mask_color/`
 - `overlay/`
 
+## Objective Semantics: alpha=1 vs r=t
+
+- `alpha=1` means trajectory flow matching, noted here as `L_TFM`.
+- `r=t` means the border-case flow-matching supervision, noted here as `L_FM'`.
+- These are different axes:
+  - `L_TFM` changes the AlphaFlow interpolation target by setting `alpha=1`
+  - `L_FM'` changes the interval by collapsing it to `r=t`
+- They must not be configured with the same ratio knob.
+
+In project configs:
+
+- `trajectory_fm_ratio` controls `alpha=1` trajectory-flow supervision
+- `border_fm_ratio` controls `r=t` border-case supervision
+- `flow_matching_ratio` is kept only as a deprecated compatibility alias for `trajectory_fm_ratio`
+
+Config intent:
+
+- `configs/latent_alphaflow_semantic_256_smoke.yaml`: smoke
+- `configs/latent_fm_semantic_256.yaml`: project baseline
+- `configs/latent_meanflow_semantic_256.yaml`: paper-like MeanFlow config
+- `configs/latent_alphaflow_semantic_256.yaml`: paper-like AlphaFlow config
+
 ## Notes
 
 - Training logs are typically written to `logs/autoencoder/`, `logs/ldm/`, `logs/latent_fm/`, `logs/latent_meanflow/`, or `logs/latent_alphaflow/` depending on the entry point.
@@ -174,5 +196,7 @@ The sampler writes:
 - `third_party/flow_matching/` is kept isolated so future flow-matching work does not pollute the current latent-diffusion baseline.
 - The FM rectified path follows `z_t = (1 - t) x + t eps` and `v_t = eps - x`.
 - The MeanFlow implementation uses JVP with tangent `(v, 0, 1)` and `t_delta` conditioning by default.
+- The paper-like MeanFlow config uses `logit_normal(-0.4, 1.0)`, `border_fm_ratio=0.75`, and adaptive power `1.0`.
+- The paper-like AlphaFlow config uses the alpha curriculum and `border_fm_ratio=0.25`; it does not reinterpret that ratio as random `alpha=1` overrides.
 - The AlphaFlow implementation includes the `alpha^{-1}` prefactor and configurable curriculum, but `u_theta^-` is currently approximated with a detached online target branch rather than a separate EMA teacher. That is a project-layer engineering approximation, not a full paper-equivalent teacher setup.
-- The `logit_normal` interval sampler is also an engineering approximation of the paper-aligned time sampling policy: the code samples two scalar times independently from the chosen marginal distribution and sorts them into `(r, t)`.
+- The `logit_normal` interval sampler is still an engineering approximation of the paper-aligned interval sampling policy: the code samples two scalar times independently from the chosen marginal distribution and sorts them into `(r, t)`.

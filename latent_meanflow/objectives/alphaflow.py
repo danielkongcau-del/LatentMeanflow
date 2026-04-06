@@ -1,4 +1,5 @@
 import math
+import warnings
 
 import torch
 import torch.nn as nn
@@ -59,9 +60,11 @@ class AlphaFlowObjective(nn.Module):
         loss_type="mse",
         time_sampler_config=None,
         r_equals_t_ratio=0.0,
-        flow_matching_ratio=0.0,
-        weighting_mode="alpha_adaptive",
-        adaptive_weight_power=0.75,
+        border_fm_ratio=None,
+        trajectory_fm_ratio=0.0,
+        flow_matching_ratio=None,
+        weighting_mode="alpha_adaptive_exact",
+        adaptive_weight_power=1.0,
         adaptive_weight_bias=1.0e-4,
         alpha_schedule_config=None,
         meanflow_alpha_threshold=1.0e-8,
@@ -71,8 +74,21 @@ class AlphaFlowObjective(nn.Module):
         self.time_eps = float(time_eps)
         self.min_delta = float(min_delta)
         self.loss_type = str(loss_type)
+        if border_fm_ratio is not None:
+            if float(r_equals_t_ratio) != 0.0 and float(r_equals_t_ratio) != float(border_fm_ratio):
+                raise ValueError("r_equals_t_ratio and border_fm_ratio disagree")
+            r_equals_t_ratio = border_fm_ratio
+        if flow_matching_ratio is not None:
+            if float(trajectory_fm_ratio) != 0.0 and float(trajectory_fm_ratio) != float(flow_matching_ratio):
+                raise ValueError("trajectory_fm_ratio and flow_matching_ratio disagree")
+            warnings.warn(
+                "flow_matching_ratio is deprecated because it is semantically ambiguous. "
+                "Use trajectory_fm_ratio for alpha=1 trajectory flow matching.",
+                stacklevel=2,
+            )
+            trajectory_fm_ratio = flow_matching_ratio
         self.r_equals_t_ratio = float(r_equals_t_ratio)
-        self.flow_matching_ratio = float(flow_matching_ratio)
+        self.trajectory_fm_ratio = float(trajectory_fm_ratio)
         self.weighting_mode = str(weighting_mode)
         self.adaptive_weight_power = float(adaptive_weight_power)
         self.adaptive_weight_bias = float(adaptive_weight_bias)
@@ -114,11 +130,11 @@ class AlphaFlowObjective(nn.Module):
 
         alpha_value = self.get_alpha(global_step)
         alpha = torch.full((batch_size,), alpha_value, device=x_lat.device, dtype=x_lat.dtype)
-        if self.flow_matching_ratio > 0.0:
-            force_flow_matching = torch.rand(batch_size, device=x_lat.device) < self.flow_matching_ratio
-            alpha = torch.where(force_flow_matching, torch.ones_like(alpha), alpha)
+        if self.trajectory_fm_ratio > 0.0:
+            trajectory_fm_mask = torch.rand(batch_size, device=x_lat.device) < self.trajectory_fm_ratio
+            alpha = torch.where(trajectory_fm_mask, torch.ones_like(alpha), alpha)
         else:
-            force_flow_matching = torch.zeros(batch_size, device=x_lat.device, dtype=torch.bool)
+            trajectory_fm_mask = torch.zeros(batch_size, device=x_lat.device, dtype=torch.bool)
 
         pred_field = torch.zeros_like(x_lat)
         target_field = torch.zeros_like(x_lat)
@@ -178,7 +194,7 @@ class AlphaFlowObjective(nn.Module):
             s[alphaflow_mask] = s_subset
             base_weight[alphaflow_mask] = 1.0 / alpha_subset.clamp_min(self.alpha_inverse_eps)
             objective_branch[alphaflow_mask] = torch.where(
-                force_flow_matching[alphaflow_mask],
+                trajectory_fm_mask[alphaflow_mask],
                 torch.full_like(alpha_subset, 2, dtype=torch.long),
                 torch.full_like(alpha_subset, 1, dtype=torch.long),
             )
@@ -191,14 +207,17 @@ class AlphaFlowObjective(nn.Module):
             weighting_mode=self.weighting_mode,
             adaptive_power=self.adaptive_weight_power,
             adaptive_bias=self.adaptive_weight_bias,
+            alpha=alpha,
         )
+        border_fm_mask = delta_t == 0
         loss_dict = {
             "alphaflow_loss": loss,
             "total_loss": loss,
             "alpha": alpha.mean(),
             "delta_t_mean": delta_t.mean(),
-            "flow_matching_ratio": force_flow_matching.float().mean(),
-            "r_equals_t_ratio": (delta_t == 0).float().mean(),
+            "trajectory_fm_ratio": trajectory_fm_mask.float().mean(),
+            "border_fm_ratio": border_fm_mask.float().mean(),
+            "r_equals_t_ratio": border_fm_mask.float().mean(),
             **weighting_stats,
         }
         return {
@@ -220,5 +239,6 @@ class AlphaFlowObjective(nn.Module):
             "objective_branch": objective_branch,
             "weighting_stats": weighting_stats,
             "base_weight": base_weight,
-            "force_flow_matching": force_flow_matching,
+            "trajectory_fm_mask": trajectory_fm_mask,
+            "border_fm_mask": border_fm_mask,
         }

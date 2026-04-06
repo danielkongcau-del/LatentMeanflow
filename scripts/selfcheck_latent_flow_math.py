@@ -14,7 +14,12 @@ for path in (REPO_ROOT, LDM_ROOT, TAMING_ROOT):
         sys.path.insert(0, path_str)
 
 from latent_meanflow.objectives.alphaflow import AlphaFlowObjective
-from latent_meanflow.objectives.common import ConstantTimeSampler, expand_time_like, rectified_path
+from latent_meanflow.objectives.common import (
+    ConstantTimeSampler,
+    expand_time_like,
+    rectified_path,
+    weighted_regression_loss,
+)
 from latent_meanflow.objectives.meanflow import meanflow_jvp
 from latent_meanflow.samplers.interval import IntervalFlowSampler
 
@@ -73,7 +78,8 @@ def check_alphaflow_alpha_one_degeneracy():
             "target": "latent_meanflow.objectives.common.UniformTimeSampler",
             "params": {"time_eps": 1.0e-4},
         },
-        flow_matching_ratio=0.0,
+        trajectory_fm_ratio=0.0,
+        border_fm_ratio=0.0,
         weighting_mode="none",
         alpha_schedule_config={
             "target": "latent_meanflow.objectives.alphaflow.ConstantAlphaScheduler",
@@ -91,6 +97,109 @@ def check_alphaflow_alpha_one_degeneracy():
     torch.testing.assert_close(outputs["alpha"], torch.ones_like(outputs["alpha"]))
     torch.testing.assert_close(outputs["target_field"], outputs["velocity"])
     torch.testing.assert_close(outputs["base_weight"], torch.ones_like(outputs["base_weight"]))
+    assert torch.all(~outputs["border_fm_mask"])
+
+
+def check_border_case_flow_matching_degeneracy():
+    torch.manual_seed(0)
+    objective = AlphaFlowObjective(
+        time_eps=1.0e-4,
+        min_delta=0.0,
+        loss_type="mse",
+        time_sampler_config={
+            "target": "latent_meanflow.objectives.common.ConstantTimeSampler",
+            "params": {"value": 0.7, "time_eps": 1.0e-4},
+        },
+        trajectory_fm_ratio=0.0,
+        border_fm_ratio=1.0,
+        weighting_mode="none",
+        alpha_schedule_config={
+            "target": "latent_meanflow.objectives.alphaflow.ConstantAlphaScheduler",
+            "params": {"value": 0.0},
+        },
+    )
+
+    x_lat = torch.randn(2, 4, 8, 8)
+
+    def zero_model(z_t, r=None, t=None, delta_t=None, condition=None):
+        _ = r, t, delta_t, condition
+        return torch.zeros_like(z_t)
+
+    outputs = objective(zero_model, x_lat, condition=None, global_step=0)
+    torch.testing.assert_close(outputs["target_field"], outputs["velocity"])
+    assert torch.all(outputs["border_fm_mask"])
+    assert torch.all(~outputs["trajectory_fm_mask"])
+
+
+def check_semantics_not_confused():
+    torch.manual_seed(0)
+    x_lat = torch.randn(2, 4, 8, 8)
+
+    def zero_model(z_t, r=None, t=None, delta_t=None, condition=None):
+        _ = r, t, delta_t, condition
+        return torch.zeros_like(z_t)
+
+    trajectory_objective = AlphaFlowObjective(
+        time_eps=1.0e-4,
+        min_delta=0.0,
+        loss_type="mse",
+        time_sampler_config={
+            "target": "latent_meanflow.objectives.common.UniformTimeSampler",
+            "params": {"time_eps": 1.0e-4},
+        },
+        trajectory_fm_ratio=0.0,
+        border_fm_ratio=0.0,
+        weighting_mode="none",
+        alpha_schedule_config={
+            "target": "latent_meanflow.objectives.alphaflow.ConstantAlphaScheduler",
+            "params": {"value": 1.0},
+        },
+    )
+    border_objective = AlphaFlowObjective(
+        time_eps=1.0e-4,
+        min_delta=0.0,
+        loss_type="mse",
+        time_sampler_config={
+            "target": "latent_meanflow.objectives.common.ConstantTimeSampler",
+            "params": {"value": 0.7, "time_eps": 1.0e-4},
+        },
+        trajectory_fm_ratio=0.0,
+        border_fm_ratio=1.0,
+        weighting_mode="none",
+        alpha_schedule_config={
+            "target": "latent_meanflow.objectives.alphaflow.ConstantAlphaScheduler",
+            "params": {"value": 0.0},
+        },
+    )
+
+    trajectory_outputs = trajectory_objective(zero_model, x_lat, condition=None, global_step=0)
+    border_outputs = border_objective(zero_model, x_lat, condition=None, global_step=0)
+    assert torch.all(~trajectory_outputs["border_fm_mask"])
+    assert torch.all(border_outputs["border_fm_mask"])
+    assert not torch.allclose(trajectory_outputs["r"], border_outputs["r"])
+    torch.testing.assert_close(trajectory_outputs["target_field"], trajectory_outputs["velocity"])
+    torch.testing.assert_close(border_outputs["target_field"], border_outputs["velocity"])
+
+
+def check_alpha_adaptive_exact_weighting():
+    prediction = torch.tensor([[[[2.0]]], [[[3.0]]]])
+    target = torch.tensor([[[[1.0]]], [[[1.0]]]])
+    alpha = torch.tensor([1.0, 0.25])
+    loss, stats = weighted_regression_loss(
+        prediction,
+        target,
+        loss_type="mse",
+        base_weight=1.0 / alpha,
+        weighting_mode="alpha_adaptive_exact",
+        adaptive_power=1.0,
+        adaptive_bias=1.0e-4,
+        alpha=alpha,
+    )
+    base_error = torch.tensor([1.0, 4.0])
+    expected_weight = alpha / (base_error + alpha * 1.0e-4)
+    expected_loss = torch.mean(expected_weight * (base_error / alpha))
+    torch.testing.assert_close(loss, expected_loss)
+    torch.testing.assert_close(stats["adaptive_weight_mean"], expected_weight.mean())
 
 
 def check_interval_sampler_grids():
@@ -106,6 +215,9 @@ def main():
     check_rectified_path()
     check_meanflow_jvp_tangent()
     check_alphaflow_alpha_one_degeneracy()
+    check_border_case_flow_matching_degeneracy()
+    check_semantics_not_confused()
+    check_alpha_adaptive_exact_weighting()
     check_interval_sampler_grids()
     print("Latent flow math self-check passed")
 
