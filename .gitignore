@@ -1,0 +1,42 @@
+# OS / editor
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Packaging / build outputs
+build/
+dist/
+*.egg-info/
+
+# Model artifacts
+*.ckpt
+*.pt
+*.pth
+*.bin
+*.safetensors
+
+# Project outputs and local data
+**/outputs/
+**/output_dir*/
+**/snapshots*/
+latent-diffusion/taming-transformers/data/
+flow_matching-main/examples/image_generation/data/
+flow_matching-main/examples/image_generation/outputs/
+
+# Backups for nested repository metadata
+**/.git_local_backup/

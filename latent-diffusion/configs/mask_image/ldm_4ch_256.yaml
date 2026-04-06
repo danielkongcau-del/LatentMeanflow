@@ -1,0 +1,114 @@
+model:
+  base_learning_rate: 2.0e-6
+  target: ldm.models.diffusion.ddpm.LatentDiffusion
+  params:
+    linear_start: 0.0015
+    linear_end: 0.0195
+    num_timesteps_cond: 1
+    log_every_t: 200
+    timesteps: 1000
+    loss_type: l1
+    first_stage_key: image
+    cond_stage_key: class_label
+    image_size: 64
+    channels: 4
+    cond_stage_trainable: False
+    concat_mode: False
+    conditioning_key: adm
+    scale_by_std: True
+    monitor: val/loss_simple_ema
+    unet_config:
+      target: ldm.modules.diffusionmodules.openaimodel.UNetModel
+      params:
+        image_size: 64
+        in_channels: 4
+        out_channels: 4
+        model_channels: 128
+        num_classes: 4
+        attention_resolutions:
+        - 8
+        - 4
+        - 2
+        num_res_blocks: 2
+        channel_mult:
+        - 1
+        - 2
+        - 3
+        - 4
+        num_head_channels: 32
+    first_stage_config:
+      target: ldm.models.autoencoder.AutoencoderKL
+      params:
+        embed_dim: 4
+        ckpt_path: D:\GithubClones\latent-diffusion\logs\autoencoder\last.ckpt
+        ddconfig:
+          double_z: True
+          z_channels: 4
+          resolution: 256
+          in_channels: 4
+          out_ch: 4
+          ch: 128
+          ch_mult: [1, 2, 4]
+          num_res_blocks: 2
+          attn_resolutions: []
+          dropout: 0.0
+        lossconfig:
+          target: torch.nn.Identity
+    cond_stage_config:
+      target: ldm.modules.encoders.modules.ClassLabeler
+      params:
+        key: class_label
+
+data:
+  target: main.DataModuleFromConfig
+  params:
+    batch_size: 96
+    num_workers: 4
+    wrap: false
+    train:
+      target: ldm.data.mask_image_pair.MultiMaskImagePairDataset
+      params:
+        roots:
+        - dataset/borner
+        - dataset/corn
+        - dataset/tomato
+        - dataset/worm
+        split: train
+        size: 256
+    validation:
+      target: ldm.data.mask_image_pair.MultiMaskImagePairDataset
+      params:
+        roots:
+        - dataset/borner
+        - dataset/corn
+        - dataset/tomato
+        - dataset/worm
+        split: val
+        size: 256
+
+lightning:
+  callbacks:
+    image_logger:
+      target: main.ImageLogger
+      params:
+        disabled: False
+        batch_frequency: 675
+        max_images: 400
+        increase_log_steps: False
+        latest_only: False
+        save_pairs: True
+        save_pairs_per_class: True
+        pairs_per_class: 400
+        num_classes: 4
+        save_pairs_bases:
+          - samples
+        log_images_kwargs:
+          plot_diffusion_rows: False
+          plot_progressive_rows: False
+          plot_denoise_rows: False
+          inpaint: False
+          return_keys:
+            - samples_image
+            - samples_mask
+  trainer:
+    benchmark: True
