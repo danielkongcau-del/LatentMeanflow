@@ -30,13 +30,21 @@ def assert_uses_project_launcher(cmd, context):
         raise AssertionError(f"Expected project launcher in {context}: {cmd}")
 
 
+def assert_gpu_arg(cmd, expected, context):
+    if "--gpus" not in cmd:
+        raise AssertionError(f"Expected --gpus in {context}: {cmd}")
+    idx = cmd.index("--gpus")
+    if cmd[idx + 1] != expected:
+        raise AssertionError(f"Expected --gpus {expected!r} in {context}, got {cmd[idx + 1]!r}: {cmd}")
+
+
 def main():
     tokenizer_config = REPO_ROOT / "configs" / "autoencoder_semantic_pair_256.yaml"
     tokenizer_ckpt = REPO_ROOT / "logs" / "autoencoder" / "checkpoints" / "last.ckpt"
 
     semantic_args = argparse.Namespace(
         config=REPO_ROOT / "configs" / "semantic_tokenizer_tiny_256.yaml",
-        gpus="1",
+        gpus="2",
         max_epochs=1,
         batch_size=None,
         resume=None,
@@ -47,6 +55,7 @@ def main():
     )
     semantic_cmd = train_semantic_autoencoder.build_command(semantic_args)
     assert_uses_project_launcher(semantic_cmd, "semantic autoencoder default command")
+    assert_gpu_arg(semantic_cmd, "0,1", "semantic autoencoder default command")
     assert_in("--no-test", semantic_cmd, "semantic autoencoder default command")
     semantic_args.run_test = True
     semantic_cmd_with_test = train_semantic_autoencoder.build_command(semantic_args)
@@ -56,7 +65,7 @@ def main():
         config=REPO_ROOT / "configs" / "latent_fm_semantic_256_tiny.yaml",
         tokenizer_config=tokenizer_config,
         tokenizer_ckpt=tokenizer_ckpt,
-        gpus="1",
+        gpus="2",
         max_epochs=1,
         batch_size=None,
         resume=None,
@@ -67,6 +76,7 @@ def main():
     )
     fm_cmd = train_latent_fm.build_command(fm_args, tokenizer_ckpt)
     assert_uses_project_launcher(fm_cmd, "latent fm default command")
+    assert_gpu_arg(fm_cmd, "0,1", "latent fm default command")
     assert_in("--no-test", fm_cmd, "latent fm default command")
     fm_args.run_test = True
     fm_cmd_with_test = train_latent_fm.build_command(fm_args, tokenizer_ckpt)
@@ -77,7 +87,7 @@ def main():
         config=REPO_ROOT / "configs" / "latent_meanflow_semantic_256.yaml",
         tokenizer_config=tokenizer_config,
         tokenizer_ckpt=tokenizer_ckpt,
-        gpus="1",
+        gpus="2",
         max_epochs=1,
         batch_size=None,
         resume=None,
@@ -92,6 +102,7 @@ def main():
     )
     meanflow_cmd = train_latent_meanflow.build_command(meanflow_args, meanflow_args.config, tokenizer_ckpt)
     assert_uses_project_launcher(meanflow_cmd, "latent meanflow default command")
+    assert_gpu_arg(meanflow_cmd, "0,1", "latent meanflow default command")
     assert_in("--no-test", meanflow_cmd, "latent meanflow default command")
     meanflow_args.run_test = True
     meanflow_cmd_with_test = train_latent_meanflow.build_command(

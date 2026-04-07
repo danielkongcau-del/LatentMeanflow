@@ -75,3 +75,4 @@ lightning:
   trainer:
     benchmark: false
     num_sanity_val_steps: 0
+    strategy: ddp_find_unused_parameters_false

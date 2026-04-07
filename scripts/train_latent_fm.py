@@ -3,7 +3,7 @@ import os
 import sys
 from pathlib import Path
 
-from _launch_utils import run_managed_subprocess
+from _launch_utils import normalize_gpus_arg, run_managed_subprocess
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_ROOT = Path(__file__).resolve().parent
@@ -75,7 +75,7 @@ def build_command(args, tokenizer_ckpt):
     if args.resume:
         cmd.extend(["--resume", str(args.resume.resolve())])
     if args.gpus:
-        cmd.extend(["--gpus", args.gpus])
+        cmd.extend(["--gpus", normalize_gpus_arg(args.gpus)])
     if args.max_epochs is not None:
         cmd.extend(["--max_epochs", str(args.max_epochs)])
     if args.batch_size is not None:

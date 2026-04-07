@@ -62,6 +62,10 @@ class LatentFMTrainer(pl.LightningModule):
     def _get_log_batch_size(self, batch):
         return int(batch["image"].shape[0])
 
+    def _should_sync_dist(self):
+        trainer = getattr(self, "trainer", None)
+        return trainer is not None and int(getattr(trainer, "world_size", 1)) > 1
+
     def encode_batch(self, batch):
         return self.tokenizer.encode_batch(batch, sample_posterior=self.sample_posterior)
 
@@ -106,6 +110,7 @@ class LatentFMTrainer(pl.LightningModule):
         outputs = self(batch)
         fm_loss = outputs["fm_loss"]
         batch_size = self._get_log_batch_size(batch)
+        sync_dist = self._should_sync_dist()
         self.log(
             f"{split}/fm_loss",
             fm_loss.detach(),
@@ -114,6 +119,7 @@ class LatentFMTrainer(pl.LightningModule):
             on_step=(split == "train"),
             on_epoch=True,
             batch_size=batch_size,
+            sync_dist=sync_dist,
         )
         return outputs["loss"], fm_loss.detach()
 

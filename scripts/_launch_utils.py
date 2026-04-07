@@ -7,6 +7,22 @@ _GRACEFUL_TIMEOUT_SECONDS = 10
 _FORCE_TIMEOUT_SECONDS = 5
 
 
+def normalize_gpus_arg(gpus):
+    if gpus is None:
+        return None
+    text = str(gpus).strip()
+    if not text:
+        return None
+    if "," in text:
+        return text
+    if not text.isdigit():
+        return text
+    count = int(text)
+    if count <= 1:
+        return text
+    return ",".join(str(i) for i in range(count))
+
+
 def _terminate_process(process, signum):
     if process.poll() is not None:
         return

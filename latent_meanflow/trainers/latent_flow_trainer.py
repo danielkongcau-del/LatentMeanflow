@@ -70,6 +70,10 @@ class LatentFlowTrainer(pl.LightningModule):
     def _get_log_batch_size(self, batch):
         return int(batch["image"].shape[0])
 
+    def _should_sync_dist(self):
+        trainer = getattr(self, "trainer", None)
+        return trainer is not None and int(getattr(trainer, "world_size", 1)) > 1
+
     def _prepare_time(self, value, device, dtype):
         if value is None:
             return None
@@ -140,6 +144,7 @@ class LatentFlowTrainer(pl.LightningModule):
         loss_dict = outputs.get("loss_dict", {"loss": outputs["loss"], "total_loss": outputs["loss"]})
         metrics = self._collect_log_scalars(split, loss_dict)
         batch_size = self._get_log_batch_size(batch)
+        sync_dist = self._should_sync_dist()
         self.log(
             f"{split}/loss",
             outputs["loss"].detach(),
@@ -148,6 +153,7 @@ class LatentFlowTrainer(pl.LightningModule):
             on_step=(split == "train"),
             on_epoch=True,
             batch_size=batch_size,
+            sync_dist=sync_dist,
         )
         if metrics:
             self.log_dict(
@@ -157,6 +163,7 @@ class LatentFlowTrainer(pl.LightningModule):
                 on_step=(split == "train"),
                 on_epoch=True,
                 batch_size=batch_size,
+                sync_dist=sync_dist,
             )
         return outputs["loss"], metrics.get(f"{split}/loss", outputs["loss"].detach())
 

@@ -91,3 +91,4 @@ lightning:
         ignore_index: -1
   trainer:
     benchmark: true
+    strategy: ddp_find_unused_parameters_false

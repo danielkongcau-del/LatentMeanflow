@@ -255,6 +255,10 @@ class SemanticPairAutoencoder(pl.LightningModule):
         image = batch[self.image_key]
         return int(image.shape[0])
 
+    def _should_sync_dist(self):
+        trainer = getattr(self, "trainer", None)
+        return trainer is not None and int(getattr(trainer, "world_size", 1)) > 1
+
     @staticmethod
     def _detach_scalars(loss_dict):
         detached = {}
@@ -325,6 +329,7 @@ class SemanticPairAutoencoder(pl.LightningModule):
         total_loss = outputs["total_loss"]
         batch_size = self._get_log_batch_size(batch)
         detached_loss_dict = self._detach_scalars(outputs["loss_dict"])
+        sync_dist = self._should_sync_dist()
 
         prefixed = {
             f"{split}/{name}": value
@@ -339,6 +344,7 @@ class SemanticPairAutoencoder(pl.LightningModule):
             on_step=(split == "train"),
             on_epoch=True,
             batch_size=batch_size,
+            sync_dist=sync_dist,
         )
         self.log_dict(
             prefixed,
@@ -347,6 +353,7 @@ class SemanticPairAutoencoder(pl.LightningModule):
             on_step=(split == "train"),
             on_epoch=True,
             batch_size=batch_size,
+            sync_dist=sync_dist,
         )
         return total_loss, detached_loss_dict
 
