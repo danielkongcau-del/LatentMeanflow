@@ -78,16 +78,22 @@ def resolve_run_name(args, config_path):
     return RUN_NAMES[args.objective]
 
 
+def should_pass_run_name(args):
+    # Vendored latent-diffusion forbids combining --name with --resume.
+    # Fresh runs keep the config-stem naming behavior; resume runs must omit --name.
+    return args.resume is None
+
+
 def build_command(args, config_path, tokenizer_ckpt):
     cmd = [
         sys.executable,
         str(LDM_ROOT / "main.py"),
         "-t",
-        "--name",
-        resolve_run_name(args, config_path),
         "--base",
         str(config_path.resolve()),
     ]
+    if should_pass_run_name(args):
+        cmd[3:3] = ["--name", resolve_run_name(args, config_path)]
     if args.resume:
         cmd.extend(["--resume", str(args.resume.resolve())])
     if args.gpus:

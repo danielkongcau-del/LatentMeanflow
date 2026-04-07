@@ -155,6 +155,8 @@ Run the first real MeanFlow baseline with the baseline config:
 python scripts/train_latent_meanflow.py --objective meanflow --config configs/latent_meanflow_semantic_256.yaml --gpus 0
 ```
 
+To resume a latent-flow run, pass only `--resume <ckpt-or-logdir>`; the wrapper now omits `--name` automatically on resume so it stays compatible with the vendored trainer CLI.
+
 Train the recommended AlphaFlow curriculum:
 
 ```bash
