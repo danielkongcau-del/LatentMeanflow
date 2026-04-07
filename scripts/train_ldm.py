@@ -1,9 +1,9 @@
 import argparse
 import os
-import subprocess
 import sys
 from pathlib import Path
 
+from _launch_utils import run_managed_subprocess
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LDM_ROOT = REPO_ROOT / "third_party" / "latent-diffusion"
@@ -89,7 +89,7 @@ def main():
     cmd = build_command(args, ae_ckpt)
     print("Using autoencoder checkpoint:", ae_ckpt)
     print("Running:", " ".join(cmd))
-    subprocess.run(cmd, cwd=str(REPO_ROOT), check=True, env=build_env())
+    run_managed_subprocess(cmd, cwd=REPO_ROOT, env=build_env())
 
 
 if __name__ == "__main__":
