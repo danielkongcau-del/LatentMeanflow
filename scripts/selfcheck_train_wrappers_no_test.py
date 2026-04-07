@@ -25,6 +25,11 @@ def assert_not_in(token, cmd, context):
         raise AssertionError(f"Did not expect '{token}' in {context}: {cmd}")
 
 
+def assert_uses_project_launcher(cmd, context):
+    if len(cmd) < 2 or not str(cmd[1]).endswith("launch_ldm_main.py"):
+        raise AssertionError(f"Expected project launcher in {context}: {cmd}")
+
+
 def main():
     tokenizer_config = REPO_ROOT / "configs" / "autoencoder_semantic_pair_256.yaml"
     tokenizer_ckpt = REPO_ROOT / "logs" / "autoencoder" / "checkpoints" / "last.ckpt"
@@ -41,6 +46,7 @@ def main():
         overrides=[],
     )
     semantic_cmd = train_semantic_autoencoder.build_command(semantic_args)
+    assert_uses_project_launcher(semantic_cmd, "semantic autoencoder default command")
     assert_in("--no-test", semantic_cmd, "semantic autoencoder default command")
     semantic_args.run_test = True
     semantic_cmd_with_test = train_semantic_autoencoder.build_command(semantic_args)
@@ -60,6 +66,7 @@ def main():
         overrides=[],
     )
     fm_cmd = train_latent_fm.build_command(fm_args, tokenizer_ckpt)
+    assert_uses_project_launcher(fm_cmd, "latent fm default command")
     assert_in("--no-test", fm_cmd, "latent fm default command")
     fm_args.run_test = True
     fm_cmd_with_test = train_latent_fm.build_command(fm_args, tokenizer_ckpt)
@@ -84,6 +91,7 @@ def main():
         overrides=[],
     )
     meanflow_cmd = train_latent_meanflow.build_command(meanflow_args, meanflow_args.config, tokenizer_ckpt)
+    assert_uses_project_launcher(meanflow_cmd, "latent meanflow default command")
     assert_in("--no-test", meanflow_cmd, "latent meanflow default command")
     meanflow_args.run_test = True
     meanflow_cmd_with_test = train_latent_meanflow.build_command(

@@ -6,8 +6,10 @@ from pathlib import Path
 from _launch_utils import run_managed_subprocess
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+SCRIPT_ROOT = Path(__file__).resolve().parent
 LDM_ROOT = REPO_ROOT / "third_party" / "latent-diffusion"
 TAMING_ROOT = LDM_ROOT / "taming-transformers"
+LDM_LAUNCHER = SCRIPT_ROOT / "launch_ldm_main.py"
 DEFAULT_CONFIG = REPO_ROOT / "configs" / "ldm_4ch_256.yaml"
 DEFAULT_AE_CKPT = REPO_ROOT / "logs" / "autoencoder" / "checkpoints" / "last.ckpt"
 
@@ -56,7 +58,7 @@ def find_latest_ae_ckpt():
 
 
 def build_command(args, ae_ckpt):
-    cmd = [sys.executable, str(LDM_ROOT / "main.py"), "-t", "--base", str(args.config.resolve())]
+    cmd = [sys.executable, str(LDM_LAUNCHER), "-t", "--base", str(args.config.resolve())]
     if args.resume:
         cmd.extend(["--resume", str(args.resume.resolve())])
     if args.gpus:

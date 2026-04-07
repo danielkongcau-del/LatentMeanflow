@@ -6,8 +6,10 @@ from pathlib import Path
 from _launch_utils import run_managed_subprocess
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+SCRIPT_ROOT = Path(__file__).resolve().parent
 LDM_ROOT = REPO_ROOT / "third_party" / "latent-diffusion"
 TAMING_ROOT = LDM_ROOT / "taming-transformers"
+LDM_LAUNCHER = SCRIPT_ROOT / "launch_ldm_main.py"
 DEFAULT_TOKENIZER_CONFIG = REPO_ROOT / "configs" / "autoencoder_semantic_pair_256.yaml"
 DEFAULT_TOKENIZER_CKPT = REPO_ROOT / "logs" / "autoencoder" / "checkpoints" / "last.ckpt"
 DEFAULT_CONFIGS = {
@@ -197,7 +199,7 @@ def validate_resume_request(args, config_path=None, resume_logdir=None):
 def build_command(args, config_path, tokenizer_ckpt):
     cmd = [
         sys.executable,
-        str(LDM_ROOT / "main.py"),
+        str(LDM_LAUNCHER),
         "-t",
     ]
     if not args.run_test:
