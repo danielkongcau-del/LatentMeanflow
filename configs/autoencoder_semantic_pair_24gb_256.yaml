@@ -2,8 +2,8 @@ model:
   base_learning_rate: 1.0e-4
   target: latent_meanflow.models.semantic_autoencoder.SemanticPairAutoencoder
   params:
-    # Mid-plus semantic tokenizer for 24 GB-class single-GPU training.
-    # Stronger than semantic_tokenizer_mid_256 while still intended for batch_size=1.
+    # Full-width semantic tokenizer with runtime settings tuned for a 24 GB single GPU.
+    # This keeps the original baseline model size but reduces startup memory spikes.
     monitor: "val/total_loss"
     embed_dim: 4
     num_classes: 7
@@ -26,9 +26,9 @@ model:
       resolution: 256
       in_channels: 10
       out_ch: 10
-      ch: 96
+      ch: 128
       ch_mult: [1, 2, 4]
-      num_res_blocks: 1
+      num_res_blocks: 2
       attn_resolutions: []
       dropout: 0.0
 
@@ -67,7 +67,7 @@ lightning:
       target: latent_meanflow.callbacks.semantic_logger.SemanticPairImageLogger
       params:
         disabled: false
-        batch_frequency: 100
+        batch_frequency: 200
         increase_log_steps: false
         max_images: 4
         latest_only: true
