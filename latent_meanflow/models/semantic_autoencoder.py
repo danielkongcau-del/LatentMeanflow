@@ -251,6 +251,20 @@ class SemanticPairAutoencoder(pl.LightningModule):
         joint_input = torch.cat([image, mask_onehot], dim=1)
         return image, mask_index, mask_onehot, joint_input
 
+    def _get_log_batch_size(self, batch):
+        image = batch[self.image_key]
+        return int(image.shape[0])
+
+    @staticmethod
+    def _detach_scalars(loss_dict):
+        detached = {}
+        for name, value in loss_dict.items():
+            if isinstance(value, torch.Tensor):
+                detached[name] = value.detach()
+            else:
+                detached[name] = value
+        return detached
+
     def encode(self, joint_input):
         hidden = self.encoder(joint_input)
         moments = self.quant_conv(hidden)
@@ -309,19 +323,22 @@ class SemanticPairAutoencoder(pl.LightningModule):
     def shared_step(self, batch, split):
         outputs = self(batch)
         total_loss = outputs["total_loss"]
+        batch_size = self._get_log_batch_size(batch)
+        detached_loss_dict = self._detach_scalars(outputs["loss_dict"])
 
         prefixed = {
             f"{split}/{name}": value
-            for name, value in outputs["loss_dict"].items()
+            for name, value in detached_loss_dict.items()
             if name != "total_loss"
         }
         self.log(
             f"{split}/total_loss",
-            total_loss,
+            total_loss.detach(),
             prog_bar=(split != "train"),
             logger=True,
             on_step=(split == "train"),
             on_epoch=True,
+            batch_size=batch_size,
         )
         self.log_dict(
             prefixed,
@@ -329,16 +346,17 @@ class SemanticPairAutoencoder(pl.LightningModule):
             logger=True,
             on_step=(split == "train"),
             on_epoch=True,
+            batch_size=batch_size,
         )
-        return outputs
+        return total_loss, detached_loss_dict
 
     def training_step(self, batch, batch_idx):
-        outputs = self.shared_step(batch, split="train")
-        return outputs["total_loss"]
+        total_loss, _ = self.shared_step(batch, split="train")
+        return total_loss
 
     def validation_step(self, batch, batch_idx):
-        outputs = self.shared_step(batch, split="val")
-        return outputs["loss_dict"]
+        _, detached_loss_dict = self.shared_step(batch, split="val")
+        return detached_loss_dict["total_loss"]
 
     def configure_optimizers(self):
         lr = float(getattr(self, "learning_rate", 1.0e-4))

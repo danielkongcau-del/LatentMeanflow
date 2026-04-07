@@ -56,8 +56,11 @@ class LatentFMTrainer(pl.LightningModule):
         if self.class_label_key not in batch:
             raise KeyError(
                 f"use_class_condition=True but batch does not contain '{self.class_label_key}'"
-            )
+        )
         return batch[self.class_label_key].long()
+
+    def _get_log_batch_size(self, batch):
+        return int(batch["image"].shape[0])
 
     def encode_batch(self, batch):
         return self.tokenizer.encode_batch(batch, sample_posterior=self.sample_posterior)
@@ -102,23 +105,25 @@ class LatentFMTrainer(pl.LightningModule):
     def shared_step(self, batch, split):
         outputs = self(batch)
         fm_loss = outputs["fm_loss"]
+        batch_size = self._get_log_batch_size(batch)
         self.log(
             f"{split}/fm_loss",
-            fm_loss,
+            fm_loss.detach(),
             prog_bar=True,
             logger=True,
             on_step=(split == "train"),
             on_epoch=True,
+            batch_size=batch_size,
         )
-        return outputs
+        return outputs["loss"], fm_loss.detach()
 
     def training_step(self, batch, batch_idx):
-        outputs = self.shared_step(batch, split="train")
-        return outputs["loss"]
+        loss, _ = self.shared_step(batch, split="train")
+        return loss
 
     def validation_step(self, batch, batch_idx):
-        outputs = self.shared_step(batch, split="val")
-        return outputs["fm_loss"]
+        _, fm_loss = self.shared_step(batch, split="val")
+        return fm_loss
 
     def configure_optimizers(self):
         lr = float(getattr(self, "learning_rate", 1.0e-4))

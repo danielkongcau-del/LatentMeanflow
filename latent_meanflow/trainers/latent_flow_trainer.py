@@ -67,6 +67,9 @@ class LatentFlowTrainer(pl.LightningModule):
             )
         return batch[self.class_label_key].long()
 
+    def _get_log_batch_size(self, batch):
+        return int(batch["image"].shape[0])
+
     def _prepare_time(self, value, device, dtype):
         if value is None:
             return None
@@ -127,7 +130,7 @@ class LatentFlowTrainer(pl.LightningModule):
             if isinstance(value, torch.Tensor):
                 if value.ndim != 0:
                     continue
-                metrics[f"{split}/{name}"] = value
+                metrics[f"{split}/{name}"] = value.detach()
             elif isinstance(value, (int, float)):
                 metrics[f"{split}/{name}"] = torch.tensor(float(value), device=self.device)
         return metrics
@@ -136,13 +139,15 @@ class LatentFlowTrainer(pl.LightningModule):
         outputs = self(batch, objective_step=int(self.global_step))
         loss_dict = outputs.get("loss_dict", {"loss": outputs["loss"], "total_loss": outputs["loss"]})
         metrics = self._collect_log_scalars(split, loss_dict)
+        batch_size = self._get_log_batch_size(batch)
         self.log(
             f"{split}/loss",
-            outputs["loss"],
+            outputs["loss"].detach(),
             prog_bar=True,
             logger=True,
             on_step=(split == "train"),
             on_epoch=True,
+            batch_size=batch_size,
         )
         if metrics:
             self.log_dict(
@@ -151,16 +156,17 @@ class LatentFlowTrainer(pl.LightningModule):
                 logger=True,
                 on_step=(split == "train"),
                 on_epoch=True,
+                batch_size=batch_size,
             )
-        return outputs
+        return outputs["loss"], metrics.get(f"{split}/loss", outputs["loss"].detach())
 
     def training_step(self, batch, batch_idx):
-        outputs = self.shared_step(batch, split="train")
-        return outputs["loss"]
+        loss, _ = self.shared_step(batch, split="train")
+        return loss
 
     def validation_step(self, batch, batch_idx):
-        outputs = self.shared_step(batch, split="val")
-        return outputs["loss"]
+        _, detached_loss = self.shared_step(batch, split="val")
+        return detached_loss
 
     def configure_optimizers(self):
         lr = float(getattr(self, "learning_rate", 1.0e-4))
