@@ -168,6 +168,8 @@ python scripts/train_latent_meanflow.py --resume logs/<your_run>/checkpoints/las
 ```
 
 `safe resume` does not allow `--set` dotlist overrides.
+It also does not allow wrapper flags that become CLI dotlist overrides, such as `--batch-size`,
+`--enable-image-logger`, or `--image-log-frequency`.
 
 Consistency-check resume with an explicit matching config:
 
@@ -197,16 +199,30 @@ python scripts/train_latent_meanflow.py \
   --set model.params.some_field=some_value
 ```
 
+Dangerous wrapper-dotlist override resume:
+
+```bash
+python scripts/train_latent_meanflow.py \
+  --resume logs/<your_run>/checkpoints/last.ckpt \
+  --allow-dotlist-override \
+  --batch-size 8 \
+  --enable-image-logger \
+  --image-log-frequency 50
+```
+
 By default, resume no longer injects:
 
 - a new `--base <config>`
 - `--model.params.tokenizer_config_path=...`
 - `--model.params.tokenizer_ckpt_path=...`
 - any `--set` dotlist overrides
+- `--data.params.batch_size=...`
+- `--lightning.callbacks.image_logger.params.disabled=False`
+- `--lightning.callbacks.image_logger.params.batch_frequency=...`
 
-`--allow-dotlist-override` is a dangerous escape hatch. It can bypass the wrapper's safety model, including protections around tokenizer-related settings, so it is not the recommended path.
+`--allow-dotlist-override` is a dangerous escape hatch. It can bypass the wrapper's safety model, including protections around tokenizer-related settings and wrapper-managed runtime dotlist flags, so it is not the recommended path.
 
-This prevents a default `alphaflow` config, a new tokenizer path, or any arbitrary dotlist override from being silently merged into an existing `meanflow` resume run.
+This prevents a default `alphaflow` config, a new tokenizer path, or any arbitrary dotlist override, including wrapper-managed batch-size and image-logger flags, from being silently merged into an existing `meanflow` resume run.
 
 Train the recommended AlphaFlow curriculum:
 

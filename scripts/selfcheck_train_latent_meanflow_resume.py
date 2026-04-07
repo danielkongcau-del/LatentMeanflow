@@ -22,6 +22,9 @@ def make_args(
     allow_dotlist_override=False,
     force_tokenizer_config=False,
     force_tokenizer_ckpt=False,
+    batch_size=None,
+    image_log_frequency=None,
+    enable_image_logger=False,
     overrides=None,
 ):
     return argparse.Namespace(
@@ -31,14 +34,14 @@ def make_args(
         tokenizer_ckpt=tokenizer_ckpt,
         gpus="0",
         max_epochs=None,
-        batch_size=None,
+        batch_size=batch_size,
         resume=resume,
         allow_config_override=allow_config_override,
         allow_dotlist_override=allow_dotlist_override,
         force_tokenizer_config=force_tokenizer_config,
         force_tokenizer_ckpt=force_tokenizer_ckpt,
-        image_log_frequency=None,
-        enable_image_logger=False,
+        image_log_frequency=image_log_frequency,
+        enable_image_logger=enable_image_logger,
         overrides=list(overrides or []),
     )
 
@@ -112,6 +115,12 @@ def main():
             raise AssertionError(f"Bare resume should not inject tokenizer_config_path: {resume_cmd}")
         if any(item.startswith("--model.params.tokenizer_ckpt_path=") for item in resume_cmd):
             raise AssertionError(f"Bare resume should not inject tokenizer_ckpt_path: {resume_cmd}")
+        if any(item.startswith("--data.params.batch_size=") for item in resume_cmd):
+            raise AssertionError(f"Bare resume should not inject batch-size dotlist: {resume_cmd}")
+        if "--lightning.callbacks.image_logger.params.disabled=False" in resume_cmd:
+            raise AssertionError(f"Bare resume should not inject image logger enable dotlist: {resume_cmd}")
+        if any(item.startswith("--lightning.callbacks.image_logger.params.batch_frequency=") for item in resume_cmd):
+            raise AssertionError(f"Bare resume should not inject image logger frequency dotlist: {resume_cmd}")
 
         try:
             validate_resume_request(
@@ -127,6 +136,23 @@ def main():
                 raise AssertionError(f"Unexpected dotlist error message: {exc}") from exc
         else:
             raise AssertionError("Bare resume with --set should fail by default.")
+
+        for runtime_override_args, expected_hint in (
+            (make_args(resume=resume_path, batch_size=8), "--batch-size"),
+            (make_args(resume=resume_path, enable_image_logger=True), "--enable-image-logger"),
+            (make_args(resume=resume_path, image_log_frequency=50), "--image-log-frequency"),
+        ):
+            try:
+                validate_resume_request(
+                    runtime_override_args,
+                    config_path=None,
+                    resume_logdir=resume_logdir,
+                )
+            except ValueError as exc:
+                if expected_hint not in str(exc) or "--allow-dotlist-override" not in str(exc):
+                    raise AssertionError(f"Unexpected runtime override error message: {exc}") from exc
+            else:
+                raise AssertionError(f"Bare resume with {expected_hint} should fail by default.")
 
         matched_resume_args = make_args(
             resume=resume_path,
@@ -199,9 +225,42 @@ def main():
         if "--model.params.foo=bar" not in forced_dotlist_cmd:
             raise AssertionError(f"Resume with --allow-dotlist-override should keep dotlist overrides: {forced_dotlist_cmd}")
 
+        forced_batch_size_cmd = build_command(
+            make_args(
+                resume=resume_path,
+                allow_dotlist_override=True,
+                batch_size=8,
+            ),
+            config_path=None,
+            tokenizer_ckpt=None,
+        )
+        if "--data.params.batch_size=8" not in forced_batch_size_cmd:
+            raise AssertionError(
+                f"Resume with --allow-dotlist-override should keep batch-size dotlist: {forced_batch_size_cmd}"
+            )
+
+        forced_logger_cmd = build_command(
+            make_args(
+                resume=resume_path,
+                allow_dotlist_override=True,
+                enable_image_logger=True,
+                image_log_frequency=50,
+            ),
+            config_path=None,
+            tokenizer_ckpt=None,
+        )
+        if "--lightning.callbacks.image_logger.params.disabled=False" not in forced_logger_cmd:
+            raise AssertionError(
+                f"Resume with --allow-dotlist-override should keep image logger enable dotlist: {forced_logger_cmd}"
+            )
+        if "--lightning.callbacks.image_logger.params.batch_frequency=50" not in forced_logger_cmd:
+            raise AssertionError(
+                f"Resume with --allow-dotlist-override should keep image logger frequency dotlist: {forced_logger_cmd}"
+            )
+
     print("fresh command keeps --name and omits --resume")
-    print("bare resume omits --name, --base, and tokenizer overrides")
-    print("bare resume rejects --set unless --allow-dotlist-override is used")
+    print("bare resume omits --name, --base, tokenizer overrides, and wrapper dotlist flags")
+    print("bare resume rejects --set, --batch-size, and image logger overrides unless --allow-dotlist-override is used")
     print("resume with matching config is allowed without injecting a new base config")
     print("resume with mismatched config fails unless --allow-config-override is used")
     print("resume injects tokenizer overrides only when the force flags are enabled")

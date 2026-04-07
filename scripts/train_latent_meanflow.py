@@ -52,7 +52,7 @@ def parse_args():
     parser.add_argument(
         "--allow-dotlist-override",
         action="store_true",
-        help="Dangerous: allow --set dotlist overrides during resume.",
+        help="Dangerous: allow --set and wrapper-managed dotlist overrides during resume.",
     )
     parser.add_argument("--image-log-frequency", type=int, default=None)
     parser.add_argument("--enable-image-logger", action="store_true")
@@ -132,6 +132,18 @@ def should_pass_dotlist_overrides(args):
     return bool(args.allow_dotlist_override)
 
 
+def has_wrapper_dotlist_flags(args):
+    return (
+        args.batch_size is not None
+        or args.enable_image_logger
+        or args.image_log_frequency is not None
+    )
+
+
+def has_any_dotlist_style_override(args):
+    return bool(args.overrides) or has_wrapper_dotlist_flags(args)
+
+
 def resolve_resume_logdir(resume_path):
     resume_path = Path(resume_path).resolve()
     if not resume_path.exists():
@@ -153,12 +165,16 @@ def validate_resume_request(args, config_path=None, resume_logdir=None):
 
     if args.allow_config_override and args.config is None:
         raise ValueError("--allow-config-override requires an explicit --config.")
-    if args.allow_dotlist_override and not args.overrides:
-        raise ValueError("--allow-dotlist-override requires at least one --set override.")
-    if args.overrides and not args.allow_dotlist_override:
+    if args.allow_dotlist_override and not has_any_dotlist_style_override(args):
         raise ValueError(
-            "Resume with --set is not allowed by default. Safe resume should pass only --resume. "
-            "If you truly want to inject dotlist overrides into a resumed run, add "
+            "--allow-dotlist-override requires at least one dotlist-style override "
+            "(--set, --batch-size, --enable-image-logger, or --image-log-frequency)."
+        )
+    if has_any_dotlist_style_override(args) and not args.allow_dotlist_override:
+        raise ValueError(
+            "Resume with dotlist-style overrides is not allowed by default. Safe resume should pass only "
+            "--resume. This includes --set, --batch-size, --enable-image-logger, and "
+            "--image-log-frequency. If you truly want to inject dotlist overrides into a resumed run, add "
             "--allow-dotlist-override explicitly."
         )
 
@@ -193,11 +209,11 @@ def build_command(args, config_path, tokenizer_ckpt):
         cmd.extend(["--gpus", args.gpus])
     if args.max_epochs is not None:
         cmd.extend(["--max_epochs", str(args.max_epochs)])
-    if args.batch_size is not None:
+    if args.batch_size is not None and should_pass_dotlist_overrides(args):
         cmd.append(f"--data.params.batch_size={args.batch_size}")
-    if args.enable_image_logger:
+    if args.enable_image_logger and should_pass_dotlist_overrides(args):
         cmd.append("--lightning.callbacks.image_logger.params.disabled=False")
-    if args.image_log_frequency is not None:
+    if args.image_log_frequency is not None and should_pass_dotlist_overrides(args):
         cmd.append("--lightning.callbacks.image_logger.params.disabled=False")
         cmd.append(f"--lightning.callbacks.image_logger.params.batch_frequency={args.image_log_frequency}")
     if should_inject_tokenizer_config(args):
