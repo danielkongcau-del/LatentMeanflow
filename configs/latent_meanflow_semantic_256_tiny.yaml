@@ -76,6 +76,7 @@ lightning:
       params:
         disabled: false
         batch_frequency: 10
+        increase_log_steps: false
         max_images: 4
         latest_only: true
         ignore_index: -1
