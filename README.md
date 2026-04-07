@@ -167,6 +167,8 @@ Recommended safe resume:
 python scripts/train_latent_meanflow.py --resume logs/<your_run>/checkpoints/last.ckpt
 ```
 
+`safe resume` does not allow `--set` dotlist overrides.
+
 Consistency-check resume with an explicit matching config:
 
 ```bash
@@ -186,13 +188,25 @@ python scripts/train_latent_meanflow.py \
   --force-tokenizer-ckpt
 ```
 
+Dangerous dotlist override resume:
+
+```bash
+python scripts/train_latent_meanflow.py \
+  --resume logs/<your_run>/checkpoints/last.ckpt \
+  --allow-dotlist-override \
+  --set model.params.some_field=some_value
+```
+
 By default, resume no longer injects:
 
 - a new `--base <config>`
 - `--model.params.tokenizer_config_path=...`
 - `--model.params.tokenizer_ckpt_path=...`
+- any `--set` dotlist overrides
 
-This prevents a default `alphaflow` config or a new tokenizer path from being silently merged into an existing `meanflow` resume run.
+`--allow-dotlist-override` is a dangerous escape hatch. It can bypass the wrapper's safety model, including protections around tokenizer-related settings, so it is not the recommended path.
+
+This prevents a default `alphaflow` config, a new tokenizer path, or any arbitrary dotlist override from being silently merged into an existing `meanflow` resume run.
 
 Train the recommended AlphaFlow curriculum:
 

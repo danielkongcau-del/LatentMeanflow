@@ -49,6 +49,11 @@ def parse_args():
         action="store_true",
         help="Dangerous: inject tokenizer_ckpt_path even during resume.",
     )
+    parser.add_argument(
+        "--allow-dotlist-override",
+        action="store_true",
+        help="Dangerous: allow --set dotlist overrides during resume.",
+    )
     parser.add_argument("--image-log-frequency", type=int, default=None)
     parser.add_argument("--enable-image-logger", action="store_true")
     parser.add_argument(
@@ -121,6 +126,12 @@ def should_inject_tokenizer_ckpt(args):
     return bool(args.force_tokenizer_ckpt)
 
 
+def should_pass_dotlist_overrides(args):
+    if not is_resume_mode(args):
+        return True
+    return bool(args.allow_dotlist_override)
+
+
 def resolve_resume_logdir(resume_path):
     resume_path = Path(resume_path).resolve()
     if not resume_path.exists():
@@ -142,6 +153,14 @@ def validate_resume_request(args, config_path=None, resume_logdir=None):
 
     if args.allow_config_override and args.config is None:
         raise ValueError("--allow-config-override requires an explicit --config.")
+    if args.allow_dotlist_override and not args.overrides:
+        raise ValueError("--allow-dotlist-override requires at least one --set override.")
+    if args.overrides and not args.allow_dotlist_override:
+        raise ValueError(
+            "Resume with --set is not allowed by default. Safe resume should pass only --resume. "
+            "If you truly want to inject dotlist overrides into a resumed run, add "
+            "--allow-dotlist-override explicitly."
+        )
 
     if args.config is not None and not args.allow_config_override:
         if config_path is None or resume_logdir is None:
@@ -187,7 +206,8 @@ def build_command(args, config_path, tokenizer_ckpt):
         if tokenizer_ckpt is None:
             raise ValueError("tokenizer_ckpt is required when tokenizer ckpt override injection is enabled.")
         cmd.append(f"--model.params.tokenizer_ckpt_path={tokenizer_ckpt.resolve()}")
-    cmd.extend(args.overrides)
+    if should_pass_dotlist_overrides(args):
+        cmd.extend(args.overrides)
     return cmd
 
 

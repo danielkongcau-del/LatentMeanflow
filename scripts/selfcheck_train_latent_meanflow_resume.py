@@ -19,8 +19,10 @@ def make_args(
     tokenizer_config=None,
     tokenizer_ckpt=None,
     allow_config_override=False,
+    allow_dotlist_override=False,
     force_tokenizer_config=False,
     force_tokenizer_ckpt=False,
+    overrides=None,
 ):
     return argparse.Namespace(
         objective=objective,
@@ -32,11 +34,12 @@ def make_args(
         batch_size=None,
         resume=resume,
         allow_config_override=allow_config_override,
+        allow_dotlist_override=allow_dotlist_override,
         force_tokenizer_config=force_tokenizer_config,
         force_tokenizer_ckpt=force_tokenizer_ckpt,
         image_log_frequency=None,
         enable_image_logger=False,
-        overrides=[],
+        overrides=list(overrides or []),
     )
 
 
@@ -110,6 +113,21 @@ def main():
         if any(item.startswith("--model.params.tokenizer_ckpt_path=") for item in resume_cmd):
             raise AssertionError(f"Bare resume should not inject tokenizer_ckpt_path: {resume_cmd}")
 
+        try:
+            validate_resume_request(
+                make_args(
+                    resume=resume_path,
+                    overrides=["--model.params.foo=bar"],
+                ),
+                config_path=None,
+                resume_logdir=resume_logdir,
+            )
+        except ValueError as exc:
+            if "--allow-dotlist-override" not in str(exc):
+                raise AssertionError(f"Unexpected dotlist error message: {exc}") from exc
+        else:
+            raise AssertionError("Bare resume with --set should fail by default.")
+
         matched_resume_args = make_args(
             resume=resume_path,
             config=config_path,
@@ -163,8 +181,27 @@ def main():
         if not any(item.startswith("--model.params.tokenizer_ckpt_path=") for item in forced_resume_cmd):
             raise AssertionError(f"Forced resume should inject tokenizer_ckpt_path: {forced_resume_cmd}")
 
+        forced_dotlist_args = make_args(
+            resume=resume_path,
+            allow_dotlist_override=True,
+            overrides=["--model.params.foo=bar"],
+        )
+        validate_resume_request(
+            forced_dotlist_args,
+            config_path=None,
+            resume_logdir=resume_logdir,
+        )
+        forced_dotlist_cmd = build_command(
+            forced_dotlist_args,
+            config_path=None,
+            tokenizer_ckpt=None,
+        )
+        if "--model.params.foo=bar" not in forced_dotlist_cmd:
+            raise AssertionError(f"Resume with --allow-dotlist-override should keep dotlist overrides: {forced_dotlist_cmd}")
+
     print("fresh command keeps --name and omits --resume")
     print("bare resume omits --name, --base, and tokenizer overrides")
+    print("bare resume rejects --set unless --allow-dotlist-override is used")
     print("resume with matching config is allowed without injecting a new base config")
     print("resume with mismatched config fails unless --allow-config-override is used")
     print("resume injects tokenizer overrides only when the force flags are enabled")
