@@ -13,7 +13,7 @@ Environment variables:
   MAX_EPOCHS            Optional max epochs override. Default: unset
   BATCH_SIZE            Optional batch size override. Default: unset
   RESUME                Optional resume checkpoint or logdir path. Default: unset
-  IMAGE_LOG_FREQUENCY   Optional image log frequency override. Default: 50
+  IMAGE_LOG_FREQUENCY   Optional image log frequency override. Default: use config value
   ENABLE_IMAGE_LOGGER   Set to 1 to force-enable the image logger. Default: 0
   NO_ALBUMENTATIONS_UPDATE
                         Defaults to 1 on headless Linux servers.
@@ -21,6 +21,7 @@ Environment variables:
 Examples:
   ./scripts/train_tokenizer.sh
   CONFIG=configs/semantic_tokenizer_tiny_256.yaml MAX_EPOCHS=40 ./scripts/train_tokenizer.sh
+  IMAGE_LOG_FREQUENCY=50 ./scripts/train_tokenizer.sh
   RESUME=logs/autoencoder/checkpoints/last.ckpt ./scripts/train_tokenizer.sh
 
 Notes:
@@ -44,7 +45,7 @@ GPUS="${GPUS:-0}"
 MAX_EPOCHS="${MAX_EPOCHS:-}"
 BATCH_SIZE="${BATCH_SIZE:-}"
 RESUME="${RESUME:-}"
-IMAGE_LOG_FREQUENCY="${IMAGE_LOG_FREQUENCY:-50}"
+IMAGE_LOG_FREQUENCY="${IMAGE_LOG_FREQUENCY:-}"
 ENABLE_IMAGE_LOGGER="${ENABLE_IMAGE_LOGGER:-0}"
 
 export NO_ALBUMENTATIONS_UPDATE="${NO_ALBUMENTATIONS_UPDATE:-1}"
