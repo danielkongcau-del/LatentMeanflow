@@ -155,7 +155,44 @@ Run the first real MeanFlow baseline with the baseline config:
 python scripts/train_latent_meanflow.py --objective meanflow --config configs/latent_meanflow_semantic_256.yaml --gpus 0
 ```
 
-To resume a latent-flow run, pass only `--resume <ckpt-or-logdir>`; the wrapper now omits `--name` automatically on resume so it stays compatible with the vendored trainer CLI.
+Resume modes:
+
+- `fresh run`: pass `--config` normally, or rely on the default chosen by `--objective`
+- `safe resume`: pass only `--resume <ckpt-or-logdir>` and let the vendored trainer reload the saved `configs/*.yaml`
+- `dangerous override resume`: only if you explicitly want to override the saved config or tokenizer settings
+
+Recommended safe resume:
+
+```bash
+python scripts/train_latent_meanflow.py --resume logs/<your_run>/checkpoints/last.ckpt
+```
+
+Consistency-check resume with an explicit matching config:
+
+```bash
+python scripts/train_latent_meanflow.py --resume logs/<your_run>/checkpoints/last.ckpt --config configs/latent_meanflow_semantic_256.yaml
+```
+
+In that mode, the wrapper checks that the explicit config matches the resume run, but it still does not inject a new `--base`.
+
+Dangerous override resume:
+
+```bash
+python scripts/train_latent_meanflow.py \
+  --resume logs/<your_run>/checkpoints/last.ckpt \
+  --config configs/latent_meanflow_semantic_256.yaml \
+  --allow-config-override \
+  --force-tokenizer-config \
+  --force-tokenizer-ckpt
+```
+
+By default, resume no longer injects:
+
+- a new `--base <config>`
+- `--model.params.tokenizer_config_path=...`
+- `--model.params.tokenizer_ckpt_path=...`
+
+This prevents a default `alphaflow` config or a new tokenizer path from being silently merged into an existing `meanflow` resume run.
 
 Train the recommended AlphaFlow curriculum:
 
