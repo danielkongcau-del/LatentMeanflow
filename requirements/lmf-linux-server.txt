@@ -3,6 +3,7 @@ tqdm==4.67.3
 pillow==12.1.1
 omegaconf==2.3.0
 pytorch-lightning==2.5.6
+tensorboard==2.19.0
 einops==0.8.2
 albumentations==1.4.24
 albucore==0.0.23

@@ -19,6 +19,7 @@ Validated project stack:
 - torchaudio `2.11.0+cu128`
 - NumPy `1.26.4`
 - PyTorch Lightning `2.5.6`
+- TensorBoard `2.19.0`
 
 Project-specific lock file for Linux servers:
 
@@ -49,6 +50,7 @@ The important failure modes this avoids are:
 - mixing `opencv-python` with `opencv-python-headless`
 - installing `clip` before its base environment is already stable
 - mixing different CUDA wheel variants in one environment
+- missing TensorBoard, which causes Lightning logger initialization to fail before training starts
 
 ## Step 0. System Packages
 
@@ -115,6 +117,7 @@ Why this file exists:
 
 - it freezes the known-good package versions used by the current project
 - it uses `opencv-python-headless` instead of `opencv-python`
+- it includes `tensorboard`, which is required by the default Lightning TensorBoard logger
 - it avoids the Windows-local drift that can happen with a looser requirements file
 
 ## Step 4. Install Vendored Editable Packages Without Dependency Resolution
@@ -201,6 +204,7 @@ Minimum expected result:
 - all imports succeed
 - `torch.cuda.is_available()` is `True`
 - the reported `torch` / `torchvision` / `torchaudio` versions match the target stack
+- TensorBoard-backed logging initializes successfully when training starts
 
 ## Step 8. Optional: Place VGG Weights
 
@@ -313,6 +317,11 @@ If `pip` tries to change `torch` during editable installs:
 
 - remove the environment and recreate it
 - reinstall the vendored packages with `--no-deps`
+
+If training fails with `Neither tensorboard nor tensorboardX is available`:
+
+- re-run `python -m pip install --upgrade-strategy only-if-needed -r requirements/lmf-linux-server.txt`
+- or install `python -m pip install tensorboard==2.19.0`
 
 If you accidentally installed both `opencv-python` and `opencv-python-headless`:
 
