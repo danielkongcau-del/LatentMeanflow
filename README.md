@@ -126,6 +126,7 @@ python scripts/train_semantic_autoencoder.py --gpus 0
 ```
 
 This path reads `image` and multiclass `mask` separately, reconstructs RGB with an RGB head, and reconstructs semantic masks with `K`-channel logits rather than a single grayscale mask channel.
+Project-layer training wrappers disable post-fit `Trainer.test()` by default because the current semantic tokenizer and latent-flow trainers do not define `test_step()`.
 
 ### Latent FM Path
 

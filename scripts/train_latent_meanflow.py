@@ -35,6 +35,11 @@ def parse_args():
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--resume", type=Path, default=None)
     parser.add_argument(
+        "--run-test",
+        action="store_true",
+        help="Opt in to Trainer.test() after fit. Disabled by default for project-layer trainers.",
+    )
+    parser.add_argument(
         "--allow-config-override",
         action="store_true",
         help="Dangerous: allow --config to override the saved resume config.",
@@ -195,6 +200,8 @@ def build_command(args, config_path, tokenizer_ckpt):
         str(LDM_ROOT / "main.py"),
         "-t",
     ]
+    if not args.run_test:
+        cmd.append("--no-test")
     if should_pass_base_config(args):
         if config_path is None:
             raise ValueError("config_path is required when building a fresh run or overriding resume config.")

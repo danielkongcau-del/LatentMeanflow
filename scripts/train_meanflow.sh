@@ -26,6 +26,10 @@ Examples:
   CONFIG=configs/latent_meanflow_semantic_256_tiny.yaml MAX_EPOCHS=3 ./scripts/train_meanflow.sh
   OBJECTIVE=alphaflow CONFIG=configs/latent_alphaflow_semantic_256.yaml ./scripts/train_meanflow.sh
   RESUME=logs/2026-04-07T12-00-00_latent_meanflow_semantic_256/checkpoints/last.ckpt ./scripts/train_meanflow.sh
+
+Notes:
+  Project-layer latent-flow training disables post-fit Trainer.test() by default
+  because the current trainers do not define test_step.
 EOF
 }
 

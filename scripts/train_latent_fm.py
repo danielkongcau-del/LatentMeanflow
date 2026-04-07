@@ -22,6 +22,11 @@ def parse_args():
     parser.add_argument("--max-epochs", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--resume", type=Path, default=None)
+    parser.add_argument(
+        "--run-test",
+        action="store_true",
+        help="Opt in to Trainer.test() after fit. Disabled by default for project-layer trainers.",
+    )
     parser.add_argument("--image-log-frequency", type=int, default=None)
     parser.add_argument("--enable-image-logger", action="store_true")
     parser.add_argument(
@@ -63,6 +68,8 @@ def build_command(args, tokenizer_ckpt):
         "--base",
         str(args.config.resolve()),
     ]
+    if not args.run_test:
+        cmd.append("--no-test")
     if args.resume:
         cmd.extend(["--resume", str(args.resume.resolve())])
     if args.gpus:

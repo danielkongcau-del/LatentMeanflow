@@ -22,6 +22,10 @@ Examples:
   ./scripts/train_tokenizer.sh
   CONFIG=configs/semantic_tokenizer_tiny_256.yaml MAX_EPOCHS=40 ./scripts/train_tokenizer.sh
   RESUME=logs/autoencoder/checkpoints/last.ckpt ./scripts/train_tokenizer.sh
+
+Notes:
+  Project-layer tokenizer training disables post-fit Trainer.test() by default
+  because the semantic autoencoder does not define test_step.
 EOF
 }
 
