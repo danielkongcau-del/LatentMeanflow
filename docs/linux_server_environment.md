@@ -231,11 +231,13 @@ This repo now includes two Linux-friendly shell launchers:
 
 - [scripts/train_tokenizer.sh](../scripts/train_tokenizer.sh)
 - [scripts/train_meanflow.sh](../scripts/train_meanflow.sh)
+- [scripts/sample_meanflow.sh](../scripts/sample_meanflow.sh)
 
 They are thin wrappers around the existing Python launchers:
 
 - `train_tokenizer.sh` wraps `scripts/train_semantic_autoencoder.py`
 - `train_meanflow.sh` wraps `scripts/train_latent_meanflow.py`
+- `sample_meanflow.sh` wraps `scripts/sample_latent_flow.py`
 
 They are designed for remote servers:
 
@@ -258,6 +260,12 @@ CONFIG=configs/latent_meanflow_semantic_256_tiny.yaml MAX_EPOCHS=3 ./scripts/tra
 OBJECTIVE=alphaflow CONFIG=configs/latent_alphaflow_semantic_256.yaml ./scripts/train_meanflow.sh
 
 RESUME=logs/2026-04-07T12-00-00_latent_meanflow_semantic_256/checkpoints/last.ckpt ./scripts/train_meanflow.sh
+
+./scripts/sample_meanflow.sh
+
+NFE=8 OUTDIR=outputs/meanflow_nfe8 ./scripts/sample_meanflow.sh
+
+CONFIG=configs/latent_meanflow_semantic_256_tiny.yaml OUTDIR=outputs/meanflow_tiny_samples NFE=2 ./scripts/sample_meanflow.sh
 ```
 
 ## Copy-Paste Install Block
