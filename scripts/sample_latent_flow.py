@@ -47,6 +47,16 @@ def load_config(config_path):
     return OmegaConf.load(config_path)
 
 
+def resolve_run_tag(config_path, config):
+    stem = config_path.stem.strip().lower()
+    if stem:
+        return stem
+    objective_name = OmegaConf.select(config, "model.params.objective_name")
+    if objective_name is not None:
+        return str(objective_name).lower()
+    return "latent_flow"
+
+
 def resolve_objective_name(config):
     objective_name = OmegaConf.select(config, "model.params.objective_name")
     if objective_name is not None:
@@ -55,13 +65,18 @@ def resolve_objective_name(config):
     return stem.lower()
 
 
-def find_latest_flow_ckpt(config):
+def find_latest_flow_ckpt(config_path, config):
+    run_tag = resolve_run_tag(config_path, config)
     objective_name = resolve_objective_name(config)
     candidates = sorted(
         REPO_ROOT.glob("logs/**/checkpoints/last.ckpt"),
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
+    for candidate in candidates:
+        candidate_run_dir = candidate.parent.parent.name.lower()
+        if candidate_run_dir == run_tag or candidate_run_dir.endswith(f"_{run_tag}"):
+            return candidate
     for candidate in candidates:
         candidate_text = str(candidate).lower()
         if objective_name in candidate_text:
@@ -70,6 +85,19 @@ def find_latest_flow_ckpt(config):
         if "latent_" in str(candidate).lower():
             return candidate
     return None
+
+
+def validate_ckpt_matches_config(config_path, ckpt_path):
+    run_tag = config_path.stem.strip().lower()
+    if not run_tag:
+        return
+    run_dir_name = ckpt_path.parent.parent.name.lower()
+    if run_dir_name != run_tag and not run_dir_name.endswith(f"_{run_tag}"):
+        raise ValueError(
+            f"Checkpoint/config mismatch: config '{config_path.name}' expects a run path containing "
+            f"the exact run tag '{run_tag}', but got '{ckpt_path}'. This usually means a tiny/debug checkpoint is being "
+            "mixed with a baseline config. Use scripts/find_checkpoint.py to select the correct checkpoint."
+        )
 
 
 def load_model(config, ckpt_path, device):
@@ -112,9 +140,10 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(args.seed)
 
-    ckpt_path = args.ckpt or find_latest_flow_ckpt(config)
+    ckpt_path = args.ckpt or find_latest_flow_ckpt(args.config, config)
     if ckpt_path is None or not ckpt_path.exists():
         raise FileNotFoundError("Latent flow checkpoint not found. Pass --ckpt explicitly.")
+    validate_ckpt_matches_config(args.config, ckpt_path)
 
     model = load_model(config, ckpt_path, device)
     if args.class_label is not None and not getattr(model, "use_class_condition", False):

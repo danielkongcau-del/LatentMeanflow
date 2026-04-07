@@ -141,6 +141,18 @@ Train the latent MeanFlow prior:
 python scripts/train_latent_meanflow.py --objective meanflow --gpus 0
 ```
 
+Run a tiny/debug MeanFlow pilot with the dedicated tiny config:
+
+```bash
+python scripts/train_latent_meanflow.py --objective meanflow --config configs/latent_meanflow_semantic_256_tiny.yaml --gpus 0
+```
+
+Run the first real MeanFlow baseline with the baseline config:
+
+```bash
+python scripts/train_latent_meanflow.py --objective meanflow --config configs/latent_meanflow_semantic_256.yaml --gpus 0
+```
+
 Train the recommended AlphaFlow curriculum:
 
 ```bash
@@ -159,6 +171,15 @@ Sample from a latent-flow checkpoint with `NFE=1` or `NFE=2`:
 python scripts/sample_latent_flow.py --config configs/latent_alphaflow_semantic_256.yaml --ckpt /path/to/last.ckpt --nfe 1
 python scripts/sample_latent_flow.py --config configs/latent_alphaflow_semantic_256.yaml --ckpt /path/to/last.ckpt --nfe 2
 ```
+
+For MeanFlow, keep tiny/debug and baseline checkpoints separate. The training script now tags runs with the config stem, so use the helper below to resolve the baseline checkpoint before sampling the final `NFE` curve:
+
+```bash
+python scripts/find_checkpoint.py --config configs/latent_meanflow_semantic_256.yaml
+python scripts/sample_latent_flow.py --config configs/latent_meanflow_semantic_256.yaml --ckpt <baseline-meanflow-ckpt> --nfe 2
+```
+
+`sample_latent_flow.py` now performs a basic path-level safety check and will reject a clearly mismatched config/checkpoint pair such as `configs/latent_meanflow_semantic_256.yaml` together with a checkpoint from a `*_latent_meanflow_semantic_256_tiny/` run.
 
 The sampler writes:
 
@@ -197,7 +218,7 @@ Config intent:
 
 ## Notes
 
-- Training logs are typically written to `logs/autoencoder/`, `logs/ldm/`, `logs/latent_fm/`, `logs/latent_meanflow/`, or `logs/latent_alphaflow/` depending on the entry point.
+- Autoencoder and legacy LDM runs use fixed paths such as `logs/autoencoder/` and `logs/ldm/`. Project-layer latent-flow runs are timestamped and now include the config stem in the run directory name, for example `logs/..._latent_meanflow_semantic_256/` or `logs/..._latent_meanflow_semantic_256_tiny/`.
 - The root-level configs, scripts, docs, and dataset code are the project layer; avoid editing `third_party/` unless you are intentionally changing the vendored fork.
 - `third_party/flow_matching/` is kept isolated so future flow-matching work does not pollute the current latent-diffusion baseline.
 - The FM rectified path follows `z_t = (1 - t) x + t eps` and `v_t = eps - x`.

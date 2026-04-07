@@ -208,10 +208,10 @@ D:\Anaconda\envs\lmf\python.exe scripts\train_latent_meanflow.py `
 Quick sample command:
 
 ```powershell
-$meanflowCkpt = (Get-ChildItem logs -Recurse -Filter last.ckpt | Where-Object { $_.FullName -like '*latent_meanflow*' } | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
+$meanflowTinyCkpt = D:\Anaconda\envs\lmf\python.exe scripts\find_checkpoint.py --config configs/latent_meanflow_semantic_256_tiny.yaml
 D:\Anaconda\envs\lmf\python.exe scripts\sample_latent_flow.py `
   --config configs/latent_meanflow_semantic_256_tiny.yaml `
-  --ckpt $meanflowCkpt `
+  --ckpt $meanflowTinyCkpt `
   --outdir outputs/meanflow_tiny_samples_nfe2 `
   --n-samples 16 `
   --nfe 2
@@ -219,7 +219,7 @@ D:\Anaconda\envs\lmf\python.exe scripts\sample_latent_flow.py `
 
 Expected artifacts:
 
-- a timestamped run under `logs/*_latent_meanflow/`
+- a timestamped tiny run under `logs/*_latent_meanflow_semantic_256_tiny/`
 - `outputs/meanflow_tiny_samples_nfe2/image/`
 - `outputs/meanflow_tiny_samples_nfe2/mask_raw/`
 - `outputs/meanflow_tiny_samples_nfe2/mask_color/`
@@ -235,7 +235,41 @@ Check first if it fails:
 
 - FM stage was unstable, which usually means the tokenizer latent is still weak
 - using the paper-like baseline config too early instead of the tiny/debug config
-- wrong checkpoint selected by the PowerShell one-liner
+- wrong checkpoint selected for the tiny config
+
+## Stage 5.5. Latent MeanFlow Baseline Training
+
+Purpose: produce the baseline MeanFlow checkpoint that Stage 6 will use for the real few-step sampling curve.
+
+Train command:
+
+```powershell
+D:\Anaconda\envs\lmf\python.exe scripts\train_latent_meanflow.py `
+  --objective meanflow `
+  --config configs/latent_meanflow_semantic_256.yaml `
+  --tokenizer-config configs/autoencoder_semantic_pair_256.yaml `
+  --tokenizer-ckpt logs/autoencoder/checkpoints/last.ckpt `
+  --gpus 0
+```
+
+Expected artifacts:
+
+- a timestamped baseline run under `logs/*_latent_meanflow_semantic_256/`
+- `checkpoints/last.ckpt` inside that baseline run
+- `semantic_images/train/*.png`
+- `semantic_images/val/*.png`
+
+Minimum success criteria:
+
+- validation loss stays finite through the first real baseline run
+- `samples_*` grids look at least as stable as the tiny pilot
+- this run produces the baseline checkpoint used by Stage 6
+
+Check first if it fails:
+
+- Stage 5 tiny pilot was not actually stable
+- the tokenizer checkpoint from Stage 3 is weak
+- the run path contains `latent_meanflow_semantic_256_tiny` instead of the baseline config stem
 
 ## Stage 6. MeanFlow Sampling Check at NFE = 8 / 4 / 2 / 1
 
@@ -244,12 +278,12 @@ Purpose: establish the first few-step sampling quality curve before spending tim
 Commands:
 
 ```powershell
-$meanflowCkpt = (Get-ChildItem logs -Recurse -Filter last.ckpt | Where-Object { $_.FullName -like '*latent_meanflow*' } | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
+$meanflowBaselineCkpt = D:\Anaconda\envs\lmf\python.exe scripts\find_checkpoint.py --config configs/latent_meanflow_semantic_256.yaml
 
-D:\Anaconda\envs\lmf\python.exe scripts\sample_latent_flow.py --config configs/latent_meanflow_semantic_256.yaml --ckpt $meanflowCkpt --outdir outputs/meanflow_nfe8 --n-samples 32 --nfe 8
-D:\Anaconda\envs\lmf\python.exe scripts\sample_latent_flow.py --config configs/latent_meanflow_semantic_256.yaml --ckpt $meanflowCkpt --outdir outputs/meanflow_nfe4 --n-samples 32 --nfe 4
-D:\Anaconda\envs\lmf\python.exe scripts\sample_latent_flow.py --config configs/latent_meanflow_semantic_256.yaml --ckpt $meanflowCkpt --outdir outputs/meanflow_nfe2 --n-samples 32 --nfe 2
-D:\Anaconda\envs\lmf\python.exe scripts\sample_latent_flow.py --config configs/latent_meanflow_semantic_256.yaml --ckpt $meanflowCkpt --outdir outputs/meanflow_nfe1 --n-samples 32 --nfe 1
+D:\Anaconda\envs\lmf\python.exe scripts\sample_latent_flow.py --config configs/latent_meanflow_semantic_256.yaml --ckpt $meanflowBaselineCkpt --outdir outputs/meanflow_nfe8 --n-samples 32 --nfe 8
+D:\Anaconda\envs\lmf\python.exe scripts\sample_latent_flow.py --config configs/latent_meanflow_semantic_256.yaml --ckpt $meanflowBaselineCkpt --outdir outputs/meanflow_nfe4 --n-samples 32 --nfe 4
+D:\Anaconda\envs\lmf\python.exe scripts\sample_latent_flow.py --config configs/latent_meanflow_semantic_256.yaml --ckpt $meanflowBaselineCkpt --outdir outputs/meanflow_nfe2 --n-samples 32 --nfe 2
+D:\Anaconda\envs\lmf\python.exe scripts\sample_latent_flow.py --config configs/latent_meanflow_semantic_256.yaml --ckpt $meanflowBaselineCkpt --outdir outputs/meanflow_nfe1 --n-samples 32 --nfe 1
 ```
 
 Expected artifacts:
@@ -264,10 +298,11 @@ Minimum success criteria:
 - all four NFE settings run end-to-end without NaNs or shape errors
 - `NFE=8` and `NFE=4` are visibly better than `NFE=1`
 - `NFE=2` is not catastrophically worse than `NFE=4`
+- all four runs use the baseline MeanFlow checkpoint, not the tiny/debug checkpoint
 
 Check first if it fails:
 
-- wrong config/ckpt pairing between tiny and baseline files
+- baseline checkpoint was not selected explicitly
 - sampler midpoint assumptions for low NFE
 - decoding artifacts that actually come from a weak tokenizer instead of the prior
 
@@ -292,7 +327,8 @@ Generation:
 3. Launch Stage 3 and keep only the tokenizer checkpoint if reconstructions are visually aligned.
 4. Run Stage 4 to confirm the simplest latent prior can sample valid paired outputs.
 5. Run Stage 5 to confirm MeanFlow is stable on the same tokenizer.
-6. Run Stage 6 and compare the first `NFE=8/4/2/1` outputs side by side.
+6. Run Stage 5.5 to produce a baseline MeanFlow checkpoint.
+7. Run Stage 6 and compare the first `NFE=8/4/2/1` outputs side by side using that baseline checkpoint.
 
 ## Summary Table
 
@@ -302,5 +338,6 @@ Generation:
 | Tokenizer tiny overfit | `train_semantic_autoencoder.py --config configs/semantic_tokenizer_tiny_256.yaml --gpus 0` | `logs/*_semantic_tokenizer_tiny_256/checkpoints/last.ckpt` and `semantic_images/` | loss drops fast and recon masks stop looking random | label spec mismatch, OOM, wrong class count |
 | Tokenizer baseline | `train_semantic_autoencoder.py --config configs/autoencoder_semantic_pair_256.yaml --gpus 0 --max-epochs 100 --image-log-frequency 50` | `logs/autoencoder/checkpoints/last.ckpt` | stable `val/rgb_l1` and `val/mask_ce`, visually aligned reconstructions | weak overfit result, data path drift, LR too high |
 | Latent FM tiny pilot | `train_latent_fm.py --config configs/latent_fm_semantic_256_tiny.yaml --tokenizer-ckpt logs/autoencoder/checkpoints/last.ckpt --gpus 0` plus `sample_latent_fm.py` | `logs/*_latent_fm/` and `outputs/fm_tiny_samples/{image,mask_raw,mask_color,overlay}` | finite loss and non-collapsed paired samples | stale tokenizer ckpt, wrong latent_fm ckpt, class collapse |
-| Latent MeanFlow tiny pilot | `train_latent_meanflow.py --objective meanflow --config configs/latent_meanflow_semantic_256_tiny.yaml --tokenizer-ckpt logs/autoencoder/checkpoints/last.ckpt --gpus 0` plus `sample_latent_flow.py --nfe 2` | `logs/*_latent_meanflow/` and `outputs/meanflow_tiny_samples_nfe2/{image,mask_raw,mask_color,overlay}` | finite loss and plausible paired overlays | unstable tokenizer, wrong config tier, wrong ckpt selection |
-| NFE sampling check | `sample_latent_flow.py` at `NFE=8/4/2/1` | `outputs/meanflow_nfe{8,4,2,1}/{image,mask_raw,mask_color,overlay}` | all NFEs run and quality degrades gracefully as NFE drops | config/ckpt mismatch, low-NFE sampler issues, tokenizer bottleneck |
+| Latent MeanFlow tiny pilot | `train_latent_meanflow.py --objective meanflow --config configs/latent_meanflow_semantic_256_tiny.yaml --tokenizer-ckpt logs/autoencoder/checkpoints/last.ckpt --gpus 0` plus `sample_latent_flow.py --config configs/latent_meanflow_semantic_256_tiny.yaml --ckpt <tiny-ckpt> --nfe 2` | `logs/*_latent_meanflow_semantic_256_tiny/` and `outputs/meanflow_tiny_samples_nfe2/{image,mask_raw,mask_color,overlay}` | finite loss and plausible paired overlays | unstable tokenizer, wrong config tier, wrong tiny ckpt |
+| Latent MeanFlow baseline | `train_latent_meanflow.py --objective meanflow --config configs/latent_meanflow_semantic_256.yaml --tokenizer-ckpt logs/autoencoder/checkpoints/last.ckpt --gpus 0` | `logs/*_latent_meanflow_semantic_256/checkpoints/last.ckpt` | baseline run is stable and produces the checkpoint for Stage 6 | tiny config run reused by mistake, weak tokenizer, stale checkpoint |
+| NFE sampling check | `sample_latent_flow.py` at `NFE=8/4/2/1` with `scripts/find_checkpoint.py --config configs/latent_meanflow_semantic_256.yaml` | `outputs/meanflow_nfe{8,4,2,1}/{image,mask_raw,mask_color,overlay}` | all NFEs run, quality degrades gracefully, and the ckpt is the baseline MeanFlow ckpt | baseline/tiny ckpt mismatch, low-NFE sampler issues, tokenizer bottleneck |

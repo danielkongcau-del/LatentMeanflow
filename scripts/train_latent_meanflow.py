@@ -71,13 +71,20 @@ def resolve_config(args):
     return DEFAULT_CONFIGS[args.objective]
 
 
+def resolve_run_name(args, config_path):
+    stem = config_path.stem.strip()
+    if stem:
+        return stem
+    return RUN_NAMES[args.objective]
+
+
 def build_command(args, config_path, tokenizer_ckpt):
     cmd = [
         sys.executable,
         str(LDM_ROOT / "main.py"),
         "-t",
         "--name",
-        RUN_NAMES[args.objective],
+        resolve_run_name(args, config_path),
         "--base",
         str(config_path.resolve()),
     ]
