@@ -41,6 +41,15 @@ class SemanticPairImageLogger(Callback):
         if not increase_log_steps:
             self.log_steps = [self.batch_freq]
 
+    def _is_writer_rank(self, trainer):
+        is_global_zero = getattr(trainer, "is_global_zero", None)
+        if is_global_zero is not None:
+            return bool(is_global_zero)
+        global_rank = getattr(trainer, "global_rank", None)
+        if global_rank is None:
+            return True
+        return int(global_rank) == 0
+
     def _check_frequency(self, check_idx):
         if check_idx == 0 and self.log_first_step:
             return True
@@ -120,6 +129,10 @@ class SemanticPairImageLogger(Callback):
             Image.fromarray(output).save(os.path.join(root, filename))
 
     def log_img(self, trainer, pl_module, batch, batch_idx, split="train"):
+        # In distributed training, only rank 0 should write local preview images.
+        # This avoids duplicated I/O and last-writer-wins races on shared paths.
+        if not self._is_writer_rank(trainer):
+            return
         check_idx = batch_idx if self.log_on_batch_idx else pl_module.global_step
         if self.disabled or not self._check_frequency(int(check_idx)) or self.max_images <= 0:
             return

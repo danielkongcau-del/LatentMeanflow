@@ -1,6 +1,7 @@
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import torch
 from torch.utils.data import DataLoader
@@ -128,6 +129,41 @@ def main():
         assert (root / "semantic_images" / "train" / "reconstructions_image.png").exists()
         assert (root / "semantic_images" / "train" / "inputs_mask_index.png").exists()
         assert (root / "semantic_images" / "train" / "reconstructions_mask_index.png").exists()
+
+        write_calls = {"count": 0}
+
+        def fake_save_local(**kwargs):
+            write_calls["count"] += 1
+
+        logger.save_local = fake_save_local
+
+        class DummyModule:
+            def __init__(self, images_dict):
+                self.training = False
+                self.global_step = 1
+                self.current_epoch = 0
+                self.num_classes = 4
+                self.logger = None
+                self._images = images_dict
+
+            def eval(self):
+                self.training = False
+
+            def train(self):
+                self.training = True
+
+            def log_images(self, batch, split="train", **kwargs):
+                return self._images
+
+        dummy_module = DummyModule(images)
+        rank_zero_trainer = SimpleNamespace(global_rank=0, log_dir=str(root))
+        nonzero_rank_trainer = SimpleNamespace(global_rank=1, log_dir=str(root))
+
+        logger.log_img(rank_zero_trainer, dummy_module, batch, batch_idx=0, split="train")
+        assert write_calls["count"] == 1
+
+        logger.log_img(nonzero_rank_trainer, dummy_module, batch, batch_idx=0, split="train")
+        assert write_calls["count"] == 1
 
         print("Semantic autoencoder smoke test passed")
         print(f"z shape: {tuple(outputs['z'].shape)}")
