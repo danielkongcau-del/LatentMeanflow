@@ -31,6 +31,8 @@ model:
         weighting_mode: alpha_adaptive_exact
         adaptive_weight_power: 1.0
         adaptive_weight_bias: 1.0e-4
+        # alpha_adaptive_exact only applies to alpha>0 samples. alpha=0 samples
+        # fall back to MeanFlow paper_like weighting inside the objective.
         time_sampler_config:
           target: latent_meanflow.objectives.common.UniformTimeSampler
           params:

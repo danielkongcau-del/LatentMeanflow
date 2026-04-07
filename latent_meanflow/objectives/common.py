@@ -155,7 +155,7 @@ def compute_adaptive_weight(
 
     if weighting_mode == "paper_like":
         # MeanFlow Eq. (22)-style adaptive weighting:
-        #   base_error = ||Δ||^2
+        #   base_error = ||Delta||^2
         #   w = 1 / (base_error + c)^p
         return torch.pow(base_error + adaptive_bias, -adaptive_power)
 
@@ -163,9 +163,14 @@ def compute_adaptive_weight(
         if alpha is None:
             raise ValueError(f"weighting_mode='{weighting_mode}' requires alpha")
         alpha = alpha.to(device=base_error.device, dtype=base_error.dtype)
+        if torch.any(alpha <= 0):
+            raise ValueError(
+                f"weighting_mode='{weighting_mode}' is only valid for alpha>0 samples; "
+                "route alpha=0 samples through MeanFlow weighting instead."
+            )
         # AlphaFlow exact reformulation from the base squared error:
-        #   base_error = ||Δ||^2
-        #   L_alpha = alpha^{-1} * ||Δ||^2
+        #   base_error = ||Delta||^2
+        #   L_alpha = alpha^{-1} * ||Delta||^2
         # Choosing the adaptive loss on L_alpha and rewriting it in terms of
         # base_error yields:
         #   w_alpha = alpha^p / (base_error + alpha * c)^p

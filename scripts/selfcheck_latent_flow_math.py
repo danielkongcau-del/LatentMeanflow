@@ -202,6 +202,88 @@ def check_alpha_adaptive_exact_weighting():
     torch.testing.assert_close(stats["adaptive_weight_mean"], expected_weight.mean())
 
 
+def check_alpha_adaptive_exact_rejects_zero_alpha():
+    prediction = torch.tensor([[[[2.0]]]])
+    target = torch.tensor([[[[1.0]]]])
+    try:
+        weighted_regression_loss(
+            prediction,
+            target,
+            loss_type="mse",
+            base_weight=torch.tensor([1.0]),
+            weighting_mode="alpha_adaptive_exact",
+            adaptive_power=1.0,
+            adaptive_bias=1.0e-4,
+            alpha=torch.tensor([0.0]),
+        )
+    except ValueError as exc:
+        assert "alpha>0" in str(exc)
+    else:
+        raise AssertionError("alpha_adaptive_exact should reject alpha=0 when called directly")
+
+
+def check_alpha_zero_branch_loss_nonzero():
+    torch.manual_seed(0)
+    objective = AlphaFlowObjective(
+        time_eps=1.0e-4,
+        min_delta=0.0,
+        loss_type="mse",
+        time_sampler_config={
+            "target": "latent_meanflow.objectives.common.UniformTimeSampler",
+            "params": {"time_eps": 1.0e-4},
+        },
+        trajectory_fm_ratio=0.0,
+        border_fm_ratio=0.0,
+        weighting_mode="alpha_adaptive_exact",
+        alpha_schedule_config={
+            "target": "latent_meanflow.objectives.alphaflow.ConstantAlphaScheduler",
+            "params": {"value": 0.0},
+        },
+    )
+    x_lat = torch.randn(4, 4, 8, 8)
+
+    def zero_model(z_t, r=None, t=None, delta_t=None, condition=None):
+        _ = r, t, delta_t, condition
+        return torch.zeros_like(z_t)
+
+    outputs = objective(zero_model, x_lat, condition=None, global_step=0)
+    assert outputs["loss"].item() > 0.0
+    assert torch.all(outputs["objective_branch"] == 0)
+    assert outputs["loss_dict"]["meanflow_branch_ratio"].item() == 1.0
+
+
+def check_mixed_batch_alpha_zero_and_positive_both_contribute():
+    torch.manual_seed(0)
+    objective = AlphaFlowObjective(
+        time_eps=1.0e-4,
+        min_delta=0.0,
+        loss_type="mse",
+        time_sampler_config={
+            "target": "latent_meanflow.objectives.common.UniformTimeSampler",
+            "params": {"time_eps": 1.0e-4},
+        },
+        trajectory_fm_ratio=0.5,
+        border_fm_ratio=0.0,
+        weighting_mode="alpha_adaptive_exact",
+        alpha_schedule_config={
+            "target": "latent_meanflow.objectives.alphaflow.ConstantAlphaScheduler",
+            "params": {"value": 0.0},
+        },
+    )
+    x_lat = torch.randn(32, 4, 8, 8)
+
+    def zero_model(z_t, r=None, t=None, delta_t=None, condition=None):
+        _ = r, t, delta_t, condition
+        return torch.zeros_like(z_t)
+
+    outputs = objective(zero_model, x_lat, condition=None, global_step=0)
+    assert outputs["loss"].item() > 0.0
+    assert torch.any(outputs["objective_branch"] == 0)
+    assert torch.any(outputs["objective_branch"] == 2)
+    assert outputs["loss_dict"]["meanflow_branch_ratio"].item() > 0.0
+    assert outputs["loss_dict"]["alphaflow_branch_ratio"].item() > 0.0
+
+
 def check_interval_sampler_grids():
     sampler = IntervalFlowSampler(default_nfe=1, two_step_time=0.4)
     grid_1 = sampler.build_time_grid(nfe=1, device=torch.device("cpu"))
@@ -218,6 +300,9 @@ def main():
     check_border_case_flow_matching_degeneracy()
     check_semantics_not_confused()
     check_alpha_adaptive_exact_weighting()
+    check_alpha_adaptive_exact_rejects_zero_alpha()
+    check_alpha_zero_branch_loss_nonzero()
+    check_mixed_batch_alpha_zero_and_positive_both_contribute()
     check_interval_sampler_grids()
     print("Latent flow math self-check passed")
 

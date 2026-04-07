@@ -115,6 +115,24 @@ class AlphaFlowObjective(nn.Module):
             global_step = int(global_step.item())
         return float(self.alpha_schedule(global_step))
 
+    def _combine_branch_losses(self, branch_items, device, dtype):
+        total_count = sum(item["count"] for item in branch_items)
+        if total_count <= 0:
+            raise ValueError("AlphaFlowObjective received an empty batch")
+
+        total_loss = torch.zeros((), device=device, dtype=dtype)
+        combined_stats = {}
+        for item in branch_items:
+            if item["count"] == 0:
+                continue
+            branch_scale = float(item["count"]) / float(total_count)
+            total_loss = total_loss + item["loss"] * branch_scale
+            for name, value in item["stats"].items():
+                if name not in combined_stats:
+                    combined_stats[name] = torch.zeros((), device=device, dtype=dtype)
+                combined_stats[name] = combined_stats[name] + value * branch_scale
+        return total_loss, combined_stats
+
     def forward(self, model_fn, x_lat, condition=None, global_step=None, **kwargs):
         batch_size = x_lat.shape[0]
         r, t, delta_t = sample_interval(
@@ -139,6 +157,7 @@ class AlphaFlowObjective(nn.Module):
         pred_field = torch.zeros_like(x_lat)
         target_field = torch.zeros_like(x_lat)
         base_weight = torch.ones(batch_size, device=x_lat.device, dtype=x_lat.dtype)
+        branch_losses = []
         total_derivative = None
         s = t.clone()
         objective_branch = torch.full((batch_size,), 1, device=x_lat.device, dtype=torch.long)
@@ -161,6 +180,23 @@ class AlphaFlowObjective(nn.Module):
             total_derivative = torch.zeros_like(x_lat)
             total_derivative[meanflow_mask] = total_derivative_meanflow
             objective_branch[meanflow_mask] = 0
+            meanflow_loss, meanflow_stats = weighted_regression_loss(
+                pred_meanflow,
+                target_field[meanflow_mask].detach(),
+                loss_type=self.loss_type,
+                base_weight=torch.ones_like(alpha[meanflow_mask]),
+                weighting_mode="paper_like",
+                adaptive_power=self.adaptive_weight_power,
+                adaptive_bias=self.adaptive_weight_bias,
+            )
+            branch_losses.append(
+                {
+                    "name": "meanflow",
+                    "count": int(meanflow_mask.sum().item()),
+                    "loss": meanflow_loss,
+                    "stats": meanflow_stats,
+                }
+            )
 
         alphaflow_mask = ~meanflow_mask
         if torch.any(alphaflow_mask):
@@ -198,16 +234,32 @@ class AlphaFlowObjective(nn.Module):
                 torch.full_like(alpha_subset, 2, dtype=torch.long),
                 torch.full_like(alpha_subset, 1, dtype=torch.long),
             )
+            # alpha_adaptive_exact only applies to alpha>0 discrete AlphaFlow samples.
+            # When alpha=0, the objective reduces to MeanFlow and must use
+            # MeanFlow's paper_like weighting instead of alpha-based weighting.
+            alphaflow_loss, alphaflow_stats = weighted_regression_loss(
+                pred_subset,
+                target_subset.detach(),
+                loss_type=self.loss_type,
+                base_weight=1.0 / alpha_subset.clamp_min(self.alpha_inverse_eps),
+                weighting_mode=self.weighting_mode,
+                adaptive_power=self.adaptive_weight_power,
+                adaptive_bias=self.adaptive_weight_bias,
+                alpha=alpha_subset,
+            )
+            branch_losses.append(
+                {
+                    "name": "alphaflow",
+                    "count": int(alphaflow_mask.sum().item()),
+                    "loss": alphaflow_loss,
+                    "stats": alphaflow_stats,
+                }
+            )
 
-        loss, weighting_stats = weighted_regression_loss(
-            pred_field,
-            target_field.detach(),
-            loss_type=self.loss_type,
-            base_weight=base_weight,
-            weighting_mode=self.weighting_mode,
-            adaptive_power=self.adaptive_weight_power,
-            adaptive_bias=self.adaptive_weight_bias,
-            alpha=alpha,
+        loss, weighting_stats = self._combine_branch_losses(
+            branch_losses,
+            device=x_lat.device,
+            dtype=x_lat.dtype,
         )
         border_fm_mask = delta_t == 0
         loss_dict = {
@@ -218,6 +270,8 @@ class AlphaFlowObjective(nn.Module):
             "trajectory_fm_ratio": trajectory_fm_mask.float().mean(),
             "border_fm_ratio": border_fm_mask.float().mean(),
             "r_equals_t_ratio": border_fm_mask.float().mean(),
+            "meanflow_branch_ratio": meanflow_mask.float().mean(),
+            "alphaflow_branch_ratio": alphaflow_mask.float().mean(),
             **weighting_stats,
         }
         return {
