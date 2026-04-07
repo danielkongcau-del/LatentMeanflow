@@ -225,6 +225,41 @@ Once the environment is ready, the first recommended training order is:
 
 See [docs/first_semantic_pair_experiment_plan.md](./first_semantic_pair_experiment_plan.md) for the exact commands.
 
+## Linux Launch Scripts
+
+This repo now includes two Linux-friendly shell launchers:
+
+- [scripts/train_tokenizer.sh](../scripts/train_tokenizer.sh)
+- [scripts/train_meanflow.sh](../scripts/train_meanflow.sh)
+
+They are thin wrappers around the existing Python launchers:
+
+- `train_tokenizer.sh` wraps `scripts/train_semantic_autoencoder.py`
+- `train_meanflow.sh` wraps `scripts/train_latent_meanflow.py`
+
+They are designed for remote servers:
+
+- they resolve the repo root automatically
+- they default `NO_ALBUMENTATIONS_UPDATE=1`
+- they keep baseline defaults but allow tiny/debug configs through environment variables
+- they pass any extra CLI arguments straight through to the Python launcher
+
+Examples:
+
+```bash
+./scripts/train_tokenizer.sh
+
+CONFIG=configs/semantic_tokenizer_tiny_256.yaml MAX_EPOCHS=40 ./scripts/train_tokenizer.sh
+
+./scripts/train_meanflow.sh
+
+CONFIG=configs/latent_meanflow_semantic_256_tiny.yaml MAX_EPOCHS=3 ./scripts/train_meanflow.sh
+
+OBJECTIVE=alphaflow CONFIG=configs/latent_alphaflow_semantic_256.yaml ./scripts/train_meanflow.sh
+
+RESUME=logs/2026-04-07T12-00-00_latent_meanflow_semantic_256/checkpoints/last.ckpt ./scripts/train_meanflow.sh
+```
+
 ## Copy-Paste Install Block
 
 If you want the whole sequence in one place:
