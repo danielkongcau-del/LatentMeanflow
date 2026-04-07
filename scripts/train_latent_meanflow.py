@@ -66,7 +66,7 @@ def parse_args():
         dest="overrides",
         action="append",
         default=[],
-        help="Extra OmegaConf dotlist override. Repeat as needed.",
+        help="Extra OmegaConf dotlist override. Repeat as needed, without a leading --.",
     )
     return parser.parse_args()
 
@@ -217,18 +217,18 @@ def build_command(args, config_path, tokenizer_ckpt):
     if args.max_epochs is not None:
         cmd.extend(["--max_epochs", str(args.max_epochs)])
     if args.batch_size is not None and should_pass_dotlist_overrides(args):
-        cmd.append(f"--data.params.batch_size={args.batch_size}")
+        cmd.append(f"data.params.batch_size={args.batch_size}")
     if args.enable_image_logger and should_pass_dotlist_overrides(args):
-        cmd.append("--lightning.callbacks.image_logger.params.disabled=False")
+        cmd.append("lightning.callbacks.image_logger.params.disabled=False")
     if args.image_log_frequency is not None and should_pass_dotlist_overrides(args):
-        cmd.append("--lightning.callbacks.image_logger.params.disabled=False")
-        cmd.append(f"--lightning.callbacks.image_logger.params.batch_frequency={args.image_log_frequency}")
+        cmd.append("lightning.callbacks.image_logger.params.disabled=False")
+        cmd.append(f"lightning.callbacks.image_logger.params.batch_frequency={args.image_log_frequency}")
     if should_inject_tokenizer_config(args):
-        cmd.append(f"--model.params.tokenizer_config_path={args.tokenizer_config.resolve()}")
+        cmd.append(f"model.params.tokenizer_config_path={args.tokenizer_config.resolve()}")
     if should_inject_tokenizer_ckpt(args):
         if tokenizer_ckpt is None:
             raise ValueError("tokenizer_ckpt is required when tokenizer ckpt override injection is enabled.")
-        cmd.append(f"--model.params.tokenizer_ckpt_path={tokenizer_ckpt.resolve()}")
+        cmd.append(f"model.params.tokenizer_ckpt_path={tokenizer_ckpt.resolve()}")
     if should_pass_dotlist_overrides(args):
         cmd.extend(args.overrides)
     return cmd

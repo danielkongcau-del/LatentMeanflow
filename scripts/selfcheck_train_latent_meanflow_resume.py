@@ -36,6 +36,7 @@ def make_args(
         max_epochs=None,
         batch_size=batch_size,
         resume=resume,
+        run_test=False,
         allow_config_override=allow_config_override,
         allow_dotlist_override=allow_dotlist_override,
         force_tokenizer_config=force_tokenizer_config,
@@ -71,9 +72,9 @@ def main():
     assert_contains_once(fresh_cmd, "--base")
     if "--resume" in fresh_cmd:
         raise AssertionError(f"Fresh run command should not contain --resume: {fresh_cmd}")
-    if not any(item.startswith("--model.params.tokenizer_config_path=") for item in fresh_cmd):
+    if not any(item.startswith("model.params.tokenizer_config_path=") for item in fresh_cmd):
         raise AssertionError(f"Fresh run should inject tokenizer_config_path: {fresh_cmd}")
-    if not any(item.startswith("--model.params.tokenizer_ckpt_path=") for item in fresh_cmd):
+    if not any(item.startswith("model.params.tokenizer_ckpt_path=") for item in fresh_cmd):
         raise AssertionError(f"Fresh run should inject tokenizer_ckpt_path: {fresh_cmd}")
 
     name_idx = fresh_cmd.index("--name")
@@ -111,22 +112,22 @@ def main():
         if "--base" in resume_cmd:
             raise AssertionError(f"Bare resume should not inject --base: {resume_cmd}")
         assert_contains_once(resume_cmd, "--resume")
-        if any(item.startswith("--model.params.tokenizer_config_path=") for item in resume_cmd):
+        if any(item.startswith("model.params.tokenizer_config_path=") for item in resume_cmd):
             raise AssertionError(f"Bare resume should not inject tokenizer_config_path: {resume_cmd}")
-        if any(item.startswith("--model.params.tokenizer_ckpt_path=") for item in resume_cmd):
+        if any(item.startswith("model.params.tokenizer_ckpt_path=") for item in resume_cmd):
             raise AssertionError(f"Bare resume should not inject tokenizer_ckpt_path: {resume_cmd}")
-        if any(item.startswith("--data.params.batch_size=") for item in resume_cmd):
+        if any(item.startswith("data.params.batch_size=") for item in resume_cmd):
             raise AssertionError(f"Bare resume should not inject batch-size dotlist: {resume_cmd}")
-        if "--lightning.callbacks.image_logger.params.disabled=False" in resume_cmd:
+        if "lightning.callbacks.image_logger.params.disabled=False" in resume_cmd:
             raise AssertionError(f"Bare resume should not inject image logger enable dotlist: {resume_cmd}")
-        if any(item.startswith("--lightning.callbacks.image_logger.params.batch_frequency=") for item in resume_cmd):
+        if any(item.startswith("lightning.callbacks.image_logger.params.batch_frequency=") for item in resume_cmd):
             raise AssertionError(f"Bare resume should not inject image logger frequency dotlist: {resume_cmd}")
 
         try:
             validate_resume_request(
                 make_args(
                     resume=resume_path,
-                    overrides=["--model.params.foo=bar"],
+                    overrides=["model.params.foo=bar"],
                 ),
                 config_path=None,
                 resume_logdir=resume_logdir,
@@ -202,15 +203,15 @@ def main():
             tokenizer_ckpt=tokenizer_ckpt,
         )
         assert_contains_once(forced_resume_cmd, "--base")
-        if not any(item.startswith("--model.params.tokenizer_config_path=") for item in forced_resume_cmd):
+        if not any(item.startswith("model.params.tokenizer_config_path=") for item in forced_resume_cmd):
             raise AssertionError(f"Forced resume should inject tokenizer_config_path: {forced_resume_cmd}")
-        if not any(item.startswith("--model.params.tokenizer_ckpt_path=") for item in forced_resume_cmd):
+        if not any(item.startswith("model.params.tokenizer_ckpt_path=") for item in forced_resume_cmd):
             raise AssertionError(f"Forced resume should inject tokenizer_ckpt_path: {forced_resume_cmd}")
 
         forced_dotlist_args = make_args(
             resume=resume_path,
             allow_dotlist_override=True,
-            overrides=["--model.params.foo=bar"],
+            overrides=["model.params.foo=bar"],
         )
         validate_resume_request(
             forced_dotlist_args,
@@ -222,7 +223,7 @@ def main():
             config_path=None,
             tokenizer_ckpt=None,
         )
-        if "--model.params.foo=bar" not in forced_dotlist_cmd:
+        if "model.params.foo=bar" not in forced_dotlist_cmd:
             raise AssertionError(f"Resume with --allow-dotlist-override should keep dotlist overrides: {forced_dotlist_cmd}")
 
         forced_batch_size_cmd = build_command(
@@ -234,7 +235,7 @@ def main():
             config_path=None,
             tokenizer_ckpt=None,
         )
-        if "--data.params.batch_size=8" not in forced_batch_size_cmd:
+        if "data.params.batch_size=8" not in forced_batch_size_cmd:
             raise AssertionError(
                 f"Resume with --allow-dotlist-override should keep batch-size dotlist: {forced_batch_size_cmd}"
             )
@@ -249,11 +250,11 @@ def main():
             config_path=None,
             tokenizer_ckpt=None,
         )
-        if "--lightning.callbacks.image_logger.params.disabled=False" not in forced_logger_cmd:
+        if "lightning.callbacks.image_logger.params.disabled=False" not in forced_logger_cmd:
             raise AssertionError(
                 f"Resume with --allow-dotlist-override should keep image logger enable dotlist: {forced_logger_cmd}"
             )
-        if "--lightning.callbacks.image_logger.params.batch_frequency=50" not in forced_logger_cmd:
+        if "lightning.callbacks.image_logger.params.batch_frequency=50" not in forced_logger_cmd:
             raise AssertionError(
                 f"Resume with --allow-dotlist-override should keep image logger frequency dotlist: {forced_logger_cmd}"
             )

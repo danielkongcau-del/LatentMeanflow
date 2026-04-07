@@ -214,12 +214,12 @@ python scripts/train_latent_meanflow.py \
 By default, resume no longer injects:
 
 - a new `--base <config>`
-- `--model.params.tokenizer_config_path=...`
-- `--model.params.tokenizer_ckpt_path=...`
+- `model.params.tokenizer_config_path=...`
+- `model.params.tokenizer_ckpt_path=...`
 - any `--set` dotlist overrides
-- `--data.params.batch_size=...`
-- `--lightning.callbacks.image_logger.params.disabled=False`
-- `--lightning.callbacks.image_logger.params.batch_frequency=...`
+- `data.params.batch_size=...`
+- `lightning.callbacks.image_logger.params.disabled=False`
+- `lightning.callbacks.image_logger.params.batch_frequency=...`
 
 `--allow-dotlist-override` is a dangerous escape hatch. It can bypass the wrapper's safety model, including protections around tokenizer-related settings and wrapper-managed runtime dotlist flags, so it is not the recommended path.
 

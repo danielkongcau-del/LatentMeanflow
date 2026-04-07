@@ -26,7 +26,7 @@ def parse_args():
         dest="overrides",
         action="append",
         default=[],
-        help="Extra OmegaConf dotlist override. Repeat as needed.",
+        help="Extra OmegaConf dotlist override. Repeat as needed, without a leading --.",
     )
     return parser.parse_args()
 
@@ -64,11 +64,11 @@ def build_command(args, ae_ckpt):
     if args.max_epochs is not None:
         cmd.extend(["--max_epochs", str(args.max_epochs)])
     if args.batch_size is not None:
-        cmd.append(f"--data.params.batch_size={args.batch_size}")
+        cmd.append(f"data.params.batch_size={args.batch_size}")
     if args.image_log_frequency is not None:
-        cmd.append("--lightning.callbacks.image_logger.params.disabled=False")
-        cmd.append(f"--lightning.callbacks.image_logger.params.batch_frequency={args.image_log_frequency}")
-    cmd.append(f"--model.params.first_stage_config.params.ckpt_path={ae_ckpt.resolve()}")
+        cmd.append("lightning.callbacks.image_logger.params.disabled=False")
+        cmd.append(f"lightning.callbacks.image_logger.params.batch_frequency={args.image_log_frequency}")
+    cmd.append(f"model.params.first_stage_config.params.ckpt_path={ae_ckpt.resolve()}")
     cmd.extend(args.overrides)
     return cmd
 
