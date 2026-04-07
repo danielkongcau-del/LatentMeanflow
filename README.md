@@ -73,6 +73,8 @@ The maintained environment target for this repository is:
 - torchvision `0.26.0+cu128`
 - a single Conda environment such as `lmf`
 
+For remote Linux GPU servers, use the stricter step-by-step guide in [docs/linux_server_environment.md](docs/linux_server_environment.md). That guide includes the Linux-specific install order, a locked dependency file, and the headless OpenCV choice used to avoid server-side dependency conflicts.
+
 After activating your environment, install PyTorch from the official CUDA 12.8 wheel index:
 
 ```bash
