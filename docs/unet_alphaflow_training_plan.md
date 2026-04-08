@@ -193,6 +193,12 @@ bash scripts/train_meanflow.sh
 Use the same seed and the same `NFE=8/4/2/1` sweep for every AlphaFlow U-Net
 comparison.
 
+For the full paired RGB + semantic-mask reporting protocol, including
+teacher-aligned `mIoU`, `Boundary F1`, and pair-consistency metrics, use
+[docs/semantic_pair_eval_protocol.md](semantic_pair_eval_protocol.md). The
+backbone sweep below is still the correct first pass for image/mask export and
+checkpoint fixation.
+
 The benchmark script always writes:
 
 - `image/`

@@ -462,6 +462,19 @@ That benchmark route fixes the checkpoint, seed, and `NFE=8/4/2/1` sweep and
 always writes `image/`, `mask_raw/`, `mask_color/`, and `overlay/` for every
 NFE.
 
+For research-style paired RGB + semantic-mask evaluation, use
+[docs/semantic_pair_eval_protocol.md](docs/semantic_pair_eval_protocol.md)
+with:
+
+```bash
+python scripts/find_checkpoint.py --run-dir logs/<your_run> --selection best --monitor val/base_error_mean
+python scripts/eval_semantic_pair_generation.py --config configs/latent_alphaflow_semantic_256_unet.yaml --ckpt <best-ckpt> --outdir outputs/semantic_pair_eval/example --seed 23 --nfe-values 8 4 2 1 --teacher-hf-model <hf-teacher-model-id-or-local-path>
+```
+
+That route reports RGB `FID/KID`, teacher-aligned mask `mIoU` /
+`per-class IoU`, `Boundary F1`, and paired-consistency agreement between the
+generated mask and the teacher segmentation of the generated RGB image.
+
 ## Objective Semantics: alpha=1 vs r=t
 
 - `alpha=1` means trajectory flow matching, noted here as `L_TFM`.
