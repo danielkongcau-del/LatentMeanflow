@@ -284,7 +284,8 @@ Purpose: establish the first few-step sampling quality curve before spending tim
 Commands:
 
 ```powershell
-$meanflowBaselineCkpt = D:\Anaconda\envs\lmf\python.exe scripts\find_checkpoint.py --config configs/latent_meanflow_semantic_256.yaml
+$meanflowBaselineRun = "logs/<timestamp>_latent_meanflow_semantic_256"
+$meanflowBaselineCkpt = D:\Anaconda\envs\lmf\python.exe scripts\find_checkpoint.py --run-dir $meanflowBaselineRun --selection best --monitor val/base_error_mean
 
 D:\Anaconda\envs\lmf\python.exe scripts\sample_latent_flow.py --config configs/latent_meanflow_semantic_256.yaml --ckpt $meanflowBaselineCkpt --outdir outputs/meanflow_nfe8 --n-samples 32 --nfe 8
 D:\Anaconda\envs\lmf\python.exe scripts\sample_latent_flow.py --config configs/latent_meanflow_semantic_256.yaml --ckpt $meanflowBaselineCkpt --outdir outputs/meanflow_nfe4 --n-samples 32 --nfe 4
@@ -308,7 +309,7 @@ Minimum success criteria:
 
 Check first if it fails:
 
-- baseline checkpoint was not selected explicitly
+- baseline checkpoint was not selected explicitly from a pinned run directory
 - sampler midpoint assumptions for low NFE
 - decoding artifacts that actually come from a weak tokenizer instead of the prior
 
@@ -464,6 +465,11 @@ Generation:
 6. Run Stage 5.5 to produce a baseline MeanFlow checkpoint.
 7. Run Stage 6 and compare the first `NFE=8/4/2/1` outputs side by side using that baseline checkpoint.
 
+For the formal ConvNet vs U-Net backbone benchmark protocol after these first
+runs, use [docs/unet_backbone_benchmark.md](unet_backbone_benchmark.md). That
+runbook fixes the checkpoint selection rule to `val/base_error_mean` and uses a
+shared-noise `NFE=8/4/2/1` sweep instead of ad-hoc one-step previews.
+
 ## Summary Table
 
 | Stage | Command | Artifact | Pass criteria | Common failure |
@@ -474,4 +480,4 @@ Generation:
 | Latent FM tiny pilot | `train_latent_fm.py --config configs/latent_fm_semantic_256_tiny.yaml --tokenizer-ckpt logs/autoencoder/checkpoints/last.ckpt --gpus 0` plus `sample_latent_fm.py` | `logs/*_latent_fm/` and `outputs/fm_tiny_samples/{image,mask_raw,mask_color,overlay}` | finite loss and non-collapsed paired samples | stale tokenizer ckpt, wrong latent_fm ckpt, class collapse |
 | Latent MeanFlow tiny pilot | `train_latent_meanflow.py --objective meanflow --config configs/latent_meanflow_semantic_256_tiny.yaml --tokenizer-ckpt logs/autoencoder/checkpoints/last.ckpt --gpus 0` plus `sample_latent_flow.py --config configs/latent_meanflow_semantic_256_tiny.yaml --ckpt <tiny-ckpt> --nfe 2` | `logs/*_latent_meanflow_semantic_256_tiny/` and `outputs/meanflow_tiny_samples_nfe2/{image,mask_raw,mask_color,overlay}` | finite loss and plausible paired overlays | unstable tokenizer, wrong config tier, wrong tiny ckpt |
 | Latent MeanFlow baseline | `train_latent_meanflow.py --objective meanflow --config configs/latent_meanflow_semantic_256.yaml --tokenizer-ckpt logs/autoencoder/checkpoints/last.ckpt --gpus 0` | `logs/*_latent_meanflow_semantic_256/checkpoints/last.ckpt` | baseline run is stable and produces the checkpoint for Stage 6 | tiny config run reused by mistake, weak tokenizer, stale checkpoint |
-| NFE sampling check | `sample_latent_flow.py` at `NFE=8/4/2/1` with `scripts/find_checkpoint.py --config configs/latent_meanflow_semantic_256.yaml` | `outputs/meanflow_nfe{8,4,2,1}/{image,mask_raw,mask_color,overlay}` | all NFEs run, quality degrades gracefully, and the ckpt is the baseline MeanFlow ckpt | baseline/tiny ckpt mismatch, low-NFE sampler issues, tokenizer bottleneck |
+| NFE sampling check | `sample_latent_flow.py` at `NFE=8/4/2/1` with `scripts/find_checkpoint.py --run-dir logs/<timestamp>_latent_meanflow_semantic_256 --selection best --monitor val/base_error_mean` | `outputs/meanflow_nfe{8,4,2,1}/{image,mask_raw,mask_color,overlay}` | all NFEs run, quality degrades gracefully, and the ckpt is the baseline MeanFlow ckpt | baseline/tiny ckpt mismatch, low-NFE sampler issues, tokenizer bottleneck |

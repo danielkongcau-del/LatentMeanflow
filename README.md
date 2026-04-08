@@ -337,6 +337,19 @@ The sampler writes:
 - `mask_color/`
 - `overlay/`
 
+For apples-to-apples ConvNet vs U-Net benchmarking, do not rely on the sampler
+defaults. Use [docs/unet_backbone_benchmark.md](docs/unet_backbone_benchmark.md)
+together with:
+
+```bash
+python scripts/find_checkpoint.py --run-dir logs/<your_run> --selection best --monitor val/base_error_mean
+python scripts/eval_backbone_nfe_sweep.py --config configs/latent_meanflow_semantic_256.yaml --ckpt <best-ckpt> --outdir outputs/benchmarks/example --seed 23 --nfe-values 8 4 2 1
+```
+
+That benchmark route fixes the checkpoint, seed, and `NFE=8/4/2/1` sweep and
+always writes `image/`, `mask_raw/`, `mask_color/`, and `overlay/` for every
+NFE.
+
 ## Objective Semantics: alpha=1 vs r=t
 
 - `alpha=1` means trajectory flow matching, noted here as `L_TFM`.
