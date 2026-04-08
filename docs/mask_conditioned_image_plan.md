@@ -7,7 +7,8 @@ It is deliberately different from the existing paired joint-generation route:
 - tokenizer latent represents `image` only
 - `semantic_mask` stays outside latent `z`
 - the prior learns `p(z_image | semantic_mask)`
-- the first version uses spatial mask concatenation into the U-Net backbone
+- the clean baseline uses `condition_mode: input_concat`
+- stronger ablations use multi-scale `pyramid_concat` conditioning
 
 This route keeps the checked-in latent FM / MeanFlow / AlphaFlow objective math
 unchanged. It only changes the task definition, tokenizer family, and
@@ -41,11 +42,23 @@ image-only tokenizer encoder and does not become part of latent `z`.
   - MeanFlow conditional baseline.
 - `configs/latent_alphaflow_mask2image_unet.yaml`
   - Recommended first formal long run today.
+  - Uses the clean `input_concat` baseline.
 - `configs/latent_alphaflow_mask2image_unet_tiny.yaml`
   - Tiny/debug overfit route for 32 or 64 samples.
 - `configs/latent_alphaflow_mask2image_f8_unet.yaml`
   - Same route as the base AlphaFlow config, but with the stronger `32x32x4`
     image-only tokenizer geometry.
+- `configs/ablations/latent_alphaflow_mask2image_unet_input_concat.yaml`
+  - Explicit benchmark copy of the clean baseline.
+- `configs/ablations/latent_alphaflow_mask2image_unet_pyramid.yaml`
+  - Multi-scale semantic-mask pyramid injected across U-Net stages.
+- `configs/ablations/latent_alphaflow_mask2image_unet_pyramid_boundary.yaml`
+  - Multi-scale pyramid plus a simple boundary-aware auxiliary channel.
+
+The semantic mask channel count is derived from
+`configs/label_specs/remote_semantic.yaml` in the main checked-in configs. The
+baseline no longer relies on a hand-written `spatial_condition_channels: 7`
+constant.
 
 ## Best Checkpoint Rule
 
@@ -73,6 +86,10 @@ python scripts/find_checkpoint.py --run-dir logs/<your_run> --selection best --m
    - `configs/latent_alphaflow_mask2image_unet.yaml`
 3. Stronger tokenizer follow-up:
    - `configs/latent_alphaflow_mask2image_f8_unet.yaml`
+4. Conditioning benchmark:
+   - `configs/ablations/latent_alphaflow_mask2image_unet_input_concat.yaml`
+   - `configs/ablations/latent_alphaflow_mask2image_unet_pyramid.yaml`
+   - `configs/ablations/latent_alphaflow_mask2image_unet_pyramid_boundary.yaml`
 
 ## Training Commands
 
@@ -101,6 +118,28 @@ python scripts/train_mask_conditioned_image.py \
 python scripts/train_mask_conditioned_image.py \
   --objective alphaflow \
   --config configs/latent_alphaflow_mask2image_unet.yaml \
+  --tokenizer-ckpt /path/to/image_tokenizer.ckpt \
+  --gpus 0,1
+```
+
+### Conditioning Upgrade Benchmark
+
+```bash
+python scripts/train_mask_conditioned_image.py \
+  --objective alphaflow \
+  --config configs/ablations/latent_alphaflow_mask2image_unet_input_concat.yaml \
+  --tokenizer-ckpt /path/to/image_tokenizer.ckpt \
+  --gpus 0,1
+
+python scripts/train_mask_conditioned_image.py \
+  --objective alphaflow \
+  --config configs/ablations/latent_alphaflow_mask2image_unet_pyramid.yaml \
+  --tokenizer-ckpt /path/to/image_tokenizer.ckpt \
+  --gpus 0,1
+
+python scripts/train_mask_conditioned_image.py \
+  --objective alphaflow \
+  --config configs/ablations/latent_alphaflow_mask2image_unet_pyramid_boundary.yaml \
   --tokenizer-ckpt /path/to/image_tokenizer.ckpt \
   --gpus 0,1
 ```
@@ -214,3 +253,6 @@ On normal validation masks:
 
 Do not blame one-step difficulty first if even `NFE=8` cannot render the mask
 layout coherently.
+
+For the fixed condition-path benchmark protocol, use
+[docs/mask_conditioned_renderer_benchmark.md](docs/mask_conditioned_renderer_benchmark.md).

@@ -272,6 +272,20 @@ This route is intended as the first sanity check for whether the latent prior
 can render plausible RGB images from a given semantic layout before adding any
 separate semantic-mask prior.
 
+Condition-path variants:
+
+- `input_concat`
+  - current clean baseline
+  - one latent-scale one-hot mask concat at the U-Net input only
+- `pyramid_concat`
+  - project-layer conditioning upgrade
+  - builds a semantic-mask pyramid and injects per-scale features across the U-Net
+- `pyramid_concat + boundary`
+  - same multi-scale route plus a simple boundary-aware auxiliary channel
+
+The semantic mask class count is now derived from the shared label spec rather
+than hard-coded as a checked-in `7` channel constant in the main configs.
+
 Checked-in configs:
 
 - `configs/latent_fm_mask2image_unet.yaml`
@@ -279,6 +293,12 @@ Checked-in configs:
 - `configs/latent_alphaflow_mask2image_unet.yaml`
 - `configs/latent_alphaflow_mask2image_unet_tiny.yaml`
 - `configs/latent_alphaflow_mask2image_f8_unet.yaml`
+
+Renderer conditioning ablations:
+
+- `configs/ablations/latent_alphaflow_mask2image_unet_input_concat.yaml`
+- `configs/ablations/latent_alphaflow_mask2image_unet_pyramid.yaml`
+- `configs/ablations/latent_alphaflow_mask2image_unet_pyramid_boundary.yaml`
 
 Use the dedicated wrapper so bare `--objective fm/meanflow/alphaflow` resolves
 inside the mask-conditioned route rather than the existing paired joint route:
@@ -303,6 +323,8 @@ python scripts/eval_mask_conditioned_image.py --config configs/latent_alphaflow_
 
 For the full run order, sampling protocol, and success criteria, use
 [docs/mask_conditioned_image_plan.md](docs/mask_conditioned_image_plan.md).
+For the condition-path comparison protocol, use
+[docs/mask_conditioned_renderer_benchmark.md](docs/mask_conditioned_renderer_benchmark.md).
 
 ### Latent FM Path
 

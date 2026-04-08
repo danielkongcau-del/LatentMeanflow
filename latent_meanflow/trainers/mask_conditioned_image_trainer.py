@@ -1,9 +1,40 @@
+from copy import deepcopy
+from pathlib import Path
+
 import torch
 import torch.nn.functional as F
 
 from latent_meanflow.conditioning import LatentConditioning
 from latent_meanflow.trainers.latent_flow_trainer import LatentFlowTrainer
 from latent_meanflow.trainers.latent_fm_trainer import LatentFMTrainer
+from latent_meanflow.utils.palette import infer_num_classes, resolve_gray_to_class_id
+
+
+def resolve_mask_condition_channels(*, semantic_mask_label_spec_path=None, mask_num_classes=None):
+    if mask_num_classes is not None:
+        return int(mask_num_classes)
+    if semantic_mask_label_spec_path is None:
+        return None
+    label_spec_path = Path(semantic_mask_label_spec_path)
+    gray_to_class_id, ignore_index = resolve_gray_to_class_id(label_spec_path)
+    return int(infer_num_classes(gray_to_class_id, ignore_index=ignore_index))
+
+
+def _patch_backbone_condition_channels(
+    backbone_config,
+    *,
+    semantic_mask_label_spec_path=None,
+    mask_num_classes=None,
+):
+    backbone_cfg = deepcopy(backbone_config)
+    backbone_cfg.setdefault("params", {})
+    resolved_channels = resolve_mask_condition_channels(
+        semantic_mask_label_spec_path=semantic_mask_label_spec_path,
+        mask_num_classes=mask_num_classes,
+    )
+    if resolved_channels is not None:
+        backbone_cfg["params"]["spatial_condition_channels"] = int(resolved_channels)
+    return backbone_cfg
 
 
 class _MaskConditionedImageMixin:
@@ -129,7 +160,14 @@ class MaskConditionedLatentFlowTrainer(_MaskConditionedImageMixin, LatentFlowTra
         monitor="val/loss",
         mask_condition_key="mask_onehot",
         mask_index_key="mask_index",
+        semantic_mask_label_spec_path=None,
+        mask_num_classes=None,
     ):
+        backbone_config = _patch_backbone_condition_channels(
+            backbone_config,
+            semantic_mask_label_spec_path=semantic_mask_label_spec_path,
+            mask_num_classes=mask_num_classes,
+        )
         super().__init__(
             tokenizer_config_path=tokenizer_config_path,
             tokenizer_ckpt_path=tokenizer_ckpt_path,
@@ -148,6 +186,7 @@ class MaskConditionedLatentFlowTrainer(_MaskConditionedImageMixin, LatentFlowTra
             mask_condition_key=mask_condition_key,
             mask_index_key=mask_index_key,
         )
+        self.semantic_mask_label_spec_path = semantic_mask_label_spec_path
         if getattr(self.tokenizer, "num_classes", 0) != 0:
             raise ValueError(
                 "Mask-conditioned image generation expects an image-only tokenizer with num_classes=0."
@@ -184,7 +223,14 @@ class MaskConditionedLatentFMTrainer(_MaskConditionedImageMixin, LatentFMTrainer
         monitor="val/fm_loss",
         mask_condition_key="mask_onehot",
         mask_index_key="mask_index",
+        semantic_mask_label_spec_path=None,
+        mask_num_classes=None,
     ):
+        backbone_config = _patch_backbone_condition_channels(
+            backbone_config,
+            semantic_mask_label_spec_path=semantic_mask_label_spec_path,
+            mask_num_classes=mask_num_classes,
+        )
         super().__init__(
             tokenizer_config_path=tokenizer_config_path,
             tokenizer_ckpt_path=tokenizer_ckpt_path,
@@ -201,6 +247,7 @@ class MaskConditionedLatentFMTrainer(_MaskConditionedImageMixin, LatentFMTrainer
             mask_condition_key=mask_condition_key,
             mask_index_key=mask_index_key,
         )
+        self.semantic_mask_label_spec_path = semantic_mask_label_spec_path
         if getattr(self.tokenizer, "num_classes", 0) != 0:
             raise ValueError(
                 "Mask-conditioned image generation expects an image-only tokenizer with num_classes=0."

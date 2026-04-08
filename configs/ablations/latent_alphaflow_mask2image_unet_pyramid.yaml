@@ -2,13 +2,11 @@ model:
   base_learning_rate: 6.25e-06
   target: latent_meanflow.trainers.mask_conditioned_image_trainer.MaskConditionedLatentFlowTrainer
   params:
-    # Stronger p(image | semantic mask) AlphaFlow candidate.
-    #
-    # This keeps the same conditioning route as the base mask->image config but
-    # switches the tokenizer latent geometry from 64x64x4 to 32x32x4.
+    # Project-layer conditioning upgrade:
+    # multi-scale semantic-mask pyramid injected across U-Net stages.
     objective_name: alphaflow
-    tokenizer_config_path: configs/autoencoder_image_f8_256.yaml
-    tokenizer_ckpt_path: logs/autoencoder_image_f8/checkpoints/last.ckpt
+    tokenizer_config_path: configs/autoencoder_image_256.yaml
+    tokenizer_ckpt_path: logs/autoencoder_image/checkpoints/last.ckpt
     sample_posterior: false
     freeze_tokenizer: true
     log_sample_nfe: 4
@@ -30,7 +28,7 @@ model:
         use_scale_shift_norm: true
         resblock_updown: true
         time_conditioning: t_delta
-        condition_mode: input_concat
+        condition_mode: pyramid_concat
     objective_config:
       target: latent_meanflow.objectives.alphaflow.AlphaFlowObjective
       params:

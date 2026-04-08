@@ -72,6 +72,10 @@ def _make_time_embed_mlp(input_dim, output_dim):
     )
 
 
+def _make_condition_projector(in_channels, out_channels, dims=2):
+    return _conv_nd(dims, in_channels, out_channels, 1)
+
+
 class TimestepBlock(nn.Module):
     @abstractmethod
     def forward(self, x, emb):
@@ -307,6 +311,8 @@ class LatentIntervalUNet(nn.Module):
         use_scale_shift_norm=True,
         resblock_updown=True,
         spatial_condition_channels=0,
+        condition_mode="input_concat",
+        use_boundary_condition=False,
         t_time_scale=1.0,
         delta_time_scale=1.0,
         r_time_scale=1.0,
@@ -329,14 +335,20 @@ class LatentIntervalUNet(nn.Module):
         self.num_head_channels = int(num_head_channels)
         self.use_scale_shift_norm = bool(use_scale_shift_norm)
         self.resblock_updown = bool(resblock_updown)
+        self.condition_mode = str(condition_mode)
+        self.use_boundary_condition = bool(use_boundary_condition)
         self.t_time_scale = float(t_time_scale)
         self.delta_time_scale = float(delta_time_scale)
         self.r_time_scale = float(r_time_scale)
-        self.model_in_channels = self.in_channels + self.spatial_condition_channels
 
         if self.time_conditioning not in {"t", "t_delta", "r_t"}:
             raise ValueError(
                 f"Unsupported time_conditioning: {self.time_conditioning}. Use 't', 't_delta', or 'r_t'."
+            )
+        if self.condition_mode not in {"input_concat", "pyramid_concat"}:
+            raise ValueError(
+                f"Unsupported condition_mode: {self.condition_mode}. "
+                "Use 'input_concat' or 'pyramid_concat'."
             )
         if not self.channel_mult:
             raise ValueError("channel_mult must not be empty")
@@ -351,6 +363,14 @@ class LatentIntervalUNet(nn.Module):
         ):
             if not math.isfinite(value):
                 raise ValueError(f"{name} must be finite, got {value!r}")
+
+        extra_boundary_channels = 1 if self.use_boundary_condition and self.spatial_condition_channels > 0 else 0
+        self.raw_condition_channels = self.spatial_condition_channels + extra_boundary_channels
+        self.model_in_channels = (
+            self.in_channels + self.raw_condition_channels
+            if self.condition_mode == "input_concat"
+            else self.in_channels
+        )
 
         self.t_embed = _make_time_embed_mlp(self.model_channels, self.time_embed_dim)
         self.delta_embed = (
@@ -371,8 +391,15 @@ class LatentIntervalUNet(nn.Module):
         self.input_blocks = nn.ModuleList(
             [TimestepEmbedSequential(_conv_nd(self.dims, self.model_in_channels, ch, 3, padding=1))]
         )
+        self.input_condition_projectors = nn.ModuleList()
+        self.input_condition_scales = []
         input_block_chans = [ch]
         ds = 1
+        if self.condition_mode == "pyramid_concat" and self.raw_condition_channels > 0:
+            self.input_condition_projectors.append(
+                _make_condition_projector(self.raw_condition_channels, ch, dims=self.dims)
+            )
+            self.input_condition_scales.append(1)
         for level, mult in enumerate(self.channel_mult):
             for _ in range(self.num_res_blocks):
                 layers = [
@@ -397,6 +424,11 @@ class LatentIntervalUNet(nn.Module):
                         )
                     )
                 self.input_blocks.append(TimestepEmbedSequential(*layers))
+                if self.condition_mode == "pyramid_concat" and self.raw_condition_channels > 0:
+                    self.input_condition_projectors.append(
+                        _make_condition_projector(self.raw_condition_channels, ch, dims=self.dims)
+                    )
+                    self.input_condition_scales.append(ds)
                 input_block_chans.append(ch)
             if level != len(self.channel_mult) - 1:
                 out_channels = ch
@@ -414,9 +446,15 @@ class LatentIntervalUNet(nn.Module):
                 else:
                     down_block = Downsample(ch, self.conv_resample, dims=self.dims, out_channels=out_channels)
                 self.input_blocks.append(TimestepEmbedSequential(down_block))
+                next_ds = ds * 2
+                if self.condition_mode == "pyramid_concat" and self.raw_condition_channels > 0:
+                    self.input_condition_projectors.append(
+                        _make_condition_projector(self.raw_condition_channels, ch, dims=self.dims)
+                    )
+                    self.input_condition_scales.append(next_ds)
                 input_block_chans.append(out_channels)
                 ch = out_channels
-                ds *= 2
+                ds = next_ds
 
         self.middle_block = TimestepEmbedSequential(
             ResBlock(
@@ -442,8 +480,17 @@ class LatentIntervalUNet(nn.Module):
                 use_scale_shift_norm=self.use_scale_shift_norm,
             ),
         )
+        self.middle_condition_projector = None
+        self.middle_condition_scale = None
+        if self.condition_mode == "pyramid_concat" and self.raw_condition_channels > 0:
+            self.middle_condition_projector = _make_condition_projector(
+                self.raw_condition_channels, ch, dims=self.dims
+            )
+            self.middle_condition_scale = ds
 
         self.output_blocks = nn.ModuleList()
+        self.output_condition_projectors = nn.ModuleList()
+        self.output_condition_scales = []
         for level, mult in list(enumerate(self.channel_mult))[::-1]:
             for block_idx in range(self.num_res_blocks + 1):
                 skip_channels = input_block_chans.pop()
@@ -484,8 +531,16 @@ class LatentIntervalUNet(nn.Module):
                     else:
                         up_block = Upsample(ch, self.conv_resample, dims=self.dims, out_channels=out_channels)
                     layers.append(up_block)
-                    ds //= 2
+                    next_ds = ds // 2
+                else:
+                    next_ds = ds
                 self.output_blocks.append(TimestepEmbedSequential(*layers))
+                if self.condition_mode == "pyramid_concat" and self.raw_condition_channels > 0:
+                    self.output_condition_projectors.append(
+                        _make_condition_projector(self.raw_condition_channels, ch, dims=self.dims)
+                    )
+                    self.output_condition_scales.append(next_ds)
+                ds = next_ds
 
         self.out = nn.Sequential(
             _normalization(ch),
@@ -584,6 +639,72 @@ class LatentIntervalUNet(nn.Module):
 
         return class_condition, spatial_condition
 
+    def _compute_boundary_condition(self, spatial_condition):
+        if not self.use_boundary_condition or spatial_condition is None:
+            return None
+        mask_index = spatial_condition.argmax(dim=1, keepdim=True)
+        boundary = torch.zeros_like(mask_index, dtype=spatial_condition.dtype)
+        vertical = (mask_index[:, :, 1:, :] != mask_index[:, :, :-1, :]).to(spatial_condition.dtype)
+        horizontal = (mask_index[:, :, :, 1:] != mask_index[:, :, :, :-1]).to(spatial_condition.dtype)
+        boundary[:, :, 1:, :] = torch.maximum(boundary[:, :, 1:, :], vertical)
+        boundary[:, :, :-1, :] = torch.maximum(boundary[:, :, :-1, :], vertical)
+        boundary[:, :, :, 1:] = torch.maximum(boundary[:, :, :, 1:], horizontal)
+        boundary[:, :, :, :-1] = torch.maximum(boundary[:, :, :, :-1], horizontal)
+        return boundary
+
+    def _augment_spatial_condition(self, spatial_condition):
+        if spatial_condition is None:
+            return None
+        boundary = self._compute_boundary_condition(spatial_condition)
+        if boundary is None:
+            return spatial_condition
+        return torch.cat([spatial_condition, boundary], dim=1)
+
+    def _resize_condition_for_scale(self, raw_condition, target_hw):
+        if raw_condition is None:
+            return None
+        if tuple(raw_condition.shape[-2:]) == tuple(target_hw):
+            return raw_condition
+        semantic = raw_condition[:, : self.spatial_condition_channels]
+        semantic = F.interpolate(semantic, size=target_hw, mode="nearest")
+        if not self.use_boundary_condition:
+            return semantic
+        boundary = raw_condition[:, self.spatial_condition_channels :]
+        if boundary.shape[1] == 0:
+            return semantic
+        source_h, source_w = raw_condition.shape[-2:]
+        target_h, target_w = target_hw
+        can_pool = (
+            source_h % target_h == 0
+            and source_w % target_w == 0
+            and source_h // target_h == source_w // target_w
+            and source_h // target_h > 1
+        )
+        if can_pool:
+            factor = source_h // target_h
+            boundary = F.max_pool2d(boundary, kernel_size=factor, stride=factor)
+        else:
+            boundary = F.interpolate(boundary, size=target_hw, mode="nearest")
+        return torch.cat([semantic, boundary.to(dtype=semantic.dtype)], dim=1)
+
+    def _build_condition_pyramid(self, raw_condition, z_t):
+        if raw_condition is None:
+            return None
+        scale_values = set(self.input_condition_scales + self.output_condition_scales)
+        if self.middle_condition_scale is not None:
+            scale_values.add(self.middle_condition_scale)
+        if not scale_values:
+            return None
+        base_h, base_w = z_t.shape[-2:]
+        pyramid = {}
+        for scale in sorted(scale_values):
+            target_hw = (max(1, base_h // scale), max(1, base_w // scale))
+            pyramid[scale] = self._resize_condition_for_scale(raw_condition, target_hw).to(
+                device=z_t.device,
+                dtype=z_t.dtype,
+            )
+        return pyramid
+
     def forward(self, z_t, t=None, condition=None, r=None, delta_t=None):
         class_condition, spatial_condition = self._resolve_condition_inputs(condition, z_t)
         emb = self._resolve_time_embedding(t=t, r=r, delta_t=delta_t)
@@ -591,13 +712,29 @@ class LatentIntervalUNet(nn.Module):
             emb = emb + self.cond_embed(class_condition.long())
 
         hs = []
-        h = z_t if spatial_condition is None else torch.cat([z_t, spatial_condition], dim=1)
-        for module in self.input_blocks:
+        raw_condition = self._augment_spatial_condition(spatial_condition)
+        condition_pyramid = None
+        if raw_condition is not None and self.condition_mode == "pyramid_concat":
+            condition_pyramid = self._build_condition_pyramid(raw_condition, z_t)
+
+        if raw_condition is None or self.condition_mode == "pyramid_concat":
+            h = z_t
+        else:
+            h = torch.cat([z_t, raw_condition], dim=1)
+        for block_idx, module in enumerate(self.input_blocks):
             h = module(h, emb)
+            if condition_pyramid is not None:
+                scale = self.input_condition_scales[block_idx]
+                h = h + self.input_condition_projectors[block_idx](condition_pyramid[scale])
             hs.append(h)
         h = self.middle_block(h, emb)
-        for module in self.output_blocks:
+        if condition_pyramid is not None and self.middle_condition_projector is not None:
+            h = h + self.middle_condition_projector(condition_pyramid[self.middle_condition_scale])
+        for block_idx, module in enumerate(self.output_blocks):
             h = torch.cat([h, hs.pop()], dim=1)
             h = module(h, emb)
+            if condition_pyramid is not None:
+                scale = self.output_condition_scales[block_idx]
+                h = h + self.output_condition_projectors[block_idx](condition_pyramid[scale])
         h = h.type(z_t.dtype)
         return self.out(h)

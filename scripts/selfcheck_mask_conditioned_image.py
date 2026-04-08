@@ -15,6 +15,7 @@ for path in (REPO_ROOT, LDM_ROOT, TAMING_ROOT):
 
 from ldm.util import instantiate_from_config
 from latent_meanflow.conditioning import LatentConditioning
+from latent_meanflow.trainers.mask_conditioned_image_trainer import resolve_mask_condition_channels
 from scripts.train_mask_conditioned_image import DEFAULT_CONFIGS
 
 
@@ -24,6 +25,9 @@ CONFIGS = [
     REPO_ROOT / "configs" / "latent_alphaflow_mask2image_unet.yaml",
     REPO_ROOT / "configs" / "latent_alphaflow_mask2image_unet_tiny.yaml",
     REPO_ROOT / "configs" / "latent_alphaflow_mask2image_f8_unet.yaml",
+    REPO_ROOT / "configs" / "ablations" / "latent_alphaflow_mask2image_unet_input_concat.yaml",
+    REPO_ROOT / "configs" / "ablations" / "latent_alphaflow_mask2image_unet_pyramid.yaml",
+    REPO_ROOT / "configs" / "ablations" / "latent_alphaflow_mask2image_unet_pyramid_boundary.yaml",
 ]
 
 
@@ -49,9 +53,23 @@ def main():
         backbone_cfg = OmegaConf.to_container(config.model.params.backbone_config, resolve=True)
         backbone_cfg.setdefault("params", {})
         backbone_cfg["params"]["in_channels"] = 4
-        spatial_condition_channels = int(backbone_cfg["params"].get("spatial_condition_channels", 0))
+        spatial_condition_channels = resolve_mask_condition_channels(
+            semantic_mask_label_spec_path=OmegaConf.select(
+                config,
+                "model.params.semantic_mask_label_spec_path",
+            ),
+            mask_num_classes=OmegaConf.select(config, "model.params.mask_num_classes"),
+        )
+        if spatial_condition_channels is None:
+            spatial_condition_channels = int(backbone_cfg["params"].get("spatial_condition_channels", 0))
+        else:
+            backbone_cfg["params"]["spatial_condition_channels"] = int(spatial_condition_channels)
         if spatial_condition_channels <= 0:
             raise AssertionError(f"{config_path.name} is missing spatial_condition_channels")
+        if config_path.name.startswith("latent_alphaflow_mask2image_unet") and "spatial_condition_channels" in str(
+            OmegaConf.select(config, "model.params.backbone_config.params", default={})
+        ):
+            raise AssertionError(f"{config_path.name} should not rely on handwritten spatial_condition_channels")
 
         backbone = instantiate_from_config(backbone_cfg)
         latent_h, latent_w = _latent_shape_from_tokenizer_config(tokenizer_config_path)
@@ -78,6 +96,12 @@ def main():
     for objective, expected_name in expected_defaults.items():
         if Path(DEFAULT_CONFIGS[objective]).name != expected_name:
             raise AssertionError(f"Unexpected wrapper default for {objective}: {DEFAULT_CONFIGS[objective]}")
+
+    expected_channels = resolve_mask_condition_channels(
+        semantic_mask_label_spec_path=REPO_ROOT / "configs" / "label_specs" / "remote_semantic.yaml"
+    )
+    if expected_channels != 7:
+        raise AssertionError(f"Expected 7 semantic classes from remote label spec, got {expected_channels}")
 
     print("Mask-conditioned image route self-check passed.")
 

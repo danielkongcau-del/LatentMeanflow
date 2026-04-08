@@ -15,6 +15,7 @@ model:
     freeze_tokenizer: true
     mask_condition_key: mask_onehot
     mask_index_key: mask_index
+    semantic_mask_label_spec_path: configs/label_specs/remote_semantic.yaml
     log_sample_steps: 8
     monitor: val/fm_loss
     backbone_config:
@@ -31,7 +32,7 @@ model:
         use_scale_shift_norm: true
         resblock_updown: true
         time_conditioning: t
-        spatial_condition_channels: 7
+        condition_mode: input_concat
     objective_config:
       target: latent_meanflow.objectives.flow_matching.RectifiedFlowMatchingObjective
       params:
