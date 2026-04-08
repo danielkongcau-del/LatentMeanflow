@@ -9,6 +9,7 @@ It is deliberately different from the existing paired joint-generation route:
 - the prior learns `p(z_image | semantic_mask)`
 - the clean baseline uses `condition_mode: input_concat`
 - stronger ablations use multi-scale `pyramid_concat` conditioning
+- high-resolution-aware ablations use `condition_source: fullres_mask`
 
 This route keeps the checked-in latent FM / MeanFlow / AlphaFlow objective math
 unchanged. It only changes the task definition, tokenizer family, and
@@ -54,6 +55,13 @@ image-only tokenizer encoder and does not become part of latent `z`.
   - Multi-scale semantic-mask pyramid injected across U-Net stages.
 - `configs/ablations/latent_alphaflow_mask2image_unet_pyramid_boundary.yaml`
   - Multi-scale pyramid plus a simple boundary-aware auxiliary channel.
+- `configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid.yaml`
+  - Builds the semantic condition pyramid from the original mask resolution.
+- `configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid_boundary.yaml`
+  - Full-resolution pyramid plus binary boundary channel.
+- `configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid_boundary_encoder.yaml`
+  - Full-resolution pyramid plus stronger per-class boundary features and a
+    lightweight semantic condition encoder.
 
 The semantic mask channel count is derived from
 `configs/label_specs/remote_semantic.yaml` in the main checked-in configs. The
@@ -90,6 +98,9 @@ python scripts/find_checkpoint.py --run-dir logs/<your_run> --selection best --m
    - `configs/ablations/latent_alphaflow_mask2image_unet_input_concat.yaml`
    - `configs/ablations/latent_alphaflow_mask2image_unet_pyramid.yaml`
    - `configs/ablations/latent_alphaflow_mask2image_unet_pyramid_boundary.yaml`
+   - `configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid.yaml`
+   - `configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid_boundary.yaml`
+   - `configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid_boundary_encoder.yaml`
 
 ## Training Commands
 
@@ -140,6 +151,24 @@ python scripts/train_mask_conditioned_image.py \
 python scripts/train_mask_conditioned_image.py \
   --objective alphaflow \
   --config configs/ablations/latent_alphaflow_mask2image_unet_pyramid_boundary.yaml \
+  --tokenizer-ckpt /path/to/image_tokenizer.ckpt \
+  --gpus 0,1
+
+python scripts/train_mask_conditioned_image.py \
+  --objective alphaflow \
+  --config configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid.yaml \
+  --tokenizer-ckpt /path/to/image_tokenizer.ckpt \
+  --gpus 0,1
+
+python scripts/train_mask_conditioned_image.py \
+  --objective alphaflow \
+  --config configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid_boundary.yaml \
+  --tokenizer-ckpt /path/to/image_tokenizer.ckpt \
+  --gpus 0,1
+
+python scripts/train_mask_conditioned_image.py \
+  --objective alphaflow \
+  --config configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid_boundary_encoder.yaml \
   --tokenizer-ckpt /path/to/image_tokenizer.ckpt \
   --gpus 0,1
 ```

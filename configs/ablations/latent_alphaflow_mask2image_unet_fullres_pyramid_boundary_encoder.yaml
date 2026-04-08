@@ -2,8 +2,8 @@ model:
   base_learning_rate: 6.25e-06
   target: latent_meanflow.trainers.mask_conditioned_image_trainer.MaskConditionedLatentFlowTrainer
   params:
-    # Project-layer conditioning upgrade:
-    # multi-scale semantic-mask pyramid injected across U-Net stages.
+    # High-resolution-aware semantic condition route:
+    # full-resolution mask pyramid + per-class boundary features + lightweight semantic encoder.
     objective_name: alphaflow
     tokenizer_config_path: configs/autoencoder_image_256.yaml
     tokenizer_ckpt_path: logs/autoencoder_image/checkpoints/last.ckpt
@@ -13,7 +13,7 @@ model:
     monitor: val/base_error_mean
     mask_condition_key: mask_onehot
     mask_index_key: mask_index
-    condition_source: latent_resized_mask
+    condition_source: fullres_mask
     semantic_mask_label_spec_path: configs/label_specs/remote_semantic.yaml
     backbone_config:
       target: latent_meanflow.models.backbones.latent_interval_unet.LatentIntervalUNet
@@ -30,7 +30,12 @@ model:
         resblock_updown: true
         time_conditioning: t_delta
         condition_mode: pyramid_concat
-        condition_source: latent_resized_mask
+        condition_source: fullres_mask
+        use_boundary_condition: true
+        boundary_mode: per_class
+        use_semantic_condition_encoder: true
+        condition_encoder_hidden_channels: 64
+        condition_encoder_num_layers: 2
     objective_config:
       target: latent_meanflow.objectives.alphaflow.AlphaFlowObjective
       params:

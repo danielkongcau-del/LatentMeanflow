@@ -276,12 +276,25 @@ Condition-path variants:
 
 - `input_concat`
   - current clean baseline
+  - `condition_source: latent_resized_mask`
   - one latent-scale one-hot mask concat at the U-Net input only
 - `pyramid_concat`
   - project-layer conditioning upgrade
+  - can use either `latent_resized_mask` or `fullres_mask`
   - builds a semantic-mask pyramid and injects per-scale features across the U-Net
 - `pyramid_concat + boundary`
   - same multi-scale route plus a simple boundary-aware auxiliary channel
+
+High-resolution-aware follow-up variants:
+
+- `fullres_mask`
+  - preserves the original semantic mask resolution until the condition pyramid
+    is built
+  - avoids the old "resize first, derive edges later" failure mode on narrow
+    roads, ditches, pond edges, and field boundaries
+- `fullres_mask + boundary + encoder`
+  - adds stronger per-class boundary features and a lightweight semantic
+    condition encoder on top of the full-resolution route
 
 The semantic mask class count is now derived from the shared label spec rather
 than hard-coded as a checked-in `7` channel constant in the main configs.
@@ -299,6 +312,9 @@ Renderer conditioning ablations:
 - `configs/ablations/latent_alphaflow_mask2image_unet_input_concat.yaml`
 - `configs/ablations/latent_alphaflow_mask2image_unet_pyramid.yaml`
 - `configs/ablations/latent_alphaflow_mask2image_unet_pyramid_boundary.yaml`
+- `configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid.yaml`
+- `configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid_boundary.yaml`
+- `configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid_boundary_encoder.yaml`
 
 Use the dedicated wrapper so bare `--objective fm/meanflow/alphaflow` resolves
 inside the mask-conditioned route rather than the existing paired joint route:

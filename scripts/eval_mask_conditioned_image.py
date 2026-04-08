@@ -177,6 +177,9 @@ def main():
             batch_size=args.batch_size,
             overlay_alpha=args.overlay_alpha,
         )
+        backbone = getattr(model, "backbone", None)
+    else:
+        backbone = None
 
     nfe_dirs = _resolve_nfe_dirs(generated_root, args.nfe_values)
     if not nfe_dirs:
@@ -220,6 +223,13 @@ def main():
         "generated_root": str(generated_root),
         "source_mode": source_mode,
         "task": "p(image | semantic_mask)",
+        "condition_mode": None if backbone is None else getattr(backbone, "condition_mode", None),
+        "condition_source": None if backbone is None else getattr(backbone, "condition_source", None),
+        "use_boundary_condition": None if backbone is None else bool(getattr(backbone, "use_boundary_condition", False)),
+        "boundary_mode": None if backbone is None else getattr(backbone, "boundary_mode", None),
+        "use_semantic_condition_encoder": None
+        if backbone is None
+        else bool(getattr(backbone, "use_semantic_condition_encoder", False)),
         "nfe_values": [int(value) for value, _ in nfe_dirs],
         "primary_readout": [
             "layout faithfulness to input mask",

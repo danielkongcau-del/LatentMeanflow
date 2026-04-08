@@ -16,6 +16,9 @@ It only changes the semantic-mask condition path:
 - `input_concat`
 - `pyramid_concat`
 - `pyramid_concat + boundary`
+- `fullres_mask + pyramid_concat`
+- `fullres_mask + pyramid_concat + boundary`
+- `fullres_mask + pyramid_concat + boundary + encoder`
 
 ## Fixed Comparison Matrix
 
@@ -24,6 +27,9 @@ Use the same image-only tokenizer checkpoint and the same training budget for:
 - `configs/ablations/latent_alphaflow_mask2image_unet_input_concat.yaml`
 - `configs/ablations/latent_alphaflow_mask2image_unet_pyramid.yaml`
 - `configs/ablations/latent_alphaflow_mask2image_unet_pyramid_boundary.yaml`
+- `configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid.yaml`
+- `configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid_boundary.yaml`
+- `configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid_boundary_encoder.yaml`
 
 Use the base `64x64x4` image-only tokenizer first. The `f=8` tokenizer route is
 a follow-up, not the default conditioning benchmark.
@@ -65,6 +71,30 @@ python scripts/train_mask_conditioned_image.py \
 python scripts/train_mask_conditioned_image.py \
   --objective alphaflow \
   --config configs/ablations/latent_alphaflow_mask2image_unet_pyramid_boundary.yaml \
+  --tokenizer-ckpt /path/to/image_tokenizer.ckpt \
+  --gpus 0,1
+```
+
+```bash
+python scripts/train_mask_conditioned_image.py \
+  --objective alphaflow \
+  --config configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid.yaml \
+  --tokenizer-ckpt /path/to/image_tokenizer.ckpt \
+  --gpus 0,1
+```
+
+```bash
+python scripts/train_mask_conditioned_image.py \
+  --objective alphaflow \
+  --config configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid_boundary.yaml \
+  --tokenizer-ckpt /path/to/image_tokenizer.ckpt \
+  --gpus 0,1
+```
+
+```bash
+python scripts/train_mask_conditioned_image.py \
+  --objective alphaflow \
+  --config configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid_boundary_encoder.yaml \
   --tokenizer-ckpt /path/to/image_tokenizer.ckpt \
   --gpus 0,1
 ```

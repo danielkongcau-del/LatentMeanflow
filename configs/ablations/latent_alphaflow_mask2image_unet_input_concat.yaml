@@ -13,6 +13,7 @@ model:
     monitor: val/base_error_mean
     mask_condition_key: mask_onehot
     mask_index_key: mask_index
+    condition_source: latent_resized_mask
     semantic_mask_label_spec_path: configs/label_specs/remote_semantic.yaml
     backbone_config:
       target: latent_meanflow.models.backbones.latent_interval_unet.LatentIntervalUNet
@@ -29,6 +30,7 @@ model:
         resblock_updown: true
         time_conditioning: t_delta
         condition_mode: input_concat
+        condition_source: latent_resized_mask
     objective_config:
       target: latent_meanflow.objectives.alphaflow.AlphaFlowObjective
       params:

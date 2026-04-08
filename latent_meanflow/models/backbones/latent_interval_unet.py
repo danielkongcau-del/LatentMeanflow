@@ -72,8 +72,33 @@ def _make_time_embed_mlp(input_dim, output_dim):
     )
 
 
-def _make_condition_projector(in_channels, out_channels, dims=2):
-    return _conv_nd(dims, in_channels, out_channels, 1)
+def _make_condition_projector(
+    in_channels,
+    out_channels,
+    dims=2,
+    *,
+    use_semantic_condition_encoder=False,
+    hidden_channels=None,
+    num_layers=2,
+):
+    if not use_semantic_condition_encoder:
+        return _conv_nd(dims, in_channels, out_channels, 1)
+
+    num_layers = max(1, int(num_layers))
+    hidden_channels = int(hidden_channels if hidden_channels is not None else min(max(in_channels, 16), out_channels))
+    layers = []
+    current_channels = int(in_channels)
+    for _ in range(num_layers - 1):
+        layers.extend(
+            [
+                _conv_nd(dims, current_channels, hidden_channels, 3, padding=1),
+                _normalization(hidden_channels),
+                nn.SiLU(),
+            ]
+        )
+        current_channels = hidden_channels
+    layers.append(_conv_nd(dims, current_channels, out_channels, 3, padding=1))
+    return nn.Sequential(*layers)
 
 
 class TimestepBlock(nn.Module):
@@ -312,7 +337,12 @@ class LatentIntervalUNet(nn.Module):
         resblock_updown=True,
         spatial_condition_channels=0,
         condition_mode="input_concat",
+        condition_source="latent_resized_mask",
         use_boundary_condition=False,
+        boundary_mode="binary",
+        use_semantic_condition_encoder=False,
+        condition_encoder_hidden_channels=None,
+        condition_encoder_num_layers=2,
         t_time_scale=1.0,
         delta_time_scale=1.0,
         r_time_scale=1.0,
@@ -336,7 +366,14 @@ class LatentIntervalUNet(nn.Module):
         self.use_scale_shift_norm = bool(use_scale_shift_norm)
         self.resblock_updown = bool(resblock_updown)
         self.condition_mode = str(condition_mode)
+        self.condition_source = str(condition_source)
         self.use_boundary_condition = bool(use_boundary_condition)
+        self.boundary_mode = str(boundary_mode)
+        self.use_semantic_condition_encoder = bool(use_semantic_condition_encoder)
+        self.condition_encoder_hidden_channels = (
+            None if condition_encoder_hidden_channels is None else int(condition_encoder_hidden_channels)
+        )
+        self.condition_encoder_num_layers = int(condition_encoder_num_layers)
         self.t_time_scale = float(t_time_scale)
         self.delta_time_scale = float(delta_time_scale)
         self.r_time_scale = float(r_time_scale)
@@ -349,6 +386,15 @@ class LatentIntervalUNet(nn.Module):
             raise ValueError(
                 f"Unsupported condition_mode: {self.condition_mode}. "
                 "Use 'input_concat' or 'pyramid_concat'."
+            )
+        if self.condition_source not in {"latent_resized_mask", "fullres_mask"}:
+            raise ValueError(
+                f"Unsupported condition_source: {self.condition_source}. "
+                "Use 'latent_resized_mask' or 'fullres_mask'."
+            )
+        if self.boundary_mode not in {"binary", "per_class"}:
+            raise ValueError(
+                f"Unsupported boundary_mode: {self.boundary_mode}. Use 'binary' or 'per_class'."
             )
         if not self.channel_mult:
             raise ValueError("channel_mult must not be empty")
@@ -364,7 +410,12 @@ class LatentIntervalUNet(nn.Module):
             if not math.isfinite(value):
                 raise ValueError(f"{name} must be finite, got {value!r}")
 
-        extra_boundary_channels = 1 if self.use_boundary_condition and self.spatial_condition_channels > 0 else 0
+        if self.use_semantic_condition_encoder and self.condition_encoder_num_layers < 1:
+            raise ValueError("condition_encoder_num_layers must be >= 1")
+
+        extra_boundary_channels = 0
+        if self.use_boundary_condition and self.spatial_condition_channels > 0:
+            extra_boundary_channels = 1 if self.boundary_mode == "binary" else self.spatial_condition_channels
         self.raw_condition_channels = self.spatial_condition_channels + extra_boundary_channels
         self.model_in_channels = (
             self.in_channels + self.raw_condition_channels
@@ -397,7 +448,14 @@ class LatentIntervalUNet(nn.Module):
         ds = 1
         if self.condition_mode == "pyramid_concat" and self.raw_condition_channels > 0:
             self.input_condition_projectors.append(
-                _make_condition_projector(self.raw_condition_channels, ch, dims=self.dims)
+                _make_condition_projector(
+                    self.raw_condition_channels,
+                    ch,
+                    dims=self.dims,
+                    use_semantic_condition_encoder=self.use_semantic_condition_encoder,
+                    hidden_channels=self.condition_encoder_hidden_channels,
+                    num_layers=self.condition_encoder_num_layers,
+                )
             )
             self.input_condition_scales.append(1)
         for level, mult in enumerate(self.channel_mult):
@@ -426,7 +484,14 @@ class LatentIntervalUNet(nn.Module):
                 self.input_blocks.append(TimestepEmbedSequential(*layers))
                 if self.condition_mode == "pyramid_concat" and self.raw_condition_channels > 0:
                     self.input_condition_projectors.append(
-                        _make_condition_projector(self.raw_condition_channels, ch, dims=self.dims)
+                        _make_condition_projector(
+                            self.raw_condition_channels,
+                            ch,
+                            dims=self.dims,
+                            use_semantic_condition_encoder=self.use_semantic_condition_encoder,
+                            hidden_channels=self.condition_encoder_hidden_channels,
+                            num_layers=self.condition_encoder_num_layers,
+                        )
                     )
                     self.input_condition_scales.append(ds)
                 input_block_chans.append(ch)
@@ -449,7 +514,14 @@ class LatentIntervalUNet(nn.Module):
                 next_ds = ds * 2
                 if self.condition_mode == "pyramid_concat" and self.raw_condition_channels > 0:
                     self.input_condition_projectors.append(
-                        _make_condition_projector(self.raw_condition_channels, ch, dims=self.dims)
+                        _make_condition_projector(
+                            self.raw_condition_channels,
+                            ch,
+                            dims=self.dims,
+                            use_semantic_condition_encoder=self.use_semantic_condition_encoder,
+                            hidden_channels=self.condition_encoder_hidden_channels,
+                            num_layers=self.condition_encoder_num_layers,
+                        )
                     )
                     self.input_condition_scales.append(next_ds)
                 input_block_chans.append(out_channels)
@@ -484,7 +556,12 @@ class LatentIntervalUNet(nn.Module):
         self.middle_condition_scale = None
         if self.condition_mode == "pyramid_concat" and self.raw_condition_channels > 0:
             self.middle_condition_projector = _make_condition_projector(
-                self.raw_condition_channels, ch, dims=self.dims
+                self.raw_condition_channels,
+                ch,
+                dims=self.dims,
+                use_semantic_condition_encoder=self.use_semantic_condition_encoder,
+                hidden_channels=self.condition_encoder_hidden_channels,
+                num_layers=self.condition_encoder_num_layers,
             )
             self.middle_condition_scale = ds
 
@@ -537,7 +614,14 @@ class LatentIntervalUNet(nn.Module):
                 self.output_blocks.append(TimestepEmbedSequential(*layers))
                 if self.condition_mode == "pyramid_concat" and self.raw_condition_channels > 0:
                     self.output_condition_projectors.append(
-                        _make_condition_projector(self.raw_condition_channels, ch, dims=self.dims)
+                        _make_condition_projector(
+                            self.raw_condition_channels,
+                            ch,
+                            dims=self.dims,
+                            use_semantic_condition_encoder=self.use_semantic_condition_encoder,
+                            hidden_channels=self.condition_encoder_hidden_channels,
+                            num_layers=self.condition_encoder_num_layers,
+                        )
                     )
                     self.output_condition_scales.append(next_ds)
                 ds = next_ds
@@ -580,12 +664,14 @@ class LatentIntervalUNet(nn.Module):
     def _resolve_condition_inputs(self, condition, z_t):
         class_condition = None
         spatial_condition = None
+        spatial_fullres_condition = None
         if condition is None:
-            return class_condition, spatial_condition
+            return class_condition, spatial_condition, spatial_fullres_condition
 
         if isinstance(condition, dict):
             class_condition = condition.get("class_label")
             spatial_condition = condition.get("spatial")
+            spatial_fullres_condition = condition.get("spatial_fullres")
         elif isinstance(condition, torch.Tensor) and condition.ndim == z_t.ndim:
             spatial_condition = condition
         else:
@@ -632,16 +718,53 @@ class LatentIntervalUNet(nn.Module):
                     mode="nearest",
                 )
             spatial_condition = spatial_condition.to(device=z_t.device, dtype=z_t.dtype)
-        elif self.spatial_condition_channels > 0:
+        if spatial_fullres_condition is not None:
+            if self.spatial_condition_channels <= 0:
+                raise ValueError(
+                    "Full-resolution spatial conditioning was provided but spatial_condition_channels is not configured"
+                )
+            if not isinstance(spatial_fullres_condition, torch.Tensor) or spatial_fullres_condition.ndim != z_t.ndim:
+                raise ValueError(
+                    f"Expected full-resolution spatial condition tensor with shape [B, C, H, W], got {type(spatial_fullres_condition)} "
+                    f"and shape {getattr(spatial_fullres_condition, 'shape', None)}"
+                )
+            if spatial_fullres_condition.shape[0] != z_t.shape[0]:
+                raise ValueError(
+                    f"Full-resolution spatial condition batch size mismatch: got {spatial_fullres_condition.shape[0]}, "
+                    f"expected {z_t.shape[0]}"
+                )
+            if spatial_fullres_condition.shape[1] != self.spatial_condition_channels:
+                raise ValueError(
+                    f"Full-resolution spatial condition channel mismatch: got {spatial_fullres_condition.shape[1]}, "
+                    f"expected {self.spatial_condition_channels}"
+                )
+            spatial_fullres_condition = spatial_fullres_condition.to(device=z_t.device, dtype=z_t.dtype)
+        if self.spatial_condition_channels > 0 and spatial_condition is None and spatial_fullres_condition is None:
             raise ValueError(
                 "This backbone expects a spatial condition tensor, but condition=None was provided."
             )
 
-        return class_condition, spatial_condition
+        return class_condition, spatial_condition, spatial_fullres_condition
+
+    def _select_condition_source(self, spatial_condition, spatial_fullres_condition):
+        if self.condition_source == "fullres_mask" and spatial_fullres_condition is not None:
+            return spatial_fullres_condition
+        if spatial_condition is not None:
+            return spatial_condition
+        return spatial_fullres_condition
 
     def _compute_boundary_condition(self, spatial_condition):
         if not self.use_boundary_condition or spatial_condition is None:
             return None
+        if self.boundary_mode == "per_class":
+            boundary = torch.zeros_like(spatial_condition)
+            vertical = torch.abs(spatial_condition[:, :, 1:, :] - spatial_condition[:, :, :-1, :])
+            horizontal = torch.abs(spatial_condition[:, :, :, 1:] - spatial_condition[:, :, :, :-1])
+            boundary[:, :, 1:, :] = torch.maximum(boundary[:, :, 1:, :], vertical)
+            boundary[:, :, :-1, :] = torch.maximum(boundary[:, :, :-1, :], vertical)
+            boundary[:, :, :, 1:] = torch.maximum(boundary[:, :, :, 1:], horizontal)
+            boundary[:, :, :, :-1] = torch.maximum(boundary[:, :, :, :-1], horizontal)
+            return boundary.clamp_(0.0, 1.0)
         mask_index = spatial_condition.argmax(dim=1, keepdim=True)
         boundary = torch.zeros_like(mask_index, dtype=spatial_condition.dtype)
         vertical = (mask_index[:, :, 1:, :] != mask_index[:, :, :-1, :]).to(spatial_condition.dtype)
@@ -706,13 +829,16 @@ class LatentIntervalUNet(nn.Module):
         return pyramid
 
     def forward(self, z_t, t=None, condition=None, r=None, delta_t=None):
-        class_condition, spatial_condition = self._resolve_condition_inputs(condition, z_t)
+        class_condition, spatial_condition, spatial_fullres_condition = self._resolve_condition_inputs(
+            condition, z_t
+        )
         emb = self._resolve_time_embedding(t=t, r=r, delta_t=delta_t)
         if class_condition is not None:
             emb = emb + self.cond_embed(class_condition.long())
 
         hs = []
-        raw_condition = self._augment_spatial_condition(spatial_condition)
+        condition_source = self._select_condition_source(spatial_condition, spatial_fullres_condition)
+        raw_condition = self._augment_spatial_condition(condition_source)
         condition_pyramid = None
         if raw_condition is not None and self.condition_mode == "pyramid_concat":
             condition_pyramid = self._build_condition_pyramid(raw_condition, z_t)
@@ -720,7 +846,8 @@ class LatentIntervalUNet(nn.Module):
         if raw_condition is None or self.condition_mode == "pyramid_concat":
             h = z_t
         else:
-            h = torch.cat([z_t, raw_condition], dim=1)
+            resized_condition = self._resize_condition_for_scale(raw_condition, z_t.shape[-2:])
+            h = torch.cat([z_t, resized_condition], dim=1)
         for block_idx, module in enumerate(self.input_blocks):
             h = module(h, emb)
             if condition_pyramid is not None:

@@ -28,6 +28,9 @@ CONFIGS = [
     REPO_ROOT / "configs" / "ablations" / "latent_alphaflow_mask2image_unet_input_concat.yaml",
     REPO_ROOT / "configs" / "ablations" / "latent_alphaflow_mask2image_unet_pyramid.yaml",
     REPO_ROOT / "configs" / "ablations" / "latent_alphaflow_mask2image_unet_pyramid_boundary.yaml",
+    REPO_ROOT / "configs" / "ablations" / "latent_alphaflow_mask2image_unet_fullres_pyramid.yaml",
+    REPO_ROOT / "configs" / "ablations" / "latent_alphaflow_mask2image_unet_fullres_pyramid_boundary.yaml",
+    REPO_ROOT / "configs" / "ablations" / "latent_alphaflow_mask2image_unet_fullres_pyramid_boundary_encoder.yaml",
 ]
 
 
@@ -75,8 +78,14 @@ def main():
         latent_h, latent_w = _latent_shape_from_tokenizer_config(tokenizer_config_path)
         z_t = torch.randn(2, 4, latent_h, latent_w, requires_grad=True)
         mask = torch.randn(2, spatial_condition_channels, latent_h, latent_w)
+        fullres_size = int(OmegaConf.select(config, "data.params.train.params.size", default=latent_h))
+        fullres_mask = torch.randn(2, spatial_condition_channels, fullres_size, fullres_size)
         t = torch.rand(2)
-        condition = LatentConditioning(spatial=mask)
+        condition_source = str(backbone_cfg["params"].get("condition_source", "latent_resized_mask"))
+        if condition_source == "fullres_mask":
+            condition = LatentConditioning(spatial=mask, spatial_fullres=fullres_mask)
+        else:
+            condition = LatentConditioning(spatial=mask)
         if str(OmegaConf.select(config, "model.params.objective_name")) == "fm":
             out = backbone(z_t, t=t, condition=condition)
         else:

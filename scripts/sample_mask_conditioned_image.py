@@ -409,6 +409,7 @@ def main():
         batch_size=args.batch_size,
         overlay_alpha=args.overlay_alpha,
     )
+    backbone = getattr(model, "backbone", None)
 
     summary = {
         "config": str(args.config.resolve()),
@@ -423,6 +424,13 @@ def main():
         "batch_size": int(args.batch_size),
         "nfe_values": [int(value) for value in args.nfe_values],
         "task": "p(image | semantic_mask)",
+        "condition_mode": None if backbone is None else getattr(backbone, "condition_mode", None),
+        "condition_source": None if backbone is None else getattr(backbone, "condition_source", None),
+        "use_boundary_condition": None if backbone is None else bool(getattr(backbone, "use_boundary_condition", False)),
+        "boundary_mode": None if backbone is None else getattr(backbone, "boundary_mode", None),
+        "use_semantic_condition_encoder": None
+        if backbone is None
+        else bool(getattr(backbone, "use_semantic_condition_encoder", False)),
         "results": summary_rows,
     }
 

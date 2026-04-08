@@ -43,9 +43,16 @@ class _MaskConditionedImageMixin:
         *,
         mask_condition_key="mask_onehot",
         mask_index_key="mask_index",
+        condition_source="latent_resized_mask",
     ):
         self.mask_condition_key = str(mask_condition_key)
         self.mask_index_key = str(mask_index_key)
+        self.condition_source = str(condition_source)
+        if self.condition_source not in {"latent_resized_mask", "fullres_mask"}:
+            raise ValueError(
+                f"Unsupported condition_source={self.condition_source!r}. "
+                "Expected 'latent_resized_mask' or 'fullres_mask'."
+            )
         spatial_condition_channels = int(getattr(self.backbone, "spatial_condition_channels", 0))
         if spatial_condition_channels <= 0:
             raise ValueError(
@@ -80,17 +87,17 @@ class _MaskConditionedImageMixin:
         return spatial.float().contiguous()
 
     def build_condition_from_mask_onehot(self, mask_onehot, *, device=None, dtype=torch.float32):
-        spatial = self._prepare_mask_onehot(mask_onehot)
+        fullres_spatial = self._prepare_mask_onehot(mask_onehot)
+        spatial = fullres_spatial
         if spatial.shape[-2:] != self.latent_spatial_shape:
-            spatial = F.interpolate(
-                spatial,
-                size=self.latent_spatial_shape,
-                mode="nearest",
-            )
+            spatial = F.interpolate(spatial, size=self.latent_spatial_shape, mode="nearest")
         if device is None:
             device = spatial.device
         spatial = spatial.to(device=device, dtype=dtype)
-        return LatentConditioning(spatial=spatial)
+        if self.condition_source == "latent_resized_mask":
+            return LatentConditioning(spatial=spatial)
+        fullres_spatial = fullres_spatial.to(device=device, dtype=dtype)
+        return LatentConditioning(spatial=spatial, spatial_fullres=fullres_spatial)
 
     def _get_condition(self, batch):
         if self.mask_condition_key not in batch:
@@ -109,6 +116,7 @@ class _MaskConditionedImageMixin:
             return LatentConditioning(
                 class_label=condition.get("class_label"),
                 spatial=condition.get("spatial"),
+                spatial_fullres=condition.get("spatial_fullres"),
             ).to(device=device, dtype=dtype)
         if isinstance(condition, torch.Tensor):
             return LatentConditioning(spatial=condition).to(device=device, dtype=dtype)
@@ -160,6 +168,7 @@ class MaskConditionedLatentFlowTrainer(_MaskConditionedImageMixin, LatentFlowTra
         monitor="val/loss",
         mask_condition_key="mask_onehot",
         mask_index_key="mask_index",
+        condition_source="latent_resized_mask",
         semantic_mask_label_spec_path=None,
         mask_num_classes=None,
     ):
@@ -185,7 +194,14 @@ class MaskConditionedLatentFlowTrainer(_MaskConditionedImageMixin, LatentFlowTra
         self._init_mask_conditioning(
             mask_condition_key=mask_condition_key,
             mask_index_key=mask_index_key,
+            condition_source=condition_source,
         )
+        backbone_condition_source = str(getattr(self.backbone, "condition_source", self.condition_source))
+        if backbone_condition_source != self.condition_source:
+            raise ValueError(
+                "Mask-conditioned trainer/backbone condition_source mismatch: "
+                f"trainer={self.condition_source!r}, backbone={backbone_condition_source!r}"
+            )
         self.semantic_mask_label_spec_path = semantic_mask_label_spec_path
         if getattr(self.tokenizer, "num_classes", 0) != 0:
             raise ValueError(
@@ -223,6 +239,7 @@ class MaskConditionedLatentFMTrainer(_MaskConditionedImageMixin, LatentFMTrainer
         monitor="val/fm_loss",
         mask_condition_key="mask_onehot",
         mask_index_key="mask_index",
+        condition_source="latent_resized_mask",
         semantic_mask_label_spec_path=None,
         mask_num_classes=None,
     ):
@@ -246,7 +263,14 @@ class MaskConditionedLatentFMTrainer(_MaskConditionedImageMixin, LatentFMTrainer
         self._init_mask_conditioning(
             mask_condition_key=mask_condition_key,
             mask_index_key=mask_index_key,
+            condition_source=condition_source,
         )
+        backbone_condition_source = str(getattr(self.backbone, "condition_source", self.condition_source))
+        if backbone_condition_source != self.condition_source:
+            raise ValueError(
+                "Mask-conditioned trainer/backbone condition_source mismatch: "
+                f"trainer={self.condition_source!r}, backbone={backbone_condition_source!r}"
+            )
         self.semantic_mask_label_spec_path = semantic_mask_label_spec_path
         if getattr(self.tokenizer, "num_classes", 0) != 0:
             raise ValueError(
