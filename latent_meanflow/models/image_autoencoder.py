@@ -92,6 +92,13 @@ class ImageAutoencoder(pl.LightningModule):
         self.quant_conv = nn.Conv2d(2 * encoder_config["z_channels"], 2 * self.embed_dim, kernel_size=1)
         self.post_quant_conv = nn.Conv2d(self.embed_dim, encoder_config["z_channels"], kernel_size=1)
 
+        if getattr(self.decoder, "give_pre_end", False):
+            # The project-layer RGB head consumes decoder pre-end features,
+            # so the vendor decoder tail stays unused during training.
+            for module in (self.decoder.norm_out, self.decoder.conv_out):
+                for param in module.parameters():
+                    param.requires_grad = False
+
         self.decoder_feature_channels = decoder_config["ch"] * decoder_config["ch_mult"][0]
         norm_groups = _resolve_group_norm_groups(self.decoder_feature_channels)
         self.rgb_head = nn.Sequential(
@@ -238,12 +245,15 @@ class ImageAutoencoder(pl.LightningModule):
 
     def configure_optimizers(self):
         lr = float(getattr(self, "learning_rate", 1.0e-4))
+        parameters = [
+            *list(self.encoder.parameters()),
+            *list(self.decoder.parameters()),
+            *list(self.quant_conv.parameters()),
+            *list(self.post_quant_conv.parameters()),
+            *list(self.rgb_head.parameters()),
+        ]
         optimizer = torch.optim.Adam(
-            list(self.encoder.parameters())
-            + list(self.decoder.parameters())
-            + list(self.quant_conv.parameters())
-            + list(self.post_quant_conv.parameters())
-            + list(self.rgb_head.parameters()),
+            [param for param in parameters if param.requires_grad],
             lr=lr,
             betas=(0.5, 0.9),
         )
