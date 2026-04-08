@@ -26,9 +26,9 @@ Current configs in this runbook:
 - latent FM tiny/debug: [configs/latent_fm_semantic_256_tiny.yaml](../configs/latent_fm_semantic_256_tiny.yaml)
 - latent FM baseline: [configs/latent_fm_semantic_256.yaml](../configs/latent_fm_semantic_256.yaml)
 - latent MeanFlow tiny/debug: [configs/latent_meanflow_semantic_256_tiny.yaml](../configs/latent_meanflow_semantic_256_tiny.yaml)
-- latent MeanFlow baseline: [configs/latent_meanflow_semantic_256.yaml](../configs/latent_meanflow_semantic_256.yaml)
+- latent MeanFlow legacy ConvNet baseline: [configs/latent_meanflow_semantic_256.yaml](../configs/latent_meanflow_semantic_256.yaml)
 - latent MeanFlow U-Net tiny/debug parallel path: [configs/latent_meanflow_semantic_256_unet_tiny.yaml](../configs/latent_meanflow_semantic_256_unet_tiny.yaml)
-- latent MeanFlow U-Net baseline parallel path: [configs/latent_meanflow_semantic_256_unet.yaml](../configs/latent_meanflow_semantic_256_unet.yaml)
+- latent MeanFlow default U-Net baseline path: [configs/latent_meanflow_semantic_256_unet.yaml](../configs/latent_meanflow_semantic_256_unet.yaml)
 - latent MeanFlow U-Net large parallel path: [configs/latent_meanflow_semantic_256_unet_large.yaml](../configs/latent_meanflow_semantic_256_unet_large.yaml)
 - latent MeanFlow U-Net time-scale ablations: [configs/ablations/latent_meanflow_semantic_256_unet_tscale1.yaml](../configs/ablations/latent_meanflow_semantic_256_unet_tscale1.yaml), [configs/ablations/latent_meanflow_semantic_256_unet_tscale100.yaml](../configs/ablations/latent_meanflow_semantic_256_unet_tscale100.yaml), [configs/ablations/latent_meanflow_semantic_256_unet_tscale1000.yaml](../configs/ablations/latent_meanflow_semantic_256_unet_tscale1000.yaml)
 - latent MeanFlow U-Net `(r, t)` engineering ablation: [configs/ablations/latent_meanflow_semantic_256_unet_rt_tscale100.yaml](../configs/ablations/latent_meanflow_semantic_256_unet_rt_tscale100.yaml)
@@ -245,14 +245,14 @@ Check first if it fails:
 
 ## Stage 5.5. Latent MeanFlow Baseline Training
 
-Purpose: produce the baseline MeanFlow checkpoint that Stage 6 will use for the real few-step sampling curve.
+Purpose: produce the default U-Net MeanFlow checkpoint that Stage 6 will use for the real few-step sampling curve.
 
 Train command:
 
 ```powershell
 D:\Anaconda\envs\lmf\python.exe scripts\train_latent_meanflow.py `
   --objective meanflow `
-  --config configs/latent_meanflow_semantic_256.yaml `
+  --config configs/latent_meanflow_semantic_256_unet.yaml `
   --tokenizer-config configs/autoencoder_semantic_pair_256.yaml `
   --tokenizer-ckpt logs/autoencoder/checkpoints/last.ckpt `
   --gpus 0
@@ -260,7 +260,7 @@ D:\Anaconda\envs\lmf\python.exe scripts\train_latent_meanflow.py `
 
 Expected artifacts:
 
-- a timestamped baseline run under `logs/*_latent_meanflow_semantic_256/`
+- a timestamped baseline run under `logs/*_latent_meanflow_semantic_256_unet/`
 - `checkpoints/last.ckpt` inside that baseline run
 - `semantic_images/train/*.png`
 - `semantic_images/val/*.png`
@@ -275,7 +275,7 @@ Check first if it fails:
 
 - Stage 5 tiny pilot was not actually stable
 - the tokenizer checkpoint from Stage 3 is weak
-- the run path contains `latent_meanflow_semantic_256_tiny` instead of the baseline config stem
+- the run path contains `latent_meanflow_semantic_256_tiny` or the legacy ConvNet stem instead of the default U-Net config stem
 
 ## Stage 6. MeanFlow Sampling Check at NFE = 8 / 4 / 2 / 1
 
@@ -284,13 +284,13 @@ Purpose: establish the first few-step sampling quality curve before spending tim
 Commands:
 
 ```powershell
-$meanflowBaselineRun = "logs/<timestamp>_latent_meanflow_semantic_256"
+$meanflowBaselineRun = "logs/<timestamp>_latent_meanflow_semantic_256_unet"
 $meanflowBaselineCkpt = D:\Anaconda\envs\lmf\python.exe scripts\find_checkpoint.py --run-dir $meanflowBaselineRun --selection best --monitor val/base_error_mean
 
-D:\Anaconda\envs\lmf\python.exe scripts\sample_latent_flow.py --config configs/latent_meanflow_semantic_256.yaml --ckpt $meanflowBaselineCkpt --outdir outputs/meanflow_nfe8 --n-samples 32 --nfe 8
-D:\Anaconda\envs\lmf\python.exe scripts\sample_latent_flow.py --config configs/latent_meanflow_semantic_256.yaml --ckpt $meanflowBaselineCkpt --outdir outputs/meanflow_nfe4 --n-samples 32 --nfe 4
-D:\Anaconda\envs\lmf\python.exe scripts\sample_latent_flow.py --config configs/latent_meanflow_semantic_256.yaml --ckpt $meanflowBaselineCkpt --outdir outputs/meanflow_nfe2 --n-samples 32 --nfe 2
-D:\Anaconda\envs\lmf\python.exe scripts\sample_latent_flow.py --config configs/latent_meanflow_semantic_256.yaml --ckpt $meanflowBaselineCkpt --outdir outputs/meanflow_nfe1 --n-samples 32 --nfe 1
+D:\Anaconda\envs\lmf\python.exe scripts\sample_latent_flow.py --config configs/latent_meanflow_semantic_256_unet.yaml --ckpt $meanflowBaselineCkpt --outdir outputs/meanflow_nfe8 --n-samples 32 --nfe 8
+D:\Anaconda\envs\lmf\python.exe scripts\sample_latent_flow.py --config configs/latent_meanflow_semantic_256_unet.yaml --ckpt $meanflowBaselineCkpt --outdir outputs/meanflow_nfe4 --n-samples 32 --nfe 4
+D:\Anaconda\envs\lmf\python.exe scripts\sample_latent_flow.py --config configs/latent_meanflow_semantic_256_unet.yaml --ckpt $meanflowBaselineCkpt --outdir outputs/meanflow_nfe2 --n-samples 32 --nfe 2
+D:\Anaconda\envs\lmf\python.exe scripts\sample_latent_flow.py --config configs/latent_meanflow_semantic_256_unet.yaml --ckpt $meanflowBaselineCkpt --outdir outputs/meanflow_nfe1 --n-samples 32 --nfe 1
 ```
 
 Expected artifacts:
@@ -305,13 +305,24 @@ Minimum success criteria:
 - all four NFE settings run end-to-end without NaNs or shape errors
 - `NFE=8` and `NFE=4` are visibly better than `NFE=1`
 - `NFE=2` is not catastrophically worse than `NFE=4`
-- all four runs use the baseline MeanFlow checkpoint, not the tiny/debug checkpoint
+- all four runs use the default U-Net MeanFlow checkpoint, not the tiny/debug checkpoint or the legacy ConvNet checkpoint
 
 Check first if it fails:
 
 - baseline checkpoint was not selected explicitly from a pinned run directory
 - sampler midpoint assumptions for low NFE
 - decoding artifacts that actually come from a weak tokenizer instead of the prior
+
+Legacy ConvNet fallback command:
+
+```powershell
+D:\Anaconda\envs\lmf\python.exe scripts\train_latent_meanflow.py `
+  --objective meanflow `
+  --config configs/latent_meanflow_semantic_256.yaml `
+  --tokenizer-config configs/autoencoder_semantic_pair_256.yaml `
+  --tokenizer-ckpt logs/autoencoder/checkpoints/last.ckpt `
+  --gpus 0
+```
 
 ## Parallel Backbone Experiment Path: U-Net
 
@@ -378,7 +389,8 @@ D:\Anaconda\envs\lmf\python.exe scripts\sample_latent_flow.py `
 
 Interpretation notes:
 
-- keep the ConvNet baseline as the default route while the U-Net line is being evaluated
+- the benchmark-backed U-Net route is now the default MeanFlow path
+- keep the ConvNet configs as legacy baselines for rollback and controlled comparison
 - compare ConvNet and U-Net checkpoints within the same objective family
 - do not mix `*_unet*.yaml` configs with ConvNet checkpoints or vice versa
 
@@ -479,5 +491,5 @@ shared-noise `NFE=8/4/2/1` sweep instead of ad-hoc one-step previews.
 | Tokenizer baseline | `train_semantic_autoencoder.py --config configs/autoencoder_semantic_pair_256.yaml --gpus 0 --max-epochs 100 --image-log-frequency 50` | `logs/autoencoder/checkpoints/last.ckpt` | stable `val/rgb_l1` and `val/mask_ce`, visually aligned reconstructions | weak overfit result, data path drift, LR too high |
 | Latent FM tiny pilot | `train_latent_fm.py --config configs/latent_fm_semantic_256_tiny.yaml --tokenizer-ckpt logs/autoencoder/checkpoints/last.ckpt --gpus 0` plus `sample_latent_fm.py` | `logs/*_latent_fm/` and `outputs/fm_tiny_samples/{image,mask_raw,mask_color,overlay}` | finite loss and non-collapsed paired samples | stale tokenizer ckpt, wrong latent_fm ckpt, class collapse |
 | Latent MeanFlow tiny pilot | `train_latent_meanflow.py --objective meanflow --config configs/latent_meanflow_semantic_256_tiny.yaml --tokenizer-ckpt logs/autoencoder/checkpoints/last.ckpt --gpus 0` plus `sample_latent_flow.py --config configs/latent_meanflow_semantic_256_tiny.yaml --ckpt <tiny-ckpt> --nfe 2` | `logs/*_latent_meanflow_semantic_256_tiny/` and `outputs/meanflow_tiny_samples_nfe2/{image,mask_raw,mask_color,overlay}` | finite loss and plausible paired overlays | unstable tokenizer, wrong config tier, wrong tiny ckpt |
-| Latent MeanFlow baseline | `train_latent_meanflow.py --objective meanflow --config configs/latent_meanflow_semantic_256.yaml --tokenizer-ckpt logs/autoencoder/checkpoints/last.ckpt --gpus 0` | `logs/*_latent_meanflow_semantic_256/checkpoints/last.ckpt` | baseline run is stable and produces the checkpoint for Stage 6 | tiny config run reused by mistake, weak tokenizer, stale checkpoint |
-| NFE sampling check | `sample_latent_flow.py` at `NFE=8/4/2/1` with `scripts/find_checkpoint.py --run-dir logs/<timestamp>_latent_meanflow_semantic_256 --selection best --monitor val/base_error_mean` | `outputs/meanflow_nfe{8,4,2,1}/{image,mask_raw,mask_color,overlay}` | all NFEs run, quality degrades gracefully, and the ckpt is the baseline MeanFlow ckpt | baseline/tiny ckpt mismatch, low-NFE sampler issues, tokenizer bottleneck |
+| Latent MeanFlow baseline | `train_latent_meanflow.py --objective meanflow --config configs/latent_meanflow_semantic_256_unet.yaml --tokenizer-ckpt logs/autoencoder/checkpoints/last.ckpt --gpus 0` | `logs/*_latent_meanflow_semantic_256_unet/checkpoints/last.ckpt` | default U-Net run is stable and produces the checkpoint for Stage 6 | tiny config run reused by mistake, weak tokenizer, stale checkpoint |
+| NFE sampling check | `sample_latent_flow.py` at `NFE=8/4/2/1` with `scripts/find_checkpoint.py --run-dir logs/<timestamp>_latent_meanflow_semantic_256_unet --selection best --monitor val/base_error_mean` | `outputs/meanflow_nfe{8,4,2,1}/{image,mask_raw,mask_color,overlay}` | all NFEs run, quality degrades gracefully, and the ckpt is the default U-Net MeanFlow ckpt | baseline/tiny ckpt mismatch, low-NFE sampler issues, tokenizer bottleneck |

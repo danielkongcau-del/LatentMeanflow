@@ -144,7 +144,10 @@ python scripts/train_latent_meanflow.py --objective fm --gpus 0
 
 ### Latent MeanFlow / AlphaFlow Path
 
-Train the latent MeanFlow prior:
+Train the default latent MeanFlow prior. The default `meanflow` route now
+points to the U-Net baseline config because the seed-matched ConvNet vs U-Net
+benchmark showed the U-Net backbone was clearly better at low-NFE sampling
+without regressing at `NFE=8`.
 
 ```bash
 python scripts/train_latent_meanflow.py --objective meanflow --gpus 0
@@ -156,16 +159,21 @@ Run a tiny/debug MeanFlow pilot with the dedicated tiny config:
 python scripts/train_latent_meanflow.py --objective meanflow --config configs/latent_meanflow_semantic_256_tiny.yaml --gpus 0
 ```
 
-Run the first real MeanFlow baseline with the baseline config:
+Run the default U-Net MeanFlow baseline explicitly:
+
+```bash
+python scripts/train_latent_meanflow.py --objective meanflow --config configs/latent_meanflow_semantic_256_unet.yaml --gpus 0
+```
+
+Keep the old ConvNet MeanFlow baseline available as a legacy backbone baseline:
 
 ```bash
 python scripts/train_latent_meanflow.py --objective meanflow --config configs/latent_meanflow_semantic_256.yaml --gpus 0
 ```
 
-Parallel backbone experiment path: U-Net MeanFlow. These configs keep the
-tokenizer, data contract, sampler, and objective recipe aligned with the
-project ConvNet route, but swap only the latent field backbone. They are
-side-by-side ablations, not the default MeanFlow path.
+Parallel backbone experiment path: U-Net MeanFlow. The benchmark-backed U-Net
+baseline is now the default MeanFlow route. The old ConvNet configs are kept as
+legacy baselines for rollback and comparison.
 
 Run the U-Net tiny/debug pilot:
 
@@ -314,16 +322,16 @@ python scripts/sample_latent_flow.py --config configs/latent_alphaflow_semantic_
 For MeanFlow, keep tiny/debug and baseline checkpoints separate. The training script now tags runs with the config stem, so use the helper below to resolve the baseline checkpoint before sampling the final `NFE` curve:
 
 ```bash
-python scripts/find_checkpoint.py --config configs/latent_meanflow_semantic_256.yaml
-python scripts/sample_latent_flow.py --config configs/latent_meanflow_semantic_256.yaml --ckpt <baseline-meanflow-ckpt> --nfe 2
+python scripts/find_checkpoint.py --config configs/latent_meanflow_semantic_256_unet.yaml
+python scripts/sample_latent_flow.py --config configs/latent_meanflow_semantic_256_unet.yaml --ckpt <baseline-meanflow-ckpt> --nfe 2
 ```
 
-For the parallel U-Net route, sample with the matching U-Net config stem so the
-checkpoint safety check resolves the correct run family:
+For the legacy ConvNet fallback route, keep the matching ConvNet config stem so
+the checkpoint safety check resolves the correct run family:
 
 ```bash
-python scripts/find_checkpoint.py --config configs/latent_meanflow_semantic_256_unet.yaml
-python scripts/sample_latent_flow.py --config configs/latent_meanflow_semantic_256_unet.yaml --ckpt <baseline-meanflow-unet-ckpt> --nfe 2
+python scripts/find_checkpoint.py --config configs/latent_meanflow_semantic_256.yaml
+python scripts/sample_latent_flow.py --config configs/latent_meanflow_semantic_256.yaml --ckpt <legacy-convnet-meanflow-ckpt> --nfe 2
 python scripts/find_checkpoint.py --config configs/latent_alphaflow_semantic_256_unet.yaml
 python scripts/sample_latent_flow.py --config configs/latent_alphaflow_semantic_256_unet.yaml --ckpt <baseline-alphaflow-unet-ckpt> --nfe 2
 ```
@@ -369,9 +377,9 @@ Config intent:
 
 - `configs/latent_alphaflow_semantic_256_smoke.yaml`: smoke
 - `configs/latent_fm_semantic_256.yaml`: project baseline
-- `configs/latent_meanflow_semantic_256.yaml`: paper-like MeanFlow config
+- `configs/latent_meanflow_semantic_256.yaml`: legacy ConvNet MeanFlow baseline
 - `configs/latent_meanflow_semantic_256_unet_tiny.yaml`: tiny/debug U-Net MeanFlow parallel path
-- `configs/latent_meanflow_semantic_256_unet.yaml`: U-Net MeanFlow baseline parallel path
+- `configs/latent_meanflow_semantic_256_unet.yaml`: default MeanFlow backbone path after the benchmark-backed promotion
 - `configs/latent_meanflow_semantic_256_unet_large.yaml`: U-Net MeanFlow large parallel path
 - `configs/ablations/latent_meanflow_semantic_256_unet_tscale{1,100,1000}.yaml`: engineering-only U-Net time-scale ablations
 - `configs/ablations/latent_meanflow_semantic_256_unet_rt_tscale100.yaml`: engineering-only `(r, t)` conditioning ablation
@@ -392,7 +400,8 @@ Config intent:
 - The FM rectified path follows `z_t = (1 - t) x + t eps` and `v_t = eps - x`.
 - The MeanFlow implementation uses JVP with tangent `(v, 0, 1)` and `t_delta` conditioning by default.
 - The paper-like MeanFlow config uses `logit_normal(-0.4, 1.0)`, `border_fm_ratio=0.75`, and adaptive power `1.0`.
-- The parallel U-Net MeanFlow configs keep the same paper-like MeanFlow recipe and change only the backbone family.
+- The default MeanFlow route now points to the U-Net baseline because the pinned benchmark protocol showed it beat the ConvNet baseline at `NFE=4/2` without regressing at `NFE=8`.
+- The legacy ConvNet MeanFlow baseline is still kept for rollback and comparison.
 - The U-Net time-scale configs under `configs/ablations/` are engineering-only ablations of the scalar embedding input scale; they do not change the objective and they are not paper-equivalent claims.
 - The project AlphaFlow baseline uses the alpha curriculum and `border_fm_ratio=0.25`; it does not reinterpret that ratio as random `alpha=1` overrides.
 - In the current AlphaFlow implementation, `alpha=0` samples fall back to MeanFlow `paper_like` weighting while `alpha>0` samples use `alpha_adaptive_exact`.
