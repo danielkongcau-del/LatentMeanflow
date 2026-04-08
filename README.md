@@ -337,10 +337,19 @@ Evaluate the generated images against ground truth sanity metrics:
 python scripts/eval_mask_conditioned_image.py --config configs/latent_alphaflow_mask2image_unet.yaml --ckpt <best-ckpt> --outdir outputs/mask_conditioned_eval/example --split validation --seed 23 --nfe-values 8 4 2 1
 ```
 
+Evaluate layout faithfulness with a fixed segmentation teacher. This is the
+primary research-style protocol for `p(image | semantic_mask)`:
+
+```bash
+python scripts/eval_mask_layout_faithfulness.py --config configs/latent_alphaflow_mask2image_unet.yaml --ckpt <best-ckpt> --outdir outputs/mask_conditioned_layout_eval/example --split validation --seed 23 --nfe-values 8 4 2 1 --teacher-hf-model <hf-teacher-model-id-or-local-path>
+```
+
 For the full run order, sampling protocol, and success criteria, use
 [docs/mask_conditioned_image_plan.md](docs/mask_conditioned_image_plan.md).
 For the condition-path comparison protocol, use
 [docs/mask_conditioned_renderer_benchmark.md](docs/mask_conditioned_renderer_benchmark.md).
+For the fixed layout-faithfulness evaluation protocol, use
+[docs/mask_conditioned_eval_protocol.md](docs/mask_conditioned_eval_protocol.md).
 
 ### Latent FM Path
 

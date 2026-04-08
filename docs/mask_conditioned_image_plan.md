@@ -261,6 +261,10 @@ task. They do not replace the actual first-look readout:
 
 PSNR / SSIM are not the primary metrics for this route.
 
+For the primary teacher-aligned layout metrics, use
+[docs/mask_conditioned_eval_protocol.md](docs/mask_conditioned_eval_protocol.md)
+and `scripts/eval_mask_layout_faithfulness.py`.
+
 ## Minimal Success Criteria
 
 ### Tiny Overfit

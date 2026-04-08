@@ -127,7 +127,7 @@ Each run must still save:
 ## Evaluation Protocol
 
 ```bash
-python scripts/eval_mask_conditioned_image.py \
+python scripts/eval_mask_layout_faithfulness.py \
   --config configs/ablations/latent_alphaflow_mask2image_unet_pyramid.yaml \
   --ckpt <best-ckpt> \
   --outdir outputs/mask_conditioned_renderer_benchmark/pyramid_eval \
@@ -135,14 +135,16 @@ python scripts/eval_mask_conditioned_image.py \
   --seed 23 \
   --n-samples 32 \
   --batch-size 4 \
-  --nfe-values 8 4 2 1
+  --nfe-values 8 4 2 1 \
+  --teacher-hf-model <hf-teacher-model-id-or-local-path>
 ```
 
-The first-pass decision rule is still primarily visual:
+The primary decision rule is teacher-aligned layout faithfulness:
 
-- does the generated image obey the semantic layout?
-- are narrow roads, ditches, levees, and field boundaries preserved?
-- is `NFE=4/2` stable rather than collapsing into texture soup?
+- `teacher_miou`
+- `boundary_f1`
+- `layout_pixel_accuracy`
+- `small_region_miou`
 
 `L1` and `LPIPS` to ground truth remain sanity-only metrics because
 `image | semantic_mask` is one-to-many.
