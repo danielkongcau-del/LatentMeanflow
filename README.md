@@ -188,6 +188,75 @@ python scripts/train_latent_meanflow.py --objective meanflow --config configs/la
 python scripts/train_latent_meanflow.py --objective alphaflow --config configs/latent_alphaflow_semantic_f8_unet.yaml --tokenizer-config configs/autoencoder_semantic_pair_f8_256.yaml --tokenizer-ckpt /path/to/f8_tokenizer.ckpt --gpus 0
 ```
 
+### Image-Only Tokenizer Path
+
+The project-layer image-only tokenizer is a parallel route for future
+`p(image | mask)` work.
+
+Unlike the joint semantic tokenizer:
+
+- the encoder only sees RGB image
+- the semantic mask does not enter tokenizer latent `z`
+- the mask is intended to stay outside the tokenizer and be injected later as
+  an external condition to a mask-conditioned latent prior
+
+This route still reuses the current paired dataset loader, but only reads the
+RGB image tensor from each sample. It is a project-layer image tokenizer, not
+an SD-VAE-equivalent claim. The downstream mask-conditioned latent prior route
+is planned and not implemented yet in this repository.
+
+Base image-only geometry:
+
+- `configs/autoencoder_image_256.yaml`
+- `configs/autoencoder_image_24gb_lpips_256.yaml`
+
+both produce a `64x64x4` latent from a `256x256` input.
+
+Stronger image-only `f=8` geometry:
+
+- `configs/autoencoder_image_f8_256.yaml`
+- `configs/autoencoder_image_f8_24gb_lpips_256.yaml`
+
+both produce a `32x32x4` latent from a `256x256` input.
+
+Train the base image-only tokenizer:
+
+```bash
+python scripts/train_image_autoencoder.py --config configs/autoencoder_image_256.yaml --gpus 0
+```
+
+Train the stronger image-only `f=8` tokenizer:
+
+```bash
+python scripts/train_image_autoencoder.py --config configs/autoencoder_image_f8_256.yaml --gpus 0
+```
+
+Train the LPIPS-enabled image-only variants:
+
+```bash
+python scripts/train_image_autoencoder.py --config configs/autoencoder_image_24gb_lpips_256.yaml --gpus 0
+python scripts/train_image_autoencoder.py --config configs/autoencoder_image_f8_24gb_lpips_256.yaml --gpus 0
+```
+
+Evaluate one image-only tokenizer checkpoint and write JSON + markdown
+summaries:
+
+```bash
+python scripts/eval_image_tokenizer.py --config configs/autoencoder_image_256.yaml --ckpt /path/to/image_tokenizer.ckpt --outdir outputs/image_tokenizer_eval/base
+```
+
+Compare the stronger image-only `f=8` tokenizer against the base image-only
+tokenizer on the same split and batches:
+
+```bash
+python scripts/eval_image_tokenizer.py \
+  --config configs/autoencoder_image_f8_256.yaml \
+  --ckpt /path/to/image_tokenizer_f8.ckpt \
+  --reference-config configs/autoencoder_image_256.yaml \
+  --reference-ckpt /path/to/image_tokenizer_base.ckpt \
+  --outdir outputs/image_tokenizer_eval/f8_vs_base
+```
+
 ### Latent FM Path
 
 Train the latent flow-matching prior on semantic tokenizer latents:
@@ -498,6 +567,10 @@ Config intent:
 - `configs/autoencoder_semantic_pair_24gb_lpips_256.yaml`: current semantic tokenizer baseline with LPIPS and `64x64x4` latents
 - `configs/autoencoder_semantic_pair_f8_256.yaml`: stronger semantic tokenizer candidate with `32x32x4` latents
 - `configs/autoencoder_semantic_pair_f8_24gb_lpips_256.yaml`: stronger `f=8` tokenizer candidate with LPIPS
+- `configs/autoencoder_image_256.yaml`: project-layer image-only tokenizer baseline with `64x64x4` latents for future `p(image | mask)` work
+- `configs/autoencoder_image_24gb_lpips_256.yaml`: image-only tokenizer baseline with LPIPS and `64x64x4` latents
+- `configs/autoencoder_image_f8_256.yaml`: stronger image-only tokenizer candidate with `32x32x4` latents
+- `configs/autoencoder_image_f8_24gb_lpips_256.yaml`: stronger image-only `f=8` tokenizer candidate with LPIPS
 - `configs/latent_meanflow_semantic_256.yaml`: legacy ConvNet MeanFlow baseline
 - `configs/latent_meanflow_semantic_256_unet_tiny.yaml`: tiny/debug U-Net MeanFlow parallel path
 - `configs/latent_meanflow_semantic_256_unet.yaml`: default MeanFlow backbone path after the benchmark-backed promotion

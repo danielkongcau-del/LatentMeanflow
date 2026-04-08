@@ -1,0 +1,74 @@
+model:
+  base_learning_rate: 1.0e-4
+  target: latent_meanflow.models.image_autoencoder.ImageAutoencoder
+  params:
+    # Full-width image-only tokenizer tuned for 24 GB-class single-GPU runs.
+    #
+    # This route keeps the image-only latent geometry fixed at 64x64x4 but adds
+    # an RGB LPIPS term to improve sharpness before downstream mask-conditioned
+    # image-prior experiments.
+    monitor: "val/total_loss"
+    embed_dim: 4
+    sample_posterior: true
+    lossconfig:
+      target: latent_meanflow.models.image_autoencoder.ImageAutoencoderLoss
+      params:
+        rgb_l1_weight: 1.0
+        rgb_lpips_weight: 0.1
+        kl_weight: 1.0e-6
+    ddconfig:
+      double_z: true
+      z_channels: 4
+      resolution: 256
+      in_channels: 3
+      out_ch: 3
+      ch: 128
+      ch_mult: [1, 2, 4]
+      num_res_blocks: 2
+      attn_resolutions: []
+      dropout: 0.0
+
+data:
+  target: main.DataModuleFromConfig
+  params:
+    batch_size: 1
+    num_workers: 4
+    wrap: false
+    train:
+      target: latent_meanflow.data.semantic_pair.MultiSemanticImageMaskPairDataset
+      params:
+        roots:
+          - data/remote
+        split: train
+        size: 256
+        image_dir: images
+        mask_dir: masks
+        gray_to_class_id: configs/label_specs/remote_semantic.yaml
+        ignore_index: -1
+    validation:
+      target: latent_meanflow.data.semantic_pair.MultiSemanticImageMaskPairDataset
+      params:
+        roots:
+          - data/remote
+        split: val
+        size: 256
+        image_dir: images
+        mask_dir: masks
+        gray_to_class_id: configs/label_specs/remote_semantic.yaml
+        ignore_index: -1
+
+lightning:
+  callbacks:
+    image_logger:
+      target: latent_meanflow.callbacks.semantic_logger.SemanticPairImageLogger
+      params:
+        disabled: false
+        batch_frequency: 200
+        increase_log_steps: false
+        max_images: 4
+        latest_only: true
+        ignore_index: -1
+  trainer:
+    benchmark: false
+    num_sanity_val_steps: 0
+    strategy: ddp_find_unused_parameters_false
