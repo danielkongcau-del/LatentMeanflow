@@ -8,7 +8,7 @@ Usage:
 
 Environment variables:
   PYTHON_BIN            Python executable inside the lmf environment. Default: python
-  CONFIG                Sampling config path. Default: configs/latent_meanflow_semantic_256.yaml
+  CONFIG                Sampling config path. Default: configs/latent_meanflow_semantic_256_unet.yaml
   CKPT                  Optional explicit checkpoint path. Default: auto-resolve with scripts/find_checkpoint.py
   OUTDIR                Output directory. Default: outputs/meanflow_samples
   N_SAMPLES             Number of samples. Default: 32
@@ -26,7 +26,7 @@ Examples:
   ./scripts/sample_meanflow.sh
   NFE=8 OUTDIR=outputs/meanflow_nfe8 ./scripts/sample_meanflow.sh
   CONFIG=configs/latent_meanflow_semantic_256_tiny.yaml OUTDIR=outputs/meanflow_tiny_samples NFE=2 ./scripts/sample_meanflow.sh
-  CKPT=logs/2026-04-07T12-00-00_latent_meanflow_semantic_256/checkpoints/last.ckpt ./scripts/sample_meanflow.sh
+  CKPT=logs/2026-04-07T12-00-00_latent_meanflow_semantic_256_unet/checkpoints/last.ckpt ./scripts/sample_meanflow.sh
 EOF
 }
 
@@ -40,7 +40,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
 
 PYTHON_BIN="${PYTHON_BIN:-python}"
-CONFIG="${CONFIG:-configs/latent_meanflow_semantic_256.yaml}"
+CONFIG="${CONFIG:-configs/latent_meanflow_semantic_256_unet.yaml}"
 CKPT="${CKPT:-}"
 OUTDIR="${OUTDIR:-outputs/meanflow_samples}"
 N_SAMPLES="${N_SAMPLES:-32}"

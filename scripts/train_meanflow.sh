@@ -9,7 +9,7 @@ Usage:
 Environment variables:
   PYTHON_BIN            Python executable inside the lmf environment. Default: python
   OBJECTIVE             One of fm, meanflow, alphaflow. Default: meanflow
-  CONFIG                Training config path. Default: configs/latent_meanflow_semantic_256.yaml
+  CONFIG                Training config path. Default: configs/latent_meanflow_semantic_256_unet.yaml
   TOKENIZER_CONFIG      Tokenizer config path. Default: configs/autoencoder_semantic_pair_256.yaml
   TOKENIZER_CKPT        Tokenizer checkpoint path. Default: logs/autoencoder/checkpoints/last.ckpt
   GPUS                  GPU argument passed through to the Python launcher. Default: 0
@@ -25,7 +25,7 @@ Examples:
   ./scripts/train_meanflow.sh
   CONFIG=configs/latent_meanflow_semantic_256_tiny.yaml MAX_EPOCHS=3 ./scripts/train_meanflow.sh
   OBJECTIVE=alphaflow CONFIG=configs/latent_alphaflow_semantic_256.yaml ./scripts/train_meanflow.sh
-  RESUME=logs/2026-04-07T12-00-00_latent_meanflow_semantic_256/checkpoints/last.ckpt ./scripts/train_meanflow.sh
+  RESUME=logs/2026-04-07T12-00-00_latent_meanflow_semantic_256_unet/checkpoints/last.ckpt ./scripts/train_meanflow.sh
 
 Notes:
   Project-layer latent-flow training disables post-fit Trainer.test() by default
@@ -44,7 +44,7 @@ cd "${REPO_ROOT}"
 
 PYTHON_BIN="${PYTHON_BIN:-python}"
 OBJECTIVE="${OBJECTIVE:-meanflow}"
-CONFIG="${CONFIG:-configs/latent_meanflow_semantic_256.yaml}"
+CONFIG="${CONFIG:-configs/latent_meanflow_semantic_256_unet.yaml}"
 TOKENIZER_CONFIG="${TOKENIZER_CONFIG:-configs/autoencoder_semantic_pair_256.yaml}"
 TOKENIZER_CKPT="${TOKENIZER_CKPT:-logs/autoencoder/checkpoints/last.ckpt}"
 GPUS="${GPUS:-0}"
