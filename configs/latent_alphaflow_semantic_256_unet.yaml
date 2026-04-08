@@ -2,15 +2,11 @@ model:
   base_learning_rate: 1.0e-4
   target: latent_meanflow.trainers.latent_flow_trainer.LatentFlowTrainer
   params:
-    # Parallel backbone experiment path: keep the tokenizer, data, sampler, and
-    # paper-like MeanFlow objective fixed, and swap only the field backbone from
-    # the project ConvNet to the project-layer LatentIntervalUNet.
-    #
-    # This base tier is the first real U-Net prior run. It uses 64 base channels
-    # and 2 residual blocks per scale. It is parallel to the ConvNet baseline in
-    # experiment role, not in exact parameter count, because the U-Net adds an
-    # encoder/decoder path with skip connections.
-    objective_name: meanflow
+    # Parallel backbone experiment path: keep the project AlphaFlow objective
+    # and tokenizer route fixed, and swap only the ConvNet field backbone for
+    # the project-layer LatentIntervalUNet. This is not the default AlphaFlow
+    # route; it is a side-by-side backbone experiment.
+    objective_name: alphaflow
     tokenizer_config_path: configs/autoencoder_semantic_pair_256.yaml
     tokenizer_ckpt_path: logs/autoencoder/checkpoints/last.ckpt
     sample_posterior: false
@@ -34,13 +30,16 @@ model:
         resblock_updown: true
         time_conditioning: t_delta
     objective_config:
-      target: latent_meanflow.objectives.meanflow.MeanFlowObjective
+      target: latent_meanflow.objectives.alphaflow.AlphaFlowObjective
       params:
         time_eps: 1.0e-4
         min_delta: 0.0
         loss_type: mse
-        border_fm_ratio: 0.75
-        weighting_mode: paper_like
+        # trajectory_fm_ratio means alpha=1 trajectory flow matching (L_TFM).
+        trajectory_fm_ratio: 0.0
+        # border_fm_ratio means the r=t border-case supervision ratio (L_FM').
+        border_fm_ratio: 0.25
+        weighting_mode: alpha_adaptive_exact
         adaptive_weight_power: 1.0
         adaptive_weight_bias: 1.0e-4
         time_sampler_config:
@@ -49,6 +48,13 @@ model:
             loc: -0.4
             scale: 1.0
             time_eps: 1.0e-4
+        alpha_schedule_config:
+          target: latent_meanflow.objectives.alphaflow.SigmoidAlphaScheduler
+          params:
+            start_step: 0
+            end_step: 1200000
+            gamma: 25.0
+            clamp_eta: 0.25
     sampler_config:
       target: latent_meanflow.samplers.interval.IntervalFlowSampler
       params:

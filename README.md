@@ -162,6 +162,35 @@ Run the first real MeanFlow baseline with the baseline config:
 python scripts/train_latent_meanflow.py --objective meanflow --config configs/latent_meanflow_semantic_256.yaml --gpus 0
 ```
 
+Parallel backbone experiment path: U-Net MeanFlow. These configs keep the
+tokenizer, data contract, sampler, and objective recipe aligned with the
+project ConvNet route, but swap only the latent field backbone. They are
+side-by-side ablations, not the default MeanFlow path.
+
+Run the U-Net tiny/debug pilot:
+
+```bash
+python scripts/train_latent_meanflow.py --objective meanflow --config configs/latent_meanflow_semantic_256_unet_tiny.yaml --gpus 0
+```
+
+Run the U-Net MeanFlow baseline:
+
+```bash
+python scripts/train_latent_meanflow.py --objective meanflow --config configs/latent_meanflow_semantic_256_unet.yaml --gpus 0
+```
+
+Run the U-Net MeanFlow large capacity bump:
+
+```bash
+python scripts/train_latent_meanflow.py --objective meanflow --config configs/latent_meanflow_semantic_256_unet_large.yaml --gpus 0
+```
+
+Run the parallel U-Net AlphaFlow baseline:
+
+```bash
+python scripts/train_latent_meanflow.py --objective alphaflow --config configs/latent_alphaflow_semantic_256_unet.yaml --gpus 0
+```
+
 Resume modes:
 
 - `fresh run`: pass `--config` normally, or rely on the default chosen by `--objective`
@@ -257,6 +286,16 @@ python scripts/find_checkpoint.py --config configs/latent_meanflow_semantic_256.
 python scripts/sample_latent_flow.py --config configs/latent_meanflow_semantic_256.yaml --ckpt <baseline-meanflow-ckpt> --nfe 2
 ```
 
+For the parallel U-Net route, sample with the matching U-Net config stem so the
+checkpoint safety check resolves the correct run family:
+
+```bash
+python scripts/find_checkpoint.py --config configs/latent_meanflow_semantic_256_unet.yaml
+python scripts/sample_latent_flow.py --config configs/latent_meanflow_semantic_256_unet.yaml --ckpt <baseline-meanflow-unet-ckpt> --nfe 2
+python scripts/find_checkpoint.py --config configs/latent_alphaflow_semantic_256_unet.yaml
+python scripts/sample_latent_flow.py --config configs/latent_alphaflow_semantic_256_unet.yaml --ckpt <baseline-alphaflow-unet-ckpt> --nfe 2
+```
+
 `sample_latent_flow.py` now performs a basic path-level safety check and will reject a clearly mismatched config/checkpoint pair such as `configs/latent_meanflow_semantic_256.yaml` together with a checkpoint from a `*_latent_meanflow_semantic_256_tiny/` run.
 
 The sampler writes:
@@ -286,7 +325,11 @@ Config intent:
 - `configs/latent_alphaflow_semantic_256_smoke.yaml`: smoke
 - `configs/latent_fm_semantic_256.yaml`: project baseline
 - `configs/latent_meanflow_semantic_256.yaml`: paper-like MeanFlow config
+- `configs/latent_meanflow_semantic_256_unet_tiny.yaml`: tiny/debug U-Net MeanFlow parallel path
+- `configs/latent_meanflow_semantic_256_unet.yaml`: U-Net MeanFlow baseline parallel path
+- `configs/latent_meanflow_semantic_256_unet_large.yaml`: U-Net MeanFlow large parallel path
 - `configs/latent_alphaflow_semantic_256.yaml`: project AlphaFlow baseline
+- `configs/latent_alphaflow_semantic_256_unet.yaml`: U-Net AlphaFlow baseline parallel path
 
 ## AlphaFlow Weighting Semantics
 
@@ -302,6 +345,7 @@ Config intent:
 - The FM rectified path follows `z_t = (1 - t) x + t eps` and `v_t = eps - x`.
 - The MeanFlow implementation uses JVP with tangent `(v, 0, 1)` and `t_delta` conditioning by default.
 - The paper-like MeanFlow config uses `logit_normal(-0.4, 1.0)`, `border_fm_ratio=0.75`, and adaptive power `1.0`.
+- The parallel U-Net MeanFlow configs keep the same paper-like MeanFlow recipe and change only the backbone family.
 - The project AlphaFlow baseline uses the alpha curriculum and `border_fm_ratio=0.25`; it does not reinterpret that ratio as random `alpha=1` overrides.
 - In the current AlphaFlow implementation, `alpha=0` samples fall back to MeanFlow `paper_like` weighting while `alpha>0` samples use `alpha_adaptive_exact`.
 - The AlphaFlow implementation includes the `alpha^{-1}` prefactor and configurable curriculum, but `u_theta^-` is currently approximated with a detached online target branch rather than a separate EMA teacher. That is a project-layer engineering approximation, not a full paper-equivalent teacher setup.

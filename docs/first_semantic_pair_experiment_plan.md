@@ -27,6 +27,10 @@ Current configs in this runbook:
 - latent FM baseline: [configs/latent_fm_semantic_256.yaml](../configs/latent_fm_semantic_256.yaml)
 - latent MeanFlow tiny/debug: [configs/latent_meanflow_semantic_256_tiny.yaml](../configs/latent_meanflow_semantic_256_tiny.yaml)
 - latent MeanFlow baseline: [configs/latent_meanflow_semantic_256.yaml](../configs/latent_meanflow_semantic_256.yaml)
+- latent MeanFlow U-Net tiny/debug parallel path: [configs/latent_meanflow_semantic_256_unet_tiny.yaml](../configs/latent_meanflow_semantic_256_unet_tiny.yaml)
+- latent MeanFlow U-Net baseline parallel path: [configs/latent_meanflow_semantic_256_unet.yaml](../configs/latent_meanflow_semantic_256_unet.yaml)
+- latent MeanFlow U-Net large parallel path: [configs/latent_meanflow_semantic_256_unet_large.yaml](../configs/latent_meanflow_semantic_256_unet_large.yaml)
+- latent AlphaFlow U-Net parallel path: [configs/latent_alphaflow_semantic_256_unet.yaml](../configs/latent_alphaflow_semantic_256_unet.yaml)
 
 ## Artifact Policy
 
@@ -305,6 +309,75 @@ Check first if it fails:
 - baseline checkpoint was not selected explicitly
 - sampler midpoint assumptions for low NFE
 - decoding artifacts that actually come from a weak tokenizer instead of the prior
+
+## Parallel Backbone Experiment Path: U-Net
+
+Purpose: compare a project-layer U-Net latent field predictor against the
+existing ConvNet backbone without changing the tokenizer, data contract, or
+objective recipe. This is a side route for backbone ablation, not the default
+MeanFlow or AlphaFlow path.
+
+Recommended tiny/debug U-Net MeanFlow pilot:
+
+```powershell
+D:\Anaconda\envs\lmf\python.exe scripts\train_latent_meanflow.py `
+  --objective meanflow `
+  --config configs/latent_meanflow_semantic_256_unet_tiny.yaml `
+  --tokenizer-config configs/autoencoder_semantic_pair_256.yaml `
+  --tokenizer-ckpt logs/autoencoder/checkpoints/last.ckpt `
+  --gpus 0
+```
+
+Recommended U-Net MeanFlow baseline:
+
+```powershell
+D:\Anaconda\envs\lmf\python.exe scripts\train_latent_meanflow.py `
+  --objective meanflow `
+  --config configs/latent_meanflow_semantic_256_unet.yaml `
+  --tokenizer-config configs/autoencoder_semantic_pair_256.yaml `
+  --tokenizer-ckpt logs/autoencoder/checkpoints/last.ckpt `
+  --gpus 0
+```
+
+Recommended U-Net MeanFlow large run:
+
+```powershell
+D:\Anaconda\envs\lmf\python.exe scripts\train_latent_meanflow.py `
+  --objective meanflow `
+  --config configs/latent_meanflow_semantic_256_unet_large.yaml `
+  --tokenizer-config configs/autoencoder_semantic_pair_256.yaml `
+  --tokenizer-ckpt logs/autoencoder/checkpoints/last.ckpt `
+  --gpus 0
+```
+
+Parallel U-Net AlphaFlow baseline:
+
+```powershell
+D:\Anaconda\envs\lmf\python.exe scripts\train_latent_meanflow.py `
+  --objective alphaflow `
+  --config configs/latent_alphaflow_semantic_256_unet.yaml `
+  --tokenizer-config configs/autoencoder_semantic_pair_256.yaml `
+  --tokenizer-ckpt logs/autoencoder/checkpoints/last.ckpt `
+  --gpus 0
+```
+
+Suggested U-Net checkpoint lookup and quick sampling:
+
+```powershell
+$meanflowUnetCkpt = D:\Anaconda\envs\lmf\python.exe scripts\find_checkpoint.py --config configs/latent_meanflow_semantic_256_unet.yaml
+D:\Anaconda\envs\lmf\python.exe scripts\sample_latent_flow.py `
+  --config configs/latent_meanflow_semantic_256_unet.yaml `
+  --ckpt $meanflowUnetCkpt `
+  --outdir outputs/meanflow_unet_nfe2 `
+  --n-samples 16 `
+  --nfe 2
+```
+
+Interpretation notes:
+
+- keep the ConvNet baseline as the default route while the U-Net line is being evaluated
+- compare ConvNet and U-Net checkpoints within the same objective family
+- do not mix `*_unet*.yaml` configs with ConvNet checkpoints or vice versa
 
 ## Minimum Metrics to Track
 

@@ -2,14 +2,14 @@ model:
   base_learning_rate: 1.0e-4
   target: latent_meanflow.trainers.latent_flow_trainer.LatentFlowTrainer
   params:
-    # Parallel backbone experiment path: keep the tokenizer, data, sampler, and
-    # paper-like MeanFlow objective fixed, and swap only the field backbone from
-    # the project ConvNet to the project-layer LatentIntervalUNet.
+    # Parallel backbone experiment path: tiny/debug U-Net tier.
     #
-    # This base tier is the first real U-Net prior run. It uses 64 base channels
-    # and 2 residual blocks per scale. It is parallel to the ConvNet baseline in
-    # experiment role, not in exact parameter count, because the U-Net adds an
-    # encoder/decoder path with skip connections.
+    # Relative to the U-Net base config, this tier cuts width from 64 -> 32 and
+    # reduces residual blocks per scale from 2 -> 1. That keeps the same
+    # tokenizer, data contract, sampler, and paper-like MeanFlow objective while
+    # making the backbone cheap enough for smoke tests and fast stability checks.
+    # It is parallel to the ConvNet tiny config in experiment purpose, not in
+    # exact parameter parity.
     objective_name: meanflow
     tokenizer_config_path: configs/autoencoder_semantic_pair_256.yaml
     tokenizer_ckpt_path: logs/autoencoder/checkpoints/last.ckpt
@@ -22,9 +22,9 @@ model:
     backbone_config:
       target: latent_meanflow.models.backbones.latent_interval_unet.LatentIntervalUNet
       params:
-        model_channels: 64
-        time_embed_dim: 256
-        num_res_blocks: 2
+        model_channels: 32
+        time_embed_dim: 128
+        num_res_blocks: 1
         channel_mult: [1, 2, 4]
         attention_resolutions: [4]
         dropout: 0.0
@@ -58,8 +58,8 @@ model:
 data:
   target: main.DataModuleFromConfig
   params:
-    batch_size: 8
-    num_workers: 4
+    batch_size: 2
+    num_workers: 0
     wrap: false
     train:
       target: latent_meanflow.data.semantic_pair.MultiSemanticImageMaskPairDataset
@@ -90,12 +90,16 @@ lightning:
       target: latent_meanflow.callbacks.semantic_logger.SemanticPairImageLogger
       params:
         disabled: false
-        batch_frequency: 100
+        batch_frequency: 10
         increase_log_steps: false
         max_images: 4
         latest_only: true
         ignore_index: -1
   trainer:
     benchmark: false
+    max_epochs: 3
+    limit_train_batches: 32
+    limit_val_batches: 4
     num_sanity_val_steps: 0
+    log_every_n_steps: 1
     strategy: ddp_find_unused_parameters_false
