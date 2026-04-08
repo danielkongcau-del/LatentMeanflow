@@ -10,7 +10,7 @@ model:
     use_class_condition: false
     class_label_key: class_label
     log_sample_nfe: 2
-    monitor: val/meanflow_loss
+    monitor: val/base_error_mean
     backbone_config:
       target: latent_meanflow.models.backbones.latent_interval_velocity_convnet.LatentIntervalVelocityConvNet
       params:
