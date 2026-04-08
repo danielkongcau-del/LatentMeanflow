@@ -18,7 +18,12 @@ def normalize_gpus_arg(gpus):
     if not text.isdigit():
         return text
     count = int(text)
-    if count <= 1:
+    if count == 0:
+        # The project wrappers historically documented "--gpus 0" as
+        # "use device 0". Under Lightning 2 this must be passed as a device
+        # list rather than devices=0, which is invalid.
+        return "0,"
+    if count == 1:
         return text
     return ",".join(str(i) for i in range(count))
 

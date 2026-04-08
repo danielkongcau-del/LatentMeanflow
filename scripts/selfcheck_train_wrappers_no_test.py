@@ -13,6 +13,7 @@ for path in (REPO_ROOT, SCRIPT_DIR):
 import train_latent_fm
 import train_latent_meanflow
 import train_semantic_autoencoder
+from _launch_utils import normalize_gpus_arg
 
 
 def assert_in(token, cmd, context):
@@ -39,6 +40,13 @@ def assert_gpu_arg(cmd, expected, context):
 
 
 def main():
+    if normalize_gpus_arg("0") != "0,":
+        raise AssertionError("Expected single-device GPU id '0' to normalize to explicit list '0,'")
+    if normalize_gpus_arg("1") != "1":
+        raise AssertionError("Expected count-style single GPU arg '1' to remain '1'")
+    if normalize_gpus_arg("2") != "0,1":
+        raise AssertionError("Expected count-style two GPU arg '2' to normalize to '0,1'")
+
     tokenizer_config = REPO_ROOT / "configs" / "autoencoder_semantic_pair_256.yaml"
     tokenizer_ckpt = REPO_ROOT / "logs" / "autoencoder" / "checkpoints" / "last.ckpt"
 
@@ -100,7 +108,12 @@ def main():
         enable_image_logger=False,
         overrides=[],
     )
-    meanflow_cmd = train_latent_meanflow.build_command(meanflow_args, meanflow_args.config, tokenizer_ckpt)
+    meanflow_cmd = train_latent_meanflow.build_command(
+        meanflow_args,
+        meanflow_args.config,
+        tokenizer_config,
+        tokenizer_ckpt,
+    )
     assert_uses_project_launcher(meanflow_cmd, "latent meanflow default command")
     assert_gpu_arg(meanflow_cmd, "0,1", "latent meanflow default command")
     assert_in("--no-test", meanflow_cmd, "latent meanflow default command")
@@ -108,6 +121,7 @@ def main():
     meanflow_cmd_with_test = train_latent_meanflow.build_command(
         meanflow_args,
         meanflow_args.config,
+        tokenizer_config,
         tokenizer_ckpt,
     )
     assert_not_in("--no-test", meanflow_cmd_with_test, "latent meanflow run-test command")
