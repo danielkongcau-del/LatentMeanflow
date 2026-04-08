@@ -306,6 +306,9 @@ class LatentIntervalUNet(nn.Module):
         num_head_channels=64,
         use_scale_shift_norm=True,
         resblock_updown=True,
+        t_time_scale=1.0,
+        delta_time_scale=1.0,
+        r_time_scale=1.0,
     ):
         super().__init__()
         self.in_channels = int(in_channels)
@@ -324,6 +327,9 @@ class LatentIntervalUNet(nn.Module):
         self.num_head_channels = int(num_head_channels)
         self.use_scale_shift_norm = bool(use_scale_shift_norm)
         self.resblock_updown = bool(resblock_updown)
+        self.t_time_scale = float(t_time_scale)
+        self.delta_time_scale = float(delta_time_scale)
+        self.r_time_scale = float(r_time_scale)
 
         if self.time_conditioning not in {"t", "t_delta", "r_t"}:
             raise ValueError(
@@ -331,6 +337,13 @@ class LatentIntervalUNet(nn.Module):
             )
         if not self.channel_mult:
             raise ValueError("channel_mult must not be empty")
+        for name, value in (
+            ("t_time_scale", self.t_time_scale),
+            ("delta_time_scale", self.delta_time_scale),
+            ("r_time_scale", self.r_time_scale),
+        ):
+            if not math.isfinite(value):
+                raise ValueError(f"{name} must be finite, got {value!r}")
 
         self.t_embed = _make_time_embed_mlp(self.model_channels, self.time_embed_dim)
         self.delta_embed = (
@@ -473,8 +486,9 @@ class LatentIntervalUNet(nn.Module):
             _zero_module(_conv_nd(self.dims, ch, self.in_channels, 3, padding=1)),
         )
 
-    def _embed_scalar(self, values, projector):
-        return projector(_timestep_embedding(values.float(), self.model_channels))
+    def _embed_scalar(self, values, projector, time_scale=1.0):
+        scaled_values = values.float() * float(time_scale)
+        return projector(_timestep_embedding(scaled_values, self.model_channels))
 
     def _resolve_time_embedding(self, t, r=None, delta_t=None):
         if t is None:
@@ -484,17 +498,21 @@ class LatentIntervalUNet(nn.Module):
         if t.ndim != 1:
             raise ValueError(f"Expected t with shape [B], got {tuple(t.shape)}")
 
-        embedding = self._embed_scalar(t, self.t_embed)
+        embedding = self._embed_scalar(t, self.t_embed, time_scale=self.t_time_scale)
         if self.time_conditioning == "t_delta":
             if delta_t is None:
                 if r is None:
                     raise ValueError("delta_t or r must be provided when time_conditioning='t_delta'")
                 delta_t = t - r
-            embedding = embedding + self._embed_scalar(delta_t, self.delta_embed)
+            embedding = embedding + self._embed_scalar(
+                delta_t,
+                self.delta_embed,
+                time_scale=self.delta_time_scale,
+            )
         elif self.time_conditioning == "r_t":
             if r is None:
                 raise ValueError("r must be provided when time_conditioning='r_t'")
-            embedding = embedding + self._embed_scalar(r, self.r_embed)
+            embedding = embedding + self._embed_scalar(r, self.r_embed, time_scale=self.r_time_scale)
         return embedding
 
     def forward(self, z_t, t=None, condition=None, r=None, delta_t=None):

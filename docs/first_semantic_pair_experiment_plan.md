@@ -30,6 +30,8 @@ Current configs in this runbook:
 - latent MeanFlow U-Net tiny/debug parallel path: [configs/latent_meanflow_semantic_256_unet_tiny.yaml](../configs/latent_meanflow_semantic_256_unet_tiny.yaml)
 - latent MeanFlow U-Net baseline parallel path: [configs/latent_meanflow_semantic_256_unet.yaml](../configs/latent_meanflow_semantic_256_unet.yaml)
 - latent MeanFlow U-Net large parallel path: [configs/latent_meanflow_semantic_256_unet_large.yaml](../configs/latent_meanflow_semantic_256_unet_large.yaml)
+- latent MeanFlow U-Net time-scale ablations: [configs/ablations/latent_meanflow_semantic_256_unet_tscale1.yaml](../configs/ablations/latent_meanflow_semantic_256_unet_tscale1.yaml), [configs/ablations/latent_meanflow_semantic_256_unet_tscale100.yaml](../configs/ablations/latent_meanflow_semantic_256_unet_tscale100.yaml), [configs/ablations/latent_meanflow_semantic_256_unet_tscale1000.yaml](../configs/ablations/latent_meanflow_semantic_256_unet_tscale1000.yaml)
+- latent MeanFlow U-Net `(r, t)` engineering ablation: [configs/ablations/latent_meanflow_semantic_256_unet_rt_tscale100.yaml](../configs/ablations/latent_meanflow_semantic_256_unet_rt_tscale100.yaml)
 - latent AlphaFlow U-Net parallel path: [configs/latent_alphaflow_semantic_256_unet.yaml](../configs/latent_alphaflow_semantic_256_unet.yaml)
 
 ## Artifact Policy
@@ -378,6 +380,65 @@ Interpretation notes:
 - keep the ConvNet baseline as the default route while the U-Net line is being evaluated
 - compare ConvNet and U-Net checkpoints within the same objective family
 - do not mix `*_unet*.yaml` configs with ConvNet checkpoints or vice versa
+
+## Engineering Ablation Path: U-Net Time Scales
+
+Purpose: make the raw scalar scale that feeds the U-Net sinusoidal time
+embedding explicit and test whether larger numeric input ranges help the U-Net
+backbone. This is an engineering ablation only. It does not change the
+MeanFlow objective and it should not be presented as a paper-equivalent claim.
+The standard U-Net configs remain backward-compatible because omitted scales
+still default to `1.0`.
+
+Raw-scale control:
+
+```powershell
+D:\Anaconda\envs\lmf\python.exe scripts\train_latent_meanflow.py `
+  --objective meanflow `
+  --config configs/ablations/latent_meanflow_semantic_256_unet_tscale1.yaml `
+  --tokenizer-config configs/autoencoder_semantic_pair_256.yaml `
+  --tokenizer-ckpt logs/autoencoder/checkpoints/last.ckpt `
+  --gpus 0
+```
+
+Medium-scale ablation:
+
+```powershell
+D:\Anaconda\envs\lmf\python.exe scripts\train_latent_meanflow.py `
+  --objective meanflow `
+  --config configs/ablations/latent_meanflow_semantic_256_unet_tscale100.yaml `
+  --tokenizer-config configs/autoencoder_semantic_pair_256.yaml `
+  --tokenizer-ckpt logs/autoencoder/checkpoints/last.ckpt `
+  --gpus 0
+```
+
+Large-scale ablation:
+
+```powershell
+D:\Anaconda\envs\lmf\python.exe scripts\train_latent_meanflow.py `
+  --objective meanflow `
+  --config configs/ablations/latent_meanflow_semantic_256_unet_tscale1000.yaml `
+  --tokenizer-config configs/autoencoder_semantic_pair_256.yaml `
+  --tokenizer-ckpt logs/autoencoder/checkpoints/last.ckpt `
+  --gpus 0
+```
+
+Optional `(r, t)` conditioning comparison:
+
+```powershell
+D:\Anaconda\envs\lmf\python.exe scripts\train_latent_meanflow.py `
+  --objective meanflow `
+  --config configs/ablations/latent_meanflow_semantic_256_unet_rt_tscale100.yaml `
+  --tokenizer-config configs/autoencoder_semantic_pair_256.yaml `
+  --tokenizer-ckpt logs/autoencoder/checkpoints/last.ckpt `
+  --gpus 0
+```
+
+Interpretation notes:
+
+- this ablation only changes the scalar range seen by the sinusoidal embedding
+- `tscale1` is the explicit compatibility control and should match the old implicit behavior
+- compare these runs against the U-Net baseline, not against a different tokenizer or objective
 
 ## Minimum Metrics to Track
 

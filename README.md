@@ -191,6 +191,38 @@ Run the parallel U-Net AlphaFlow baseline:
 python scripts/train_latent_meanflow.py --objective alphaflow --config configs/latent_alphaflow_semantic_256_unet.yaml --gpus 0
 ```
 
+Engineering ablation path: U-Net time-embedding input scale. These configs do
+not change the MeanFlow objective math. They only rescale the raw `[0,1]`
+scalar inputs before the U-Net sinusoidal embedding, so they should be treated
+as engineering ablations rather than paper-equivalent claims.
+The existing U-Net configs keep the backward-compatible default behavior
+because omitted scales still resolve to `1.0`.
+
+Run the raw-scale control (`t` and `delta_t` scale = `1`):
+
+```bash
+python scripts/train_latent_meanflow.py --objective meanflow --config configs/ablations/latent_meanflow_semantic_256_unet_tscale1.yaml --gpus 0
+```
+
+Run the medium-scale ablation (`t` and `delta_t` scale = `100`):
+
+```bash
+python scripts/train_latent_meanflow.py --objective meanflow --config configs/ablations/latent_meanflow_semantic_256_unet_tscale100.yaml --gpus 0
+```
+
+Run the large-scale ablation (`t` and `delta_t` scale = `1000`):
+
+```bash
+python scripts/train_latent_meanflow.py --objective meanflow --config configs/ablations/latent_meanflow_semantic_256_unet_tscale1000.yaml --gpus 0
+```
+
+Optional conditioning-form comparison: explicit `(r, t)` with both scales set
+to `100`:
+
+```bash
+python scripts/train_latent_meanflow.py --objective meanflow --config configs/ablations/latent_meanflow_semantic_256_unet_rt_tscale100.yaml --gpus 0
+```
+
 Resume modes:
 
 - `fresh run`: pass `--config` normally, or rely on the default chosen by `--objective`
@@ -328,6 +360,8 @@ Config intent:
 - `configs/latent_meanflow_semantic_256_unet_tiny.yaml`: tiny/debug U-Net MeanFlow parallel path
 - `configs/latent_meanflow_semantic_256_unet.yaml`: U-Net MeanFlow baseline parallel path
 - `configs/latent_meanflow_semantic_256_unet_large.yaml`: U-Net MeanFlow large parallel path
+- `configs/ablations/latent_meanflow_semantic_256_unet_tscale{1,100,1000}.yaml`: engineering-only U-Net time-scale ablations
+- `configs/ablations/latent_meanflow_semantic_256_unet_rt_tscale100.yaml`: engineering-only `(r, t)` conditioning ablation
 - `configs/latent_alphaflow_semantic_256.yaml`: project AlphaFlow baseline
 - `configs/latent_alphaflow_semantic_256_unet.yaml`: U-Net AlphaFlow baseline parallel path
 
@@ -346,6 +380,7 @@ Config intent:
 - The MeanFlow implementation uses JVP with tangent `(v, 0, 1)` and `t_delta` conditioning by default.
 - The paper-like MeanFlow config uses `logit_normal(-0.4, 1.0)`, `border_fm_ratio=0.75`, and adaptive power `1.0`.
 - The parallel U-Net MeanFlow configs keep the same paper-like MeanFlow recipe and change only the backbone family.
+- The U-Net time-scale configs under `configs/ablations/` are engineering-only ablations of the scalar embedding input scale; they do not change the objective and they are not paper-equivalent claims.
 - The project AlphaFlow baseline uses the alpha curriculum and `border_fm_ratio=0.25`; it does not reinterpret that ratio as random `alpha=1` overrides.
 - In the current AlphaFlow implementation, `alpha=0` samples fall back to MeanFlow `paper_like` weighting while `alpha>0` samples use `alpha_adaptive_exact`.
 - The AlphaFlow implementation includes the `alpha^{-1}` prefactor and configurable curriculum, but `u_theta^-` is currently approximated with a detached online target branch rather than a separate EMA teacher. That is a project-layer engineering approximation, not a full paper-equivalent teacher setup.
