@@ -1,0 +1,110 @@
+model:
+  base_learning_rate: 6.25e-06
+  target: latent_meanflow.trainers.latent_flow_trainer.LatentFlowTrainer
+  params:
+    # AlphaFlow + U-Net route reserved for the stronger f=8 semantic tokenizer.
+    #
+    # This keeps the promoted AlphaFlow project baseline fixed while swapping in
+    # the tighter 32x32x4 tokenizer branch as the only intended research axis.
+    objective_name: alphaflow
+    tokenizer_config_path: configs/autoencoder_semantic_pair_f8_256.yaml
+    # Placeholder path for the stronger tokenizer branch. Override this with
+    # the actual f8 tokenizer checkpoint from your run directory.
+    tokenizer_ckpt_path: logs/autoencoder_f8/checkpoints/last.ckpt
+    sample_posterior: false
+    freeze_tokenizer: true
+    use_class_condition: false
+    class_label_key: class_label
+    log_sample_nfe: 4
+    monitor: val/base_error_mean
+    backbone_config:
+      target: latent_meanflow.models.backbones.latent_interval_unet.LatentIntervalUNet
+      params:
+        model_channels: 64
+        time_embed_dim: 256
+        num_res_blocks: 2
+        channel_mult: [1, 2, 4]
+        attention_resolutions: [4]
+        dropout: 0.0
+        num_heads: 4
+        num_head_channels: 32
+        use_scale_shift_norm: true
+        resblock_updown: true
+        time_conditioning: t_delta
+    objective_config:
+      target: latent_meanflow.objectives.alphaflow.AlphaFlowObjective
+      params:
+        time_eps: 1.0e-4
+        min_delta: 0.0
+        loss_type: mse
+        trajectory_fm_ratio: 0.0
+        border_fm_ratio: 0.25
+        weighting_mode: alpha_adaptive_exact
+        adaptive_weight_power: 1.0
+        adaptive_weight_bias: 1.0e-4
+        time_sampler_config:
+          target: latent_meanflow.objectives.common.LogitNormalTimeSampler
+          params:
+            loc: -0.4
+            scale: 1.0
+            time_eps: 1.0e-4
+        alpha_schedule_config:
+          target: latent_meanflow.objectives.alphaflow.BudgetSigmoidAlphaScheduler
+          params:
+            transition_start_fraction: 0.05
+            transition_end_fraction: 0.85
+            gamma: 16.0
+            clamp_eta: 0.10
+            total_epochs: 3000
+            optimizer_steps_per_epoch: 26
+    sampler_config:
+      target: latent_meanflow.samplers.interval.IntervalFlowSampler
+      params:
+        default_nfe: 1
+        two_step_time: 0.5
+
+data:
+  target: main.DataModuleFromConfig
+  params:
+    batch_size: 8
+    num_workers: 4
+    wrap: false
+    train:
+      target: latent_meanflow.data.semantic_pair.MultiSemanticImageMaskPairDataset
+      params:
+        roots:
+          - data/remote
+        split: train
+        size: 256
+        image_dir: images
+        mask_dir: masks
+        gray_to_class_id: configs/label_specs/remote_semantic.yaml
+        ignore_index: -1
+    validation:
+      target: latent_meanflow.data.semantic_pair.MultiSemanticImageMaskPairDataset
+      params:
+        roots:
+          - data/remote
+        split: val
+        size: 256
+        image_dir: images
+        mask_dir: masks
+        gray_to_class_id: configs/label_specs/remote_semantic.yaml
+        ignore_index: -1
+
+lightning:
+  callbacks:
+    image_logger:
+      target: latent_meanflow.callbacks.semantic_logger.SemanticPairImageLogger
+      params:
+        disabled: false
+        batch_frequency: 100
+        increase_log_steps: false
+        max_images: 4
+        latest_only: true
+        ignore_index: -1
+  trainer:
+    benchmark: false
+    num_sanity_val_steps: 0
+    accumulate_grad_batches: 4
+    strategy: ddp_find_unused_parameters_false

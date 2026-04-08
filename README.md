@@ -134,6 +134,60 @@ If RGB reconstructions look washed out or overly smooth, try the LPIPS-enabled 2
 python scripts/train_semantic_autoencoder.py --config configs/autoencoder_semantic_pair_24gb_lpips_256.yaml --gpus 0
 ```
 
+Current tokenizer geometry:
+
+- `configs/autoencoder_semantic_pair_256.yaml`
+- `configs/autoencoder_semantic_pair_24gb_lpips_256.yaml`
+
+both produce a `64x64x4` latent from a `256x256` input.
+
+Stronger tokenizer candidate geometry:
+
+- `configs/autoencoder_semantic_pair_f8_256.yaml`
+- `configs/autoencoder_semantic_pair_f8_24gb_lpips_256.yaml`
+
+These keep the paired split-head decode contract but deepen the autoencoder so
+that a `256x256` input maps to a `32x32x4` latent. This route is
+meant as a tokenizer candidate for downstream few-step latent flow work. It is
+not an SD-VAE-equivalent claim.
+
+Train the stronger f=8 tokenizer candidate:
+
+```bash
+python scripts/train_semantic_autoencoder.py --config configs/autoencoder_semantic_pair_f8_256.yaml --gpus 0
+```
+
+Train the stronger f=8 tokenizer candidate with LPIPS:
+
+```bash
+python scripts/train_semantic_autoencoder.py --config configs/autoencoder_semantic_pair_f8_24gb_lpips_256.yaml --gpus 0
+```
+
+Evaluate one tokenizer checkpoint and write JSON + markdown summaries:
+
+```bash
+python scripts/eval_semantic_tokenizer.py --config configs/autoencoder_semantic_pair_256.yaml --ckpt /path/to/tokenizer.ckpt --outdir outputs/tokenizer_eval/base
+```
+
+Evaluate the stronger f=8 tokenizer against the current tokenizer on the same
+split and batches:
+
+```bash
+python scripts/eval_semantic_tokenizer.py \
+  --config configs/autoencoder_semantic_pair_f8_256.yaml \
+  --ckpt /path/to/f8_tokenizer.ckpt \
+  --reference-config configs/autoencoder_semantic_pair_256.yaml \
+  --reference-ckpt /path/to/base_tokenizer.ckpt \
+  --outdir outputs/tokenizer_eval/f8_vs_base
+```
+
+Reserve downstream latent-prior experiments for the stronger tokenizer branch:
+
+```bash
+python scripts/train_latent_meanflow.py --objective meanflow --config configs/latent_meanflow_semantic_f8_unet.yaml --tokenizer-config configs/autoencoder_semantic_pair_f8_256.yaml --tokenizer-ckpt /path/to/f8_tokenizer.ckpt --gpus 0
+python scripts/train_latent_meanflow.py --objective alphaflow --config configs/latent_alphaflow_semantic_f8_unet.yaml --tokenizer-config configs/autoencoder_semantic_pair_f8_256.yaml --tokenizer-ckpt /path/to/f8_tokenizer.ckpt --gpus 0
+```
+
 ### Latent FM Path
 
 Train the latent flow-matching prior on semantic tokenizer latents:
@@ -427,10 +481,15 @@ Config intent:
 
 - `configs/latent_alphaflow_semantic_256_smoke.yaml`: smoke
 - `configs/latent_fm_semantic_256.yaml`: project baseline
+- `configs/autoencoder_semantic_pair_256.yaml`: current semantic tokenizer baseline with `64x64x4` latents
+- `configs/autoencoder_semantic_pair_24gb_lpips_256.yaml`: current semantic tokenizer baseline with LPIPS and `64x64x4` latents
+- `configs/autoencoder_semantic_pair_f8_256.yaml`: stronger semantic tokenizer candidate with `32x32x4` latents
+- `configs/autoencoder_semantic_pair_f8_24gb_lpips_256.yaml`: stronger `f=8` tokenizer candidate with LPIPS
 - `configs/latent_meanflow_semantic_256.yaml`: legacy ConvNet MeanFlow baseline
 - `configs/latent_meanflow_semantic_256_unet_tiny.yaml`: tiny/debug U-Net MeanFlow parallel path
 - `configs/latent_meanflow_semantic_256_unet.yaml`: default MeanFlow backbone path after the benchmark-backed promotion
 - `configs/latent_meanflow_semantic_256_unet_large.yaml`: U-Net MeanFlow large parallel path
+- `configs/latent_meanflow_semantic_f8_unet.yaml`: MeanFlow U-Net route reserved for the stronger `f=8` tokenizer branch
 - `configs/ablations/latent_meanflow_semantic_256_unet_tscale{1,100,1000}.yaml`: engineering-only U-Net time-scale ablations
 - `configs/ablations/latent_meanflow_semantic_256_unet_rt_tscale100.yaml`: engineering-only `(r, t)` conditioning ablation
 - `configs/latent_alphaflow_semantic_256.yaml`: legacy ConvNet AlphaFlow rollback baseline
@@ -438,6 +497,7 @@ Config intent:
 - `configs/latent_alphaflow_semantic_256_unet.yaml`: default AlphaFlow U-Net project baseline for few-step paired generation
 - `configs/latent_alphaflow_semantic_256_unet_large.yaml`: U-Net AlphaFlow large-capacity path with the same effective batch target as the base route
 - `configs/latent_alphaflow_semantic_256_unet_paper_attempt.yaml`: U-Net AlphaFlow paper-aligned schedule attempt, not a paper-equivalent claim
+- `configs/latent_alphaflow_semantic_f8_unet.yaml`: AlphaFlow U-Net route reserved for the stronger `f=8` tokenizer branch
 
 ## AlphaFlow Weighting Semantics
 
