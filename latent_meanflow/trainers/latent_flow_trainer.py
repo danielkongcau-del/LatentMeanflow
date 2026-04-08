@@ -143,6 +143,10 @@ class LatentFlowTrainer(pl.LightningModule):
         outputs = self(batch, objective_step=int(self.global_step))
         loss_dict = outputs.get("loss_dict", {"loss": outputs["loss"], "total_loss": outputs["loss"]})
         metrics = self._collect_log_scalars(split, loss_dict)
+        prog_bar_metrics = {}
+        base_error_key = f"{split}/base_error_mean"
+        if base_error_key in metrics:
+            prog_bar_metrics[base_error_key] = metrics.pop(base_error_key)
         batch_size = self._get_log_batch_size(batch)
         sync_dist = self._should_sync_dist()
         self.log(
@@ -155,6 +159,16 @@ class LatentFlowTrainer(pl.LightningModule):
             batch_size=batch_size,
             sync_dist=sync_dist,
         )
+        if prog_bar_metrics:
+            self.log_dict(
+                prog_bar_metrics,
+                prog_bar=True,
+                logger=True,
+                on_step=(split == "train"),
+                on_epoch=True,
+                batch_size=batch_size,
+                sync_dist=sync_dist,
+            )
         if metrics:
             self.log_dict(
                 metrics,
