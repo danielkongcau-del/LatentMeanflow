@@ -2,10 +2,11 @@ model:
   base_learning_rate: 1.0e-4
   target: latent_meanflow.trainers.latent_flow_trainer.LatentFlowTrainer
   params:
-    # Parallel backbone experiment path: keep the project AlphaFlow objective
-    # and tokenizer route fixed, and swap only the ConvNet field backbone for
-    # the project-layer LatentIntervalUNet. This is not the default AlphaFlow
-    # route; it is a side-by-side backbone experiment.
+    # Default AlphaFlow route after the benchmark-backed U-Net promotion.
+    #
+    # Keep the tokenizer, data, sampler, and AlphaFlow objective fixed, and
+    # use the project-layer LatentIntervalUNet as the default field backbone.
+    # The old ConvNet config remains checked in as a legacy rollback baseline.
     objective_name: alphaflow
     tokenizer_config_path: configs/autoencoder_semantic_pair_256.yaml
     tokenizer_ckpt_path: logs/autoencoder/checkpoints/last.ckpt

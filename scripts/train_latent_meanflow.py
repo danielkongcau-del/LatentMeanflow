@@ -15,7 +15,7 @@ DEFAULT_TOKENIZER_CKPT = REPO_ROOT / "logs" / "autoencoder" / "checkpoints" / "l
 DEFAULT_CONFIGS = {
     "fm": REPO_ROOT / "configs" / "latent_fm_semantic_256.yaml",
     "meanflow": REPO_ROOT / "configs" / "latent_meanflow_semantic_256_unet.yaml",
-    "alphaflow": REPO_ROOT / "configs" / "latent_alphaflow_semantic_256.yaml",
+    "alphaflow": REPO_ROOT / "configs" / "latent_alphaflow_semantic_256_unet.yaml",
 }
 RUN_NAMES = {
     "fm": "latent_fm",

@@ -2,8 +2,11 @@ model:
   base_learning_rate: 1.0e-4
   target: latent_meanflow.trainers.latent_flow_trainer.LatentFlowTrainer
   params:
-    # Project AlphaFlow baseline config. This is not a smoke config and it is
-    # not claimed to be fully paper-like.
+    # Legacy ConvNet AlphaFlow rollback baseline.
+    #
+    # The default AlphaFlow route now uses the project-layer U-Net backbone.
+    # Keep this config only for rollback and controlled ConvNet vs U-Net
+    # comparisons without changing tokenizer, data, or objective settings.
     objective_name: alphaflow
     tokenizer_config_path: configs/autoencoder_semantic_pair_256.yaml
     tokenizer_ckpt_path: logs/autoencoder/checkpoints/last.ckpt

@@ -9,7 +9,7 @@ Usage:
 Environment variables:
   PYTHON_BIN            Python executable inside the lmf environment. Default: python
   OBJECTIVE             One of fm, meanflow, alphaflow. Default: meanflow
-  CONFIG                Training config path. Default: configs/latent_meanflow_semantic_256_unet.yaml
+  CONFIG                Training config path. Default: objective-specific project baseline
   TOKENIZER_CONFIG      Tokenizer config path. Default: configs/autoencoder_semantic_pair_256.yaml
   TOKENIZER_CKPT        Tokenizer checkpoint path. Default: logs/autoencoder/checkpoints/last.ckpt
   GPUS                  GPU argument passed through to the Python launcher. Default: 0
@@ -24,7 +24,7 @@ Environment variables:
 Examples:
   ./scripts/train_meanflow.sh
   CONFIG=configs/latent_meanflow_semantic_256_tiny.yaml MAX_EPOCHS=3 ./scripts/train_meanflow.sh
-  OBJECTIVE=alphaflow CONFIG=configs/latent_alphaflow_semantic_256.yaml ./scripts/train_meanflow.sh
+  OBJECTIVE=alphaflow CONFIG=configs/latent_alphaflow_semantic_256_unet.yaml ./scripts/train_meanflow.sh
   RESUME=logs/2026-04-07T12-00-00_latent_meanflow_semantic_256_unet/checkpoints/last.ckpt ./scripts/train_meanflow.sh
 
 Notes:
@@ -42,9 +42,27 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
 
+default_config_for_objective() {
+  case "${1}" in
+    fm)
+      printf '%s' "configs/latent_fm_semantic_256.yaml"
+      ;;
+    meanflow)
+      printf '%s' "configs/latent_meanflow_semantic_256_unet.yaml"
+      ;;
+    alphaflow)
+      printf '%s' "configs/latent_alphaflow_semantic_256_unet.yaml"
+      ;;
+    *)
+      echo "Unsupported OBJECTIVE: ${1}" >&2
+      exit 1
+      ;;
+  esac
+}
+
 PYTHON_BIN="${PYTHON_BIN:-python}"
 OBJECTIVE="${OBJECTIVE:-meanflow}"
-CONFIG="${CONFIG:-configs/latent_meanflow_semantic_256_unet.yaml}"
+CONFIG="${CONFIG:-$(default_config_for_objective "${OBJECTIVE}")}"
 TOKENIZER_CONFIG="${TOKENIZER_CONFIG:-configs/autoencoder_semantic_pair_256.yaml}"
 TOKENIZER_CKPT="${TOKENIZER_CKPT:-logs/autoencoder/checkpoints/last.ckpt}"
 GPUS="${GPUS:-0}"

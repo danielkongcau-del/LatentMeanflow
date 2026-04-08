@@ -193,10 +193,16 @@ Run the U-Net MeanFlow large capacity bump:
 python scripts/train_latent_meanflow.py --objective meanflow --config configs/latent_meanflow_semantic_256_unet_large.yaml --gpus 0
 ```
 
-Run the parallel U-Net AlphaFlow baseline:
+Run the default U-Net AlphaFlow baseline:
 
 ```bash
 python scripts/train_latent_meanflow.py --objective alphaflow --config configs/latent_alphaflow_semantic_256_unet.yaml --gpus 0
+```
+
+Keep the old ConvNet AlphaFlow baseline available as a legacy rollback path:
+
+```bash
+python scripts/train_latent_meanflow.py --objective alphaflow --config configs/latent_alphaflow_semantic_256.yaml --gpus 0
 ```
 
 Engineering ablation path: U-Net time-embedding input scale. These configs do
@@ -300,7 +306,8 @@ By default, resume no longer injects:
 
 This prevents a default `alphaflow` config, a new tokenizer path, or any arbitrary dotlist override, including wrapper-managed batch-size and image-logger flags, from being silently merged into an existing `meanflow` resume run.
 
-Train the recommended AlphaFlow curriculum:
+Train the recommended AlphaFlow curriculum. Bare `--objective alphaflow` now
+resolves to the U-Net AlphaFlow baseline:
 
 ```bash
 python scripts/train_latent_meanflow.py --objective alphaflow --gpus 0
@@ -312,11 +319,13 @@ For quick validation or debugging, use the explicit smoke config:
 python scripts/train_latent_meanflow.py --config configs/latent_alphaflow_semantic_256_smoke.yaml --gpus 0
 ```
 
-Sample from a latent-flow checkpoint with `NFE=1` or `NFE=2`:
+Sample from a latent-flow checkpoint with `NFE=1` or `NFE=2`. Bare
+`sample_latent_flow.py` now defaults to the U-Net AlphaFlow config, so keep the
+config stem explicit whenever you want the legacy ConvNet rollback path:
 
 ```bash
-python scripts/sample_latent_flow.py --config configs/latent_alphaflow_semantic_256.yaml --ckpt /path/to/last.ckpt --nfe 1
-python scripts/sample_latent_flow.py --config configs/latent_alphaflow_semantic_256.yaml --ckpt /path/to/last.ckpt --nfe 2
+python scripts/sample_latent_flow.py --config configs/latent_alphaflow_semantic_256_unet.yaml --ckpt /path/to/last.ckpt --nfe 1
+python scripts/sample_latent_flow.py --config configs/latent_alphaflow_semantic_256_unet.yaml --ckpt /path/to/last.ckpt --nfe 2
 ```
 
 For MeanFlow, keep tiny/debug and baseline checkpoints separate. The training script now tags runs with the config stem, so use the helper below to resolve the baseline checkpoint before sampling the final `NFE` curve:
@@ -332,6 +341,8 @@ the checkpoint safety check resolves the correct run family:
 ```bash
 python scripts/find_checkpoint.py --config configs/latent_meanflow_semantic_256.yaml
 python scripts/sample_latent_flow.py --config configs/latent_meanflow_semantic_256.yaml --ckpt <legacy-convnet-meanflow-ckpt> --nfe 2
+python scripts/find_checkpoint.py --config configs/latent_alphaflow_semantic_256.yaml
+python scripts/sample_latent_flow.py --config configs/latent_alphaflow_semantic_256.yaml --ckpt <legacy-convnet-alphaflow-ckpt> --nfe 2
 python scripts/find_checkpoint.py --config configs/latent_alphaflow_semantic_256_unet.yaml
 python scripts/sample_latent_flow.py --config configs/latent_alphaflow_semantic_256_unet.yaml --ckpt <baseline-alphaflow-unet-ckpt> --nfe 2
 ```
@@ -383,8 +394,8 @@ Config intent:
 - `configs/latent_meanflow_semantic_256_unet_large.yaml`: U-Net MeanFlow large parallel path
 - `configs/ablations/latent_meanflow_semantic_256_unet_tscale{1,100,1000}.yaml`: engineering-only U-Net time-scale ablations
 - `configs/ablations/latent_meanflow_semantic_256_unet_rt_tscale100.yaml`: engineering-only `(r, t)` conditioning ablation
-- `configs/latent_alphaflow_semantic_256.yaml`: project AlphaFlow baseline
-- `configs/latent_alphaflow_semantic_256_unet.yaml`: U-Net AlphaFlow baseline parallel path
+- `configs/latent_alphaflow_semantic_256.yaml`: legacy ConvNet AlphaFlow rollback baseline
+- `configs/latent_alphaflow_semantic_256_unet.yaml`: default AlphaFlow backbone path after the U-Net promotion
 
 ## AlphaFlow Weighting Semantics
 
@@ -402,6 +413,7 @@ Config intent:
 - The paper-like MeanFlow config uses `logit_normal(-0.4, 1.0)`, `border_fm_ratio=0.75`, and adaptive power `1.0`.
 - The default MeanFlow route now points to the U-Net baseline because the pinned benchmark protocol showed it beat the ConvNet baseline at `NFE=4/2` without regressing at `NFE=8`.
 - The legacy ConvNet MeanFlow baseline is still kept for rollback and comparison.
+- The default AlphaFlow route now also points to the U-Net baseline; the legacy ConvNet AlphaFlow config remains checked in as a rollback baseline.
 - The U-Net time-scale configs under `configs/ablations/` are engineering-only ablations of the scalar embedding input scale; they do not change the objective and they are not paper-equivalent claims.
 - The project AlphaFlow baseline uses the alpha curriculum and `border_fm_ratio=0.25`; it does not reinterpret that ratio as random `alpha=1` overrides.
 - In the current AlphaFlow implementation, `alpha=0` samples fall back to MeanFlow `paper_like` weighting while `alpha>0` samples use `alpha_adaptive_exact`.

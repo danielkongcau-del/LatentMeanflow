@@ -21,7 +21,7 @@ from ldm.util import instantiate_from_config
 from latent_meanflow.utils import colorize_mask_index, overlay_color_mask_on_image
 
 
-DEFAULT_CONFIG = REPO_ROOT / "configs" / "latent_alphaflow_semantic_256.yaml"
+DEFAULT_CONFIG = REPO_ROOT / "configs" / "latent_alphaflow_semantic_256_unet.yaml"
 
 
 def parse_args():

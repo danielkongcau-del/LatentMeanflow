@@ -32,7 +32,7 @@ Current configs in this runbook:
 - latent MeanFlow U-Net large parallel path: [configs/latent_meanflow_semantic_256_unet_large.yaml](../configs/latent_meanflow_semantic_256_unet_large.yaml)
 - latent MeanFlow U-Net time-scale ablations: [configs/ablations/latent_meanflow_semantic_256_unet_tscale1.yaml](../configs/ablations/latent_meanflow_semantic_256_unet_tscale1.yaml), [configs/ablations/latent_meanflow_semantic_256_unet_tscale100.yaml](../configs/ablations/latent_meanflow_semantic_256_unet_tscale100.yaml), [configs/ablations/latent_meanflow_semantic_256_unet_tscale1000.yaml](../configs/ablations/latent_meanflow_semantic_256_unet_tscale1000.yaml)
 - latent MeanFlow U-Net `(r, t)` engineering ablation: [configs/ablations/latent_meanflow_semantic_256_unet_rt_tscale100.yaml](../configs/ablations/latent_meanflow_semantic_256_unet_rt_tscale100.yaml)
-- latent AlphaFlow U-Net parallel path: [configs/latent_alphaflow_semantic_256_unet.yaml](../configs/latent_alphaflow_semantic_256_unet.yaml)
+- latent AlphaFlow default U-Net route: [configs/latent_alphaflow_semantic_256_unet.yaml](../configs/latent_alphaflow_semantic_256_unet.yaml)
 
 ## Artifact Policy
 
@@ -364,7 +364,7 @@ D:\Anaconda\envs\lmf\python.exe scripts\train_latent_meanflow.py `
   --gpus 0
 ```
 
-Parallel U-Net AlphaFlow baseline:
+Default U-Net AlphaFlow baseline:
 
 ```powershell
 D:\Anaconda\envs\lmf\python.exe scripts\train_latent_meanflow.py `

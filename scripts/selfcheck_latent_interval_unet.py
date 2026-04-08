@@ -19,12 +19,15 @@ for path in (REPO_ROOT, LDM_ROOT, TAMING_ROOT):
 
 from ldm.util import instantiate_from_config
 from latent_meanflow.models.backbones.latent_interval_unet import LatentIntervalUNet, _timestep_embedding
+import sample_latent_flow
+import train_latent_meanflow
 
 
 UNET_CONFIGS = [
     "latent_meanflow_semantic_256_unet_tiny.yaml",
     "latent_meanflow_semantic_256_unet.yaml",
     "latent_meanflow_semantic_256_unet_large.yaml",
+    "latent_alphaflow_semantic_256_unet.yaml",
 ]
 ABLATION_CONFIGS = [
     "configs/ablations/latent_meanflow_semantic_256_unet_tscale1.yaml",
@@ -166,7 +169,23 @@ def _run_sample_smoke(temp_root, flow_config_path, flow_ckpt_path):
     print(f"sample_latent_flow.py smoke ok: {outdir}")
 
 
+def _assert_default_routes():
+    expected_alphaflow_config = REPO_ROOT / "configs" / "latent_alphaflow_semantic_256_unet.yaml"
+    if train_latent_meanflow.DEFAULT_CONFIGS["alphaflow"] != expected_alphaflow_config:
+        raise AssertionError(
+            "train_latent_meanflow.py default alphaflow route drifted: "
+            f"expected {expected_alphaflow_config}, got {train_latent_meanflow.DEFAULT_CONFIGS['alphaflow']}"
+        )
+    if sample_latent_flow.DEFAULT_CONFIG != expected_alphaflow_config:
+        raise AssertionError(
+            "sample_latent_flow.py default config drifted: "
+            f"expected {expected_alphaflow_config}, got {sample_latent_flow.DEFAULT_CONFIG}"
+        )
+    print("default alphaflow training/sampling routes point to the U-Net config")
+
+
 def main():
+    _assert_default_routes()
     _assert_scale_one_matches_legacy(time_conditioning="t_delta")
     _assert_scale_one_matches_legacy(time_conditioning="r_t")
 

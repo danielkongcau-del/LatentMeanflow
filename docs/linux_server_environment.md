@@ -247,7 +247,7 @@ They are designed for remote servers:
 
 - they resolve the repo root automatically
 - they default `NO_ALBUMENTATIONS_UPDATE=1`
-- they default MeanFlow shell workflows to the benchmark-backed U-Net baseline and still allow tiny/debug or legacy ConvNet configs through environment variables
+- they default latent-flow shell workflows to the objective-specific project baseline, with U-Net now backing the default MeanFlow and AlphaFlow routes
 - they pass any extra CLI arguments straight through to the Python launcher
 
 Examples:
@@ -261,7 +261,7 @@ CONFIG=configs/semantic_tokenizer_tiny_256.yaml MAX_EPOCHS=40 ./scripts/train_to
 
 CONFIG=configs/latent_meanflow_semantic_256_tiny.yaml MAX_EPOCHS=3 ./scripts/train_meanflow.sh
 
-OBJECTIVE=alphaflow CONFIG=configs/latent_alphaflow_semantic_256.yaml ./scripts/train_meanflow.sh
+OBJECTIVE=alphaflow CONFIG=configs/latent_alphaflow_semantic_256_unet.yaml ./scripts/train_meanflow.sh
 
 RESUME=logs/2026-04-07T12-00-00_latent_meanflow_semantic_256_unet/checkpoints/last.ckpt ./scripts/train_meanflow.sh
 
