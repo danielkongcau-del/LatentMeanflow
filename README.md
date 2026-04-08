@@ -203,7 +203,8 @@ Unlike the joint semantic tokenizer:
 This route still reuses the current paired dataset loader, but only reads the
 RGB image tensor from each sample. It is a project-layer image tokenizer, not
 an SD-VAE-equivalent claim. The downstream mask-conditioned latent prior route
-is planned and not implemented yet in this repository.
+now exists as a separate project-layer path and keeps the semantic mask outside
+tokenizer latent `z`.
 
 Base image-only geometry:
 
@@ -256,6 +257,52 @@ python scripts/eval_image_tokenizer.py \
   --reference-ckpt /path/to/image_tokenizer_base.ckpt \
   --outdir outputs/image_tokenizer_eval/f8_vs_base
 ```
+
+### Mask-Conditioned Image Route
+
+The project-layer conditional renderer is a separate route:
+
+- it models `p(image | semantic_mask)`
+- it does not model `p(image, semantic_mask)`
+- it uses the image-only tokenizer, not the joint semantic tokenizer
+- the semantic mask stays outside latent `z`
+- the semantic mask is injected as an external spatial condition into the U-Net
+
+This route is intended as the first sanity check for whether the latent prior
+can render plausible RGB images from a given semantic layout before adding any
+separate semantic-mask prior.
+
+Checked-in configs:
+
+- `configs/latent_fm_mask2image_unet.yaml`
+- `configs/latent_meanflow_mask2image_unet.yaml`
+- `configs/latent_alphaflow_mask2image_unet.yaml`
+- `configs/latent_alphaflow_mask2image_unet_tiny.yaml`
+- `configs/latent_alphaflow_mask2image_f8_unet.yaml`
+
+Use the dedicated wrapper so bare `--objective fm/meanflow/alphaflow` resolves
+inside the mask-conditioned route rather than the existing paired joint route:
+
+```bash
+python scripts/train_mask_conditioned_image.py --objective alphaflow --config configs/latent_alphaflow_mask2image_unet_tiny.yaml --tokenizer-ckpt /path/to/image_tokenizer.ckpt --gpus 0
+python scripts/train_mask_conditioned_image.py --objective alphaflow --config configs/latent_alphaflow_mask2image_unet.yaml --tokenizer-ckpt /path/to/image_tokenizer.ckpt --gpus 0
+```
+
+Sample the fixed `NFE=8/4/2/1` few-step sweep:
+
+```bash
+python scripts/find_checkpoint.py --run-dir logs/<your_run> --selection best --monitor val/base_error_mean
+python scripts/sample_mask_conditioned_image.py --config configs/latent_alphaflow_mask2image_unet.yaml --ckpt <best-ckpt> --outdir outputs/mask_conditioned_image/example --split validation --seed 23 --nfe-values 8 4 2 1
+```
+
+Evaluate the generated images against ground truth sanity metrics:
+
+```bash
+python scripts/eval_mask_conditioned_image.py --config configs/latent_alphaflow_mask2image_unet.yaml --ckpt <best-ckpt> --outdir outputs/mask_conditioned_eval/example --split validation --seed 23 --nfe-values 8 4 2 1
+```
+
+For the full run order, sampling protocol, and success criteria, use
+[docs/mask_conditioned_image_plan.md](docs/mask_conditioned_image_plan.md).
 
 ### Latent FM Path
 
@@ -584,6 +631,11 @@ Config intent:
 - `configs/latent_alphaflow_semantic_256_unet_large.yaml`: U-Net AlphaFlow large-capacity path with the same effective batch target as the base route
 - `configs/latent_alphaflow_semantic_256_unet_paper_attempt.yaml`: U-Net AlphaFlow paper-aligned schedule attempt, not a paper-equivalent claim
 - `configs/latent_alphaflow_semantic_f8_unet.yaml`: AlphaFlow U-Net route reserved for the stronger `f=8` tokenizer branch
+- `configs/latent_fm_mask2image_unet.yaml`: flow-matching baseline for `p(image | semantic_mask)` with image-only tokenizer latents
+- `configs/latent_meanflow_mask2image_unet.yaml`: MeanFlow baseline for `p(image | semantic_mask)` with image-only tokenizer latents
+- `configs/latent_alphaflow_mask2image_unet.yaml`: recommended AlphaFlow baseline for `p(image | semantic_mask)`
+- `configs/latent_alphaflow_mask2image_unet_tiny.yaml`: tiny/debug AlphaFlow mask-conditioned sanity route
+- `configs/latent_alphaflow_mask2image_f8_unet.yaml`: AlphaFlow mask-conditioned route for the stronger image-only `f=8` tokenizer branch
 
 ## AlphaFlow Weighting Semantics
 
@@ -609,3 +661,4 @@ Config intent:
 - In the current AlphaFlow implementation, `alpha=0` samples fall back to MeanFlow `paper_like` weighting while `alpha>0` samples use `alpha_adaptive_exact`.
 - The AlphaFlow implementation includes the `alpha^{-1}` prefactor and configurable curriculum, but `u_theta^-` is currently approximated with a detached online target branch rather than a separate EMA teacher. That is a project-layer engineering approximation, not a full paper-equivalent teacher setup.
 - The `logit_normal` interval sampler is still an engineering approximation of the paper-aligned interval sampling policy: the code samples two scalar times independently from the chosen marginal distribution and sorts them into `(r, t)`.
+- The mask-conditioned image route is a separate project-layer task definition: it models `p(image | semantic_mask)` with an image-only tokenizer and external spatial mask conditioning. It does not reinterpret the paired joint route as a conditional route.

@@ -3,6 +3,8 @@ import os
 import sys
 from pathlib import Path
 
+from omegaconf import OmegaConf
+
 from _launch_utils import normalize_gpus_arg, run_managed_subprocess
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -30,7 +32,7 @@ def parse_args():
     )
     parser.add_argument("--objective", choices=["fm", "meanflow", "alphaflow"], default="alphaflow")
     parser.add_argument("--config", type=Path, default=None)
-    parser.add_argument("--tokenizer-config", type=Path, default=DEFAULT_TOKENIZER_CONFIG)
+    parser.add_argument("--tokenizer-config", type=Path, default=None)
     parser.add_argument("--tokenizer-ckpt", type=Path, default=None)
     parser.add_argument("--gpus", type=str, default=None, help='Examples: "0" or "0,1".')
     parser.add_argument("--max-epochs", type=int, default=None)
@@ -88,7 +90,7 @@ def resolve_tokenizer_ckpt(user_path):
     if DEFAULT_TOKENIZER_CKPT.exists():
         return DEFAULT_TOKENIZER_CKPT
     raise FileNotFoundError(
-        "Tokenizer checkpoint not found. Pass --tokenizer-ckpt or train the semantic autoencoder first."
+        "Tokenizer checkpoint not found. Pass --tokenizer-ckpt or train the tokenizer first."
     )
 
 
@@ -96,6 +98,64 @@ def resolve_config(args):
     if args.config is not None:
         return args.config
     return DEFAULT_CONFIGS[args.objective]
+
+
+def load_train_config(config_path):
+    return OmegaConf.load(config_path)
+
+
+def _resolve_repo_path(value):
+    if value is None:
+        return None
+    path = Path(str(value))
+    if path.is_absolute():
+        return path
+    return REPO_ROOT / path
+
+
+def resolve_tokenizer_config_path(args, config):
+    if args.tokenizer_config is not None:
+        return args.tokenizer_config
+    if config is None:
+        return DEFAULT_TOKENIZER_CONFIG
+    config_value = OmegaConf.select(config, "model.params.tokenizer_config_path")
+    resolved = _resolve_repo_path(config_value)
+    if resolved is not None:
+        return resolved
+    return DEFAULT_TOKENIZER_CONFIG
+
+
+def _find_latest_ckpt_for_config(tokenizer_config_path):
+    run_tag = tokenizer_config_path.stem.lower()
+    candidates = sorted(
+        REPO_ROOT.glob("logs/**/checkpoints/last.ckpt"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for candidate in candidates:
+        run_dir_name = candidate.parent.parent.name.lower()
+        if run_dir_name == run_tag or run_dir_name.endswith(f"_{run_tag}"):
+            return candidate
+    return None
+
+
+def resolve_tokenizer_ckpt_path(args, config, tokenizer_config_path):
+    if args.tokenizer_ckpt is not None:
+        return args.tokenizer_ckpt
+
+    config_ckpt = None if config is None else _resolve_repo_path(
+        OmegaConf.select(config, "model.params.tokenizer_ckpt_path")
+    )
+    if config_ckpt is not None and config_ckpt.exists():
+        return config_ckpt
+
+    latest_ckpt = _find_latest_ckpt_for_config(tokenizer_config_path)
+    if latest_ckpt is not None:
+        return latest_ckpt
+
+    if config_ckpt is not None:
+        return config_ckpt
+    return resolve_tokenizer_ckpt(None)
 
 
 def is_resume_mode(args):
@@ -196,7 +256,7 @@ def validate_resume_request(args, config_path=None, resume_logdir=None):
             )
 
 
-def build_command(args, config_path, tokenizer_ckpt):
+def build_command(args, config_path, tokenizer_config_path, tokenizer_ckpt):
     cmd = [
         sys.executable,
         str(LDM_LAUNCHER),
@@ -226,7 +286,7 @@ def build_command(args, config_path, tokenizer_ckpt):
         cmd.append("lightning.callbacks.image_logger.params.disabled=False")
         cmd.append(f"lightning.callbacks.image_logger.params.batch_frequency={args.image_log_frequency}")
     if should_inject_tokenizer_config(args):
-        cmd.append(f"model.params.tokenizer_config_path={args.tokenizer_config.resolve()}")
+        cmd.append(f"model.params.tokenizer_config_path={tokenizer_config_path.resolve()}")
     if should_inject_tokenizer_ckpt(args):
         if tokenizer_ckpt is None:
             raise ValueError("tokenizer_ckpt is required when tokenizer ckpt override injection is enabled.")
@@ -251,11 +311,24 @@ def main():
 
     validate_resume_request(args, config_path=config_path, resume_logdir=resume_logdir)
 
-    if should_inject_tokenizer_config(args) and not args.tokenizer_config.exists():
-        raise FileNotFoundError(f"Tokenizer config file not found: {args.tokenizer_config}")
+    config = load_train_config(config_path) if config_path is not None else None
+    tokenizer_config_path = (
+        resolve_tokenizer_config_path(args, config) if should_inject_tokenizer_config(args) else None
+    )
+    if tokenizer_config_path is not None and not tokenizer_config_path.exists():
+        raise FileNotFoundError(f"Tokenizer config file not found: {tokenizer_config_path}")
 
-    tokenizer_ckpt = resolve_tokenizer_ckpt(args.tokenizer_ckpt) if should_inject_tokenizer_ckpt(args) else None
-    cmd = build_command(args, config_path, tokenizer_ckpt)
+    tokenizer_ckpt = (
+        resolve_tokenizer_ckpt_path(args, config, tokenizer_config_path)
+        if should_inject_tokenizer_ckpt(args)
+        else None
+    )
+    if tokenizer_ckpt is not None and not tokenizer_ckpt.exists():
+        raise FileNotFoundError(
+            f"Tokenizer checkpoint not found: {tokenizer_ckpt}. "
+            "Pass --tokenizer-ckpt explicitly or train the referenced tokenizer first."
+        )
+    cmd = build_command(args, config_path, tokenizer_config_path, tokenizer_ckpt)
     print("Running:", " ".join(cmd))
     run_managed_subprocess(cmd, cwd=REPO_ROOT, env=build_env())
 

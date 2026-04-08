@@ -306,12 +306,14 @@ class LatentIntervalUNet(nn.Module):
         num_head_channels=64,
         use_scale_shift_norm=True,
         resblock_updown=True,
+        spatial_condition_channels=0,
         t_time_scale=1.0,
         delta_time_scale=1.0,
         r_time_scale=1.0,
     ):
         super().__init__()
         self.in_channels = int(in_channels)
+        self.spatial_condition_channels = int(spatial_condition_channels)
         self.model_channels = int(model_channels)
         self.time_embed_dim = int(time_embed_dim if time_embed_dim is not None else self.model_channels * 4)
         self.num_res_blocks = int(num_res_blocks)
@@ -330,6 +332,7 @@ class LatentIntervalUNet(nn.Module):
         self.t_time_scale = float(t_time_scale)
         self.delta_time_scale = float(delta_time_scale)
         self.r_time_scale = float(r_time_scale)
+        self.model_in_channels = self.in_channels + self.spatial_condition_channels
 
         if self.time_conditioning not in {"t", "t_delta", "r_t"}:
             raise ValueError(
@@ -337,6 +340,10 @@ class LatentIntervalUNet(nn.Module):
             )
         if not self.channel_mult:
             raise ValueError("channel_mult must not be empty")
+        if self.spatial_condition_channels < 0:
+            raise ValueError(
+                f"spatial_condition_channels must be non-negative, got {self.spatial_condition_channels}"
+            )
         for name, value in (
             ("t_time_scale", self.t_time_scale),
             ("delta_time_scale", self.delta_time_scale),
@@ -362,7 +369,7 @@ class LatentIntervalUNet(nn.Module):
 
         ch = input_ch = int(self.channel_mult[0] * self.model_channels)
         self.input_blocks = nn.ModuleList(
-            [TimestepEmbedSequential(_conv_nd(self.dims, self.in_channels, ch, 3, padding=1))]
+            [TimestepEmbedSequential(_conv_nd(self.dims, self.model_in_channels, ch, 3, padding=1))]
         )
         input_block_chans = [ch]
         ds = 1
@@ -515,15 +522,76 @@ class LatentIntervalUNet(nn.Module):
             embedding = embedding + self._embed_scalar(r, self.r_embed, time_scale=self.r_time_scale)
         return embedding
 
-    def forward(self, z_t, t=None, condition=None, r=None, delta_t=None):
-        emb = self._resolve_time_embedding(t=t, r=r, delta_t=delta_t)
-        if condition is not None:
+    def _resolve_condition_inputs(self, condition, z_t):
+        class_condition = None
+        spatial_condition = None
+        if condition is None:
+            return class_condition, spatial_condition
+
+        if isinstance(condition, dict):
+            class_condition = condition.get("class_label")
+            spatial_condition = condition.get("spatial")
+        elif isinstance(condition, torch.Tensor) and condition.ndim == z_t.ndim:
+            spatial_condition = condition
+        else:
+            class_condition = condition
+
+        if class_condition is not None:
             if self.cond_embed is None:
-                raise ValueError("Conditioning provided but condition_num_classes is not configured")
-            emb = emb + self.cond_embed(condition.long())
+                raise ValueError("Class conditioning provided but condition_num_classes is not configured")
+            if not isinstance(class_condition, torch.Tensor) or class_condition.ndim != 1:
+                raise ValueError(
+                    f"Expected class condition tensor with shape [B], got {type(class_condition)} "
+                    f"and shape {getattr(class_condition, 'shape', None)}"
+                )
+            if class_condition.shape[0] != z_t.shape[0]:
+                raise ValueError(
+                    f"Class condition batch size mismatch: got {class_condition.shape[0]}, "
+                    f"expected {z_t.shape[0]}"
+                )
+
+        if spatial_condition is not None:
+            if self.spatial_condition_channels <= 0:
+                raise ValueError(
+                    "Spatial conditioning was provided but spatial_condition_channels is not configured"
+                )
+            if not isinstance(spatial_condition, torch.Tensor) or spatial_condition.ndim != z_t.ndim:
+                raise ValueError(
+                    f"Expected spatial condition tensor with shape [B, C, H, W], got {type(spatial_condition)} "
+                    f"and shape {getattr(spatial_condition, 'shape', None)}"
+                )
+            if spatial_condition.shape[0] != z_t.shape[0]:
+                raise ValueError(
+                    f"Spatial condition batch size mismatch: got {spatial_condition.shape[0]}, "
+                    f"expected {z_t.shape[0]}"
+                )
+            if spatial_condition.shape[1] != self.spatial_condition_channels:
+                raise ValueError(
+                    f"Spatial condition channel mismatch: got {spatial_condition.shape[1]}, "
+                    f"expected {self.spatial_condition_channels}"
+                )
+            if spatial_condition.shape[-2:] != z_t.shape[-2:]:
+                spatial_condition = F.interpolate(
+                    spatial_condition.float(),
+                    size=z_t.shape[-2:],
+                    mode="nearest",
+                )
+            spatial_condition = spatial_condition.to(device=z_t.device, dtype=z_t.dtype)
+        elif self.spatial_condition_channels > 0:
+            raise ValueError(
+                "This backbone expects a spatial condition tensor, but condition=None was provided."
+            )
+
+        return class_condition, spatial_condition
+
+    def forward(self, z_t, t=None, condition=None, r=None, delta_t=None):
+        class_condition, spatial_condition = self._resolve_condition_inputs(condition, z_t)
+        emb = self._resolve_time_embedding(t=t, r=r, delta_t=delta_t)
+        if class_condition is not None:
+            emb = emb + self.cond_embed(class_condition.long())
 
         hs = []
-        h = z_t
+        h = z_t if spatial_condition is None else torch.cat([z_t, spatial_condition], dim=1)
         for module in self.input_blocks:
             h = module(h, emb)
             hs.append(h)
