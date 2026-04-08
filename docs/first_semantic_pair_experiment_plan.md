@@ -6,6 +6,10 @@ This runbook is the minimum experiment order for the current project-layer stack
 
 It is intentionally biased toward getting the first stable paired `RGB image + semantic mask` results today. AlphaFlow is not the focus of this first round.
 
+Treat this document as the historical MeanFlow-first runbook. For the current
+few-step U-Net AlphaFlow main line, use
+[docs/unet_alphaflow_training_plan.md](unet_alphaflow_training_plan.md).
+
 ## Assumptions
 
 - Commands below use the fixed `lmf` environment through `D:\Anaconda\envs\lmf\python.exe`.

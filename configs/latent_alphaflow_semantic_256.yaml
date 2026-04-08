@@ -15,7 +15,7 @@ model:
     use_class_condition: false
     class_label_key: class_label
     log_sample_nfe: 2
-    monitor: val/alphaflow_loss
+    monitor: val/base_error_mean
     backbone_config:
       target: latent_meanflow.models.backbones.latent_interval_velocity_convnet.LatentIntervalVelocityConvNet
       params:
@@ -46,6 +46,9 @@ model:
         alpha_schedule_config:
           target: latent_meanflow.objectives.alphaflow.SigmoidAlphaScheduler
           params:
+            # Legacy rollback baseline: keep the original absolute-step schedule
+            # for controlled ConvNet comparisons. New U-Net main-line configs use
+            # the budget-aware project-layer scheduler instead.
             start_step: 0
             end_step: 1200000
             gamma: 25.0

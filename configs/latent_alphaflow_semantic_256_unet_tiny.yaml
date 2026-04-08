@@ -1,21 +1,21 @@
 model:
-  base_learning_rate: 6.25e-06
+  base_learning_rate: 1.0e-4
   target: latent_meanflow.trainers.latent_flow_trainer.LatentFlowTrainer
   params:
-    # Project AlphaFlow U-Net baseline for few-step paired generation.
+    # Debug-first U-Net AlphaFlow pilot.
     #
-    # This is the conservative main-line recipe:
-    # - keep the tokenizer, paired image-mask task, and AlphaFlow math fixed
-    # - use the project-layer LatentIntervalUNet as the default field backbone
-    # - scale the alpha curriculum by the planned training budget
-    # - keep clamping moderate rather than aggressively small
+    # This is the quickest real-data correctness check for the promoted U-Net
+    # AlphaFlow route:
+    # - same paired image-mask task
+    # - same U-Net family as the real runs
+    # - tiny width and short horizon so training instability shows up fast
     #
-    # With the checked-in training assumptions this uses:
-    # - per-device batch size = 8
-    # - accumulate_grad_batches = 4
-    # - effective batch size = 64 on 2 GPUs
+    # With the checked-in assumptions this uses:
+    # - per-device batch size = 2
+    # - accumulate_grad_batches = 1
+    # - effective batch size = 4 on 2 GPUs
     #
-    # This is a project baseline, not a paper-equivalent claim.
+    # This is a tiny/debug config, not a quality target.
     objective_name: alphaflow
     tokenizer_config_path: configs/autoencoder_semantic_pair_256.yaml
     tokenizer_ckpt_path: logs/autoencoder/checkpoints/last.ckpt
@@ -23,14 +23,14 @@ model:
     freeze_tokenizer: true
     use_class_condition: false
     class_label_key: class_label
-    log_sample_nfe: 4
+    log_sample_nfe: 2
     monitor: val/base_error_mean
     backbone_config:
       target: latent_meanflow.models.backbones.latent_interval_unet.LatentIntervalUNet
       params:
-        model_channels: 64
-        time_embed_dim: 256
-        num_res_blocks: 2
+        model_channels: 32
+        time_embed_dim: 128
+        num_res_blocks: 1
         channel_mult: [1, 2, 4]
         attention_resolutions: [4]
         dropout: 0.0
@@ -45,32 +45,27 @@ model:
         time_eps: 1.0e-4
         min_delta: 0.0
         loss_type: mse
-        # trajectory_fm_ratio means alpha=1 trajectory flow matching (L_TFM).
         trajectory_fm_ratio: 0.0
-        # border_fm_ratio means the r=t border-case supervision ratio (L_FM').
         border_fm_ratio: 0.25
         weighting_mode: alpha_adaptive_exact
         adaptive_weight_power: 1.0
         adaptive_weight_bias: 1.0e-4
         time_sampler_config:
-          target: latent_meanflow.objectives.common.LogitNormalTimeSampler
+          target: latent_meanflow.objectives.common.UniformTimeSampler
           params:
-            loc: -0.4
-            scale: 1.0
             time_eps: 1.0e-4
         alpha_schedule_config:
           target: latent_meanflow.objectives.alphaflow.BudgetSigmoidAlphaScheduler
           params:
-            # Conservative project baseline:
-            # keep alpha near the TFM side early, then transition through most
-            # of the run toward the MeanFlow limit. The trainer overrides the
-            # fallback budget below with the actual optimizer-step budget.
-            transition_start_fraction: 0.05
-            transition_end_fraction: 0.85
-            gamma: 16.0
+            # Keep the smoke route simple: transition over the full tiny run
+            # with the same project-layer scheduler interface used by the real
+            # U-Net AlphaFlow configs.
+            transition_start_fraction: 0.0
+            transition_end_fraction: 1.0
+            gamma: 12.0
             clamp_eta: 0.10
-            total_epochs: 3000
-            optimizer_steps_per_epoch: 26
+            total_epochs: 5
+            optimizer_steps_per_epoch: 32
     sampler_config:
       target: latent_meanflow.samplers.interval.IntervalFlowSampler
       params:
@@ -80,8 +75,8 @@ model:
 data:
   target: main.DataModuleFromConfig
   params:
-    batch_size: 8
-    num_workers: 4
+    batch_size: 2
+    num_workers: 0
     wrap: false
     train:
       target: latent_meanflow.data.semantic_pair.MultiSemanticImageMaskPairDataset
@@ -112,13 +107,17 @@ lightning:
       target: latent_meanflow.callbacks.semantic_logger.SemanticPairImageLogger
       params:
         disabled: false
-        batch_frequency: 100
+        batch_frequency: 10
         increase_log_steps: false
         max_images: 4
         latest_only: true
         ignore_index: -1
   trainer:
     benchmark: false
+    max_epochs: 5
+    limit_train_batches: 32
+    limit_val_batches: 4
     num_sanity_val_steps: 0
-    accumulate_grad_batches: 4
+    log_every_n_steps: 1
+    accumulate_grad_batches: 1
     strategy: ddp_find_unused_parameters_false

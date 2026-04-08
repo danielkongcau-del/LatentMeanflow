@@ -15,6 +15,22 @@ from .common import (
 from .meanflow import meanflow_jvp
 
 
+def _sigmoid_alpha_value(step, *, start_step, end_step, gamma, clamp_eta):
+    if end_step <= start_step:
+        raise ValueError(
+            f"end_step must be greater than start_step, got {start_step} and {end_step}"
+        )
+    step = float(step)
+    scale = 1.0 / float(end_step - start_step)
+    offset = -float(start_step + end_step) / 2.0 / float(end_step - start_step)
+    alpha = 1.0 - 1.0 / (1.0 + math.exp(-((scale * step + offset) * gamma)))
+    if alpha > (1.0 - clamp_eta):
+        return 1.0
+    if alpha < clamp_eta:
+        return 0.0
+    return alpha
+
+
 class SigmoidAlphaScheduler(nn.Module):
     def __init__(self, start_step, end_step, gamma=25.0, clamp_eta=0.05):
         super().__init__()
@@ -28,15 +44,145 @@ class SigmoidAlphaScheduler(nn.Module):
             )
 
     def forward(self, step):
-        step = float(step)
-        scale = 1.0 / float(self.end_step - self.start_step)
-        offset = -float(self.start_step + self.end_step) / 2.0 / float(self.end_step - self.start_step)
-        alpha = 1.0 - 1.0 / (1.0 + math.exp(-((scale * step + offset) * self.gamma)))
-        if alpha > (1.0 - self.clamp_eta):
-            return 1.0
-        if alpha < self.clamp_eta:
-            return 0.0
-        return alpha
+        return _sigmoid_alpha_value(
+            step,
+            start_step=self.start_step,
+            end_step=self.end_step,
+            gamma=self.gamma,
+            clamp_eta=self.clamp_eta,
+        )
+
+
+class BudgetSigmoidAlphaScheduler(nn.Module):
+    def __init__(
+        self,
+        transition_start_fraction=0.0,
+        transition_end_fraction=1.0,
+        gamma=25.0,
+        clamp_eta=0.05,
+        total_steps=None,
+        total_epochs=None,
+        optimizer_steps_per_epoch=None,
+    ):
+        super().__init__()
+        self.transition_start_fraction = float(transition_start_fraction)
+        self.transition_end_fraction = float(transition_end_fraction)
+        self.gamma = float(gamma)
+        self.clamp_eta = float(clamp_eta)
+        self.configured_total_steps = None if total_steps is None else int(total_steps)
+        self.configured_total_epochs = None if total_epochs is None else int(total_epochs)
+        self.configured_optimizer_steps_per_epoch = (
+            None if optimizer_steps_per_epoch is None else int(optimizer_steps_per_epoch)
+        )
+
+        if not 0.0 <= self.transition_start_fraction < 1.0:
+            raise ValueError(
+                "transition_start_fraction must lie in [0, 1), "
+                f"got {self.transition_start_fraction}"
+            )
+        if not 0.0 < self.transition_end_fraction <= 1.0:
+            raise ValueError(
+                "transition_end_fraction must lie in (0, 1], "
+                f"got {self.transition_end_fraction}"
+            )
+        if self.transition_end_fraction <= self.transition_start_fraction:
+            raise ValueError(
+                "transition_end_fraction must be greater than transition_start_fraction, "
+                f"got {self.transition_start_fraction} and {self.transition_end_fraction}"
+            )
+        if self.gamma <= 0:
+            raise ValueError(f"gamma must be positive, got {self.gamma}")
+        if not 0.0 <= self.clamp_eta < 0.5:
+            raise ValueError(f"clamp_eta must lie in [0, 0.5), got {self.clamp_eta}")
+
+        self._resolved_total_steps = None
+        self.set_training_budget(
+            total_steps=self.configured_total_steps,
+            total_epochs=self.configured_total_epochs,
+            optimizer_steps_per_epoch=self.configured_optimizer_steps_per_epoch,
+            allow_unresolved=True,
+        )
+
+    def _resolve_total_steps(self, *, total_steps=None, total_epochs=None, optimizer_steps_per_epoch=None):
+        if total_steps is not None:
+            total_steps = int(total_steps)
+            if total_steps <= 1:
+                raise ValueError(f"total_steps must be greater than 1, got {total_steps}")
+            return total_steps
+        if total_epochs is None and optimizer_steps_per_epoch is None:
+            return None
+        if total_epochs is None or optimizer_steps_per_epoch is None:
+            raise ValueError(
+                "BudgetSigmoidAlphaScheduler requires either total_steps or "
+                "both total_epochs and optimizer_steps_per_epoch."
+            )
+        total_epochs = int(total_epochs)
+        optimizer_steps_per_epoch = int(optimizer_steps_per_epoch)
+        if total_epochs <= 0:
+            raise ValueError(f"total_epochs must be positive, got {total_epochs}")
+        if optimizer_steps_per_epoch <= 0:
+            raise ValueError(
+                f"optimizer_steps_per_epoch must be positive, got {optimizer_steps_per_epoch}"
+            )
+        total_steps = total_epochs * optimizer_steps_per_epoch
+        if total_steps <= 1:
+            raise ValueError(
+                "Resolved total_steps must be greater than 1, "
+                f"got {total_steps} from total_epochs={total_epochs} "
+                f"and optimizer_steps_per_epoch={optimizer_steps_per_epoch}"
+            )
+        return total_steps
+
+    def set_training_budget(
+        self,
+        *,
+        total_steps=None,
+        total_epochs=None,
+        optimizer_steps_per_epoch=None,
+        allow_unresolved=False,
+    ):
+        resolved_total_steps = self._resolve_total_steps(
+            total_steps=total_steps,
+            total_epochs=total_epochs,
+            optimizer_steps_per_epoch=optimizer_steps_per_epoch,
+        )
+        if resolved_total_steps is None:
+            if allow_unresolved:
+                self._resolved_total_steps = None
+                return
+            raise ValueError(
+                "BudgetSigmoidAlphaScheduler could not resolve a training budget. "
+                "Provide total_steps directly, provide total_epochs with "
+                "optimizer_steps_per_epoch, or let the trainer inject the fit budget."
+            )
+        self._resolved_total_steps = int(resolved_total_steps)
+
+    def _resolve_window(self):
+        if self._resolved_total_steps is None:
+            raise ValueError(
+                "BudgetSigmoidAlphaScheduler has no resolved training budget yet. "
+                "Call set_training_budget(...) or use it through LatentFlowTrainer.fit."
+            )
+        horizon = max(self._resolved_total_steps - 1, 1)
+        start_step = int(round(self.transition_start_fraction * horizon))
+        end_step = int(round(self.transition_end_fraction * horizon))
+        if end_step <= start_step:
+            raise ValueError(
+                "Resolved schedule window is empty. "
+                f"Got start_step={start_step}, end_step={end_step}, "
+                f"resolved_total_steps={self._resolved_total_steps}"
+            )
+        return start_step, end_step
+
+    def forward(self, step):
+        start_step, end_step = self._resolve_window()
+        return _sigmoid_alpha_value(
+            step,
+            start_step=start_step,
+            end_step=end_step,
+            gamma=self.gamma,
+            clamp_eta=self.clamp_eta,
+        )
 
 
 class ConstantAlphaScheduler(nn.Module):
@@ -107,6 +253,16 @@ class AlphaFlowObjective(nn.Module):
                 },
             }
         self.alpha_schedule = instantiate_from_config(alpha_schedule_config)
+
+    def set_training_budget(self, total_steps=None, total_epochs=None, optimizer_steps_per_epoch=None):
+        setter = getattr(self.alpha_schedule, "set_training_budget", None)
+        if setter is None:
+            return
+        setter(
+            total_steps=total_steps,
+            total_epochs=total_epochs,
+            optimizer_steps_per_epoch=optimizer_steps_per_epoch,
+        )
 
     def get_alpha(self, global_step):
         if global_step is None:

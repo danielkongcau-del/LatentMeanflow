@@ -26,7 +26,7 @@ RUN_NAMES = {
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Train latent flow priors. Recommended default: AlphaFlow curriculum."
+        description="Train latent flow priors. Recommended default: U-Net AlphaFlow project baseline."
     )
     parser.add_argument("--objective", choices=["fm", "meanflow", "alphaflow"], default="alphaflow")
     parser.add_argument("--config", type=Path, default=None)

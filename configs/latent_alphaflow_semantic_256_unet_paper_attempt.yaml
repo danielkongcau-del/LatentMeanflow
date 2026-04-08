@@ -2,20 +2,21 @@ model:
   base_learning_rate: 6.25e-06
   target: latent_meanflow.trainers.latent_flow_trainer.LatentFlowTrainer
   params:
-    # Project AlphaFlow U-Net baseline for few-step paired generation.
+    # Paper-aligned AlphaFlow attempt on the promoted U-Net backbone.
     #
-    # This is the conservative main-line recipe:
-    # - keep the tokenizer, paired image-mask task, and AlphaFlow math fixed
-    # - use the project-layer LatentIntervalUNet as the default field backbone
-    # - scale the alpha curriculum by the planned training budget
-    # - keep clamping moderate rather than aggressively small
+    # This keeps the project tokenizer, paired task, and AlphaFlow math fixed
+    # but moves the curriculum closer to the paper's intent:
+    # - a smoother transition through most of the run
+    # - noticeably smaller clamping than the project baseline
     #
     # With the checked-in training assumptions this uses:
     # - per-device batch size = 8
     # - accumulate_grad_batches = 4
     # - effective batch size = 64 on 2 GPUs
     #
-    # This is a project baseline, not a paper-equivalent claim.
+    # This is paper-aligned in schedule semantics only. It is not a
+    # paper-equivalent claim because the project still uses the existing
+    # detached online target branch instead of a separate EMA teacher.
     objective_name: alphaflow
     tokenizer_config_path: configs/autoencoder_semantic_pair_256.yaml
     tokenizer_ckpt_path: logs/autoencoder/checkpoints/last.ckpt
@@ -45,9 +46,7 @@ model:
         time_eps: 1.0e-4
         min_delta: 0.0
         loss_type: mse
-        # trajectory_fm_ratio means alpha=1 trajectory flow matching (L_TFM).
         trajectory_fm_ratio: 0.0
-        # border_fm_ratio means the r=t border-case supervision ratio (L_FM').
         border_fm_ratio: 0.25
         weighting_mode: alpha_adaptive_exact
         adaptive_weight_power: 1.0
@@ -61,14 +60,14 @@ model:
         alpha_schedule_config:
           target: latent_meanflow.objectives.alphaflow.BudgetSigmoidAlphaScheduler
           params:
-            # Conservative project baseline:
-            # keep alpha near the TFM side early, then transition through most
-            # of the run toward the MeanFlow limit. The trainer overrides the
-            # fallback budget below with the actual optimizer-step budget.
-            transition_start_fraction: 0.05
-            transition_end_fraction: 0.85
-            gamma: 16.0
-            clamp_eta: 0.10
+            # Paper-aligned attempt:
+            # spend more of the run in the transition band and use a smaller
+            # clamp_eta than the project baseline to keep the alpha curriculum
+            # less aggressively discretized.
+            transition_start_fraction: 0.15
+            transition_end_fraction: 0.95
+            gamma: 12.0
+            clamp_eta: 0.02
             total_epochs: 3000
             optimizer_steps_per_epoch: 26
     sampler_config:

@@ -27,7 +27,10 @@ UNET_CONFIGS = [
     "latent_meanflow_semantic_256_unet_tiny.yaml",
     "latent_meanflow_semantic_256_unet.yaml",
     "latent_meanflow_semantic_256_unet_large.yaml",
+    "latent_alphaflow_semantic_256_unet_tiny.yaml",
     "latent_alphaflow_semantic_256_unet.yaml",
+    "latent_alphaflow_semantic_256_unet_large.yaml",
+    "latent_alphaflow_semantic_256_unet_paper_attempt.yaml",
 ]
 ABLATION_CONFIGS = [
     "configs/ablations/latent_meanflow_semantic_256_unet_tscale1.yaml",
@@ -48,6 +51,29 @@ def _instantiate_backbone(config_path):
     assert out.shape == z_t.shape, f"{config_path}: expected {tuple(z_t.shape)}, got {tuple(out.shape)}"
     params = sum(parameter.numel() for parameter in model.parameters())
     print(f"{config_path}: output shape ok {tuple(out.shape)}, params={params}")
+
+
+def _assert_alphaflow_budget_scheduler(config_path):
+    cfg = OmegaConf.load(REPO_ROOT / config_path)
+    objective = instantiate_from_config(cfg.model.params.objective_config)
+    scheduler = objective.alpha_schedule
+    if scheduler.__class__.__name__ != "BudgetSigmoidAlphaScheduler":
+        raise AssertionError(
+            f"{config_path}: expected BudgetSigmoidAlphaScheduler, got {scheduler.__class__.__name__}"
+        )
+    objective.set_training_budget(total_steps=1000)
+    alpha_start = objective.get_alpha(0)
+    alpha_mid = objective.get_alpha(500)
+    alpha_end = objective.get_alpha(999)
+    if not (1.0 >= alpha_start >= alpha_mid >= alpha_end >= 0.0):
+        raise AssertionError(
+            f"{config_path}: alpha schedule should decrease from 1 toward 0, "
+            f"got start={alpha_start}, mid={alpha_mid}, end={alpha_end}"
+        )
+    print(
+        f"{config_path}: budget scheduler ok "
+        f"(alpha_start={alpha_start:.4f}, alpha_mid={alpha_mid:.4f}, alpha_end={alpha_end:.4f})"
+    )
 
 
 def _legacy_resolve_time_embedding(model, t, r=None, delta_t=None):
@@ -124,8 +150,8 @@ def _write_temp_tokenizer_artifacts(temp_root):
 
 
 def _write_temp_flow_artifacts(temp_root, tokenizer_config_path, tokenizer_ckpt_path):
-    config_name = "latent_meanflow_semantic_256_unet_tscale100"
-    flow_config = OmegaConf.load(REPO_ROOT / "configs" / "ablations" / f"{config_name}.yaml")
+    config_name = "latent_alphaflow_semantic_256_unet_tiny"
+    flow_config = OmegaConf.load(REPO_ROOT / "configs" / f"{config_name}.yaml")
     flow_config.model.params.tokenizer_config_path = str(tokenizer_config_path)
     flow_config.model.params.tokenizer_ckpt_path = str(tokenizer_ckpt_path)
 
@@ -141,7 +167,7 @@ def _write_temp_flow_artifacts(temp_root, tokenizer_config_path, tokenizer_ckpt_
 
 
 def _run_sample_smoke(temp_root, flow_config_path, flow_ckpt_path):
-    outdir = temp_root / "outputs" / "meanflow_unet_tiny_nfe2"
+    outdir = temp_root / "outputs" / "alphaflow_unet_tiny_nfe2"
     command = [
         sys.executable,
         str(REPO_ROOT / "scripts" / "sample_latent_flow.py"),
@@ -193,6 +219,13 @@ def main():
         _instantiate_backbone(Path("configs") / config_name)
     for config_name in ABLATION_CONFIGS:
         _instantiate_backbone(Path(config_name))
+    for config_name in (
+        "configs/latent_alphaflow_semantic_256_unet_tiny.yaml",
+        "configs/latent_alphaflow_semantic_256_unet.yaml",
+        "configs/latent_alphaflow_semantic_256_unet_large.yaml",
+        "configs/latent_alphaflow_semantic_256_unet_paper_attempt.yaml",
+    ):
+        _assert_alphaflow_budget_scheduler(config_name)
 
     temp_parent = REPO_ROOT / "outputs" / "_tmp_selfcheck"
     temp_parent.mkdir(parents=True, exist_ok=True)

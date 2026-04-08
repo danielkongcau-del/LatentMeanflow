@@ -193,10 +193,38 @@ Run the U-Net MeanFlow large capacity bump:
 python scripts/train_latent_meanflow.py --objective meanflow --config configs/latent_meanflow_semantic_256_unet_large.yaml --gpus 0
 ```
 
-Run the default U-Net AlphaFlow baseline:
+The current few-step paired-generation main line is U-Net AlphaFlow. Keep the
+tokenizer and paired task fixed, and treat the following configs as a single
+project-layer recipe family:
+
+- `configs/latent_alphaflow_semantic_256_unet_tiny.yaml`: tiny/debug pilot
+- `configs/latent_alphaflow_semantic_256_unet.yaml`: default project baseline
+- `configs/latent_alphaflow_semantic_256_unet_large.yaml`: large-capacity U-Net bump
+- `configs/latent_alphaflow_semantic_256_unet_paper_attempt.yaml`: paper-aligned schedule attempt, not a paper-equivalent claim
+- `configs/latent_alphaflow_semantic_256.yaml`: legacy ConvNet rollback baseline
+
+Run the U-Net AlphaFlow tiny/debug pilot:
+
+```bash
+python scripts/train_latent_meanflow.py --objective alphaflow --config configs/latent_alphaflow_semantic_256_unet_tiny.yaml --gpus 0
+```
+
+Run the default U-Net AlphaFlow project baseline:
 
 ```bash
 python scripts/train_latent_meanflow.py --objective alphaflow --config configs/latent_alphaflow_semantic_256_unet.yaml --gpus 0
+```
+
+Run the U-Net AlphaFlow large capacity bump:
+
+```bash
+python scripts/train_latent_meanflow.py --objective alphaflow --config configs/latent_alphaflow_semantic_256_unet_large.yaml --gpus 0
+```
+
+Run the U-Net AlphaFlow paper-aligned schedule attempt:
+
+```bash
+python scripts/train_latent_meanflow.py --objective alphaflow --config configs/latent_alphaflow_semantic_256_unet_paper_attempt.yaml --gpus 0
 ```
 
 Keep the old ConvNet AlphaFlow baseline available as a legacy rollback path:
@@ -204,6 +232,10 @@ Keep the old ConvNet AlphaFlow baseline available as a legacy rollback path:
 ```bash
 python scripts/train_latent_meanflow.py --objective alphaflow --config configs/latent_alphaflow_semantic_256.yaml --gpus 0
 ```
+
+For the multi-GPU few-step training recipe, effective batch math, and fixed
+`NFE=8/4/2/1` evaluation protocol, use
+[docs/unet_alphaflow_training_plan.md](docs/unet_alphaflow_training_plan.md).
 
 Engineering ablation path: U-Net time-embedding input scale. These configs do
 not change the MeanFlow objective math. They only rescale the raw `[0,1]`
@@ -307,24 +339,29 @@ By default, resume no longer injects:
 This prevents a default `alphaflow` config, a new tokenizer path, or any arbitrary dotlist override, including wrapper-managed batch-size and image-logger flags, from being silently merged into an existing `meanflow` resume run.
 
 Train the recommended AlphaFlow curriculum. Bare `--objective alphaflow` now
-resolves to the U-Net AlphaFlow baseline:
+resolves to the U-Net AlphaFlow project baseline:
 
 ```bash
 python scripts/train_latent_meanflow.py --objective alphaflow --gpus 0
 ```
 
-For quick validation or debugging, use the explicit smoke config:
+For quick validation or debugging, use the U-Net AlphaFlow tiny/debug config:
 
 ```bash
-python scripts/train_latent_meanflow.py --config configs/latent_alphaflow_semantic_256_smoke.yaml --gpus 0
+python scripts/train_latent_meanflow.py --objective alphaflow --config configs/latent_alphaflow_semantic_256_unet_tiny.yaml --gpus 0
 ```
 
-Sample from a latent-flow checkpoint with `NFE=1` or `NFE=2`. Bare
-`sample_latent_flow.py` now defaults to the U-Net AlphaFlow config, so keep the
-config stem explicit whenever you want the legacy ConvNet rollback path:
+Sample from a latent-flow checkpoint with an explicit U-Net AlphaFlow config.
+For quick looks use `NFE=4` or `NFE=2`; for formal few-step comparisons use the
+fixed `NFE=8/4/2/1` sweep in
+[docs/unet_alphaflow_training_plan.md](docs/unet_alphaflow_training_plan.md)
+or [docs/unet_backbone_benchmark.md](docs/unet_backbone_benchmark.md).
+Bare `sample_latent_flow.py` now defaults to the U-Net AlphaFlow config, so
+keep the config stem explicit whenever you want the legacy ConvNet rollback
+path:
 
 ```bash
-python scripts/sample_latent_flow.py --config configs/latent_alphaflow_semantic_256_unet.yaml --ckpt /path/to/last.ckpt --nfe 1
+python scripts/sample_latent_flow.py --config configs/latent_alphaflow_semantic_256_unet.yaml --ckpt /path/to/last.ckpt --nfe 4
 python scripts/sample_latent_flow.py --config configs/latent_alphaflow_semantic_256_unet.yaml --ckpt /path/to/last.ckpt --nfe 2
 ```
 
@@ -345,6 +382,8 @@ python scripts/find_checkpoint.py --config configs/latent_alphaflow_semantic_256
 python scripts/sample_latent_flow.py --config configs/latent_alphaflow_semantic_256.yaml --ckpt <legacy-convnet-alphaflow-ckpt> --nfe 2
 python scripts/find_checkpoint.py --config configs/latent_alphaflow_semantic_256_unet.yaml
 python scripts/sample_latent_flow.py --config configs/latent_alphaflow_semantic_256_unet.yaml --ckpt <baseline-alphaflow-unet-ckpt> --nfe 2
+python scripts/find_checkpoint.py --config configs/latent_alphaflow_semantic_256_unet_paper_attempt.yaml
+python scripts/sample_latent_flow.py --config configs/latent_alphaflow_semantic_256_unet_paper_attempt.yaml --ckpt <paper-attempt-alphaflow-unet-ckpt> --nfe 2
 ```
 
 `sample_latent_flow.py` now performs a basic path-level safety check and will reject a clearly mismatched config/checkpoint pair such as `configs/latent_meanflow_semantic_256.yaml` together with a checkpoint from a `*_latent_meanflow_semantic_256_tiny/` run.
@@ -395,7 +434,10 @@ Config intent:
 - `configs/ablations/latent_meanflow_semantic_256_unet_tscale{1,100,1000}.yaml`: engineering-only U-Net time-scale ablations
 - `configs/ablations/latent_meanflow_semantic_256_unet_rt_tscale100.yaml`: engineering-only `(r, t)` conditioning ablation
 - `configs/latent_alphaflow_semantic_256.yaml`: legacy ConvNet AlphaFlow rollback baseline
-- `configs/latent_alphaflow_semantic_256_unet.yaml`: default AlphaFlow backbone path after the U-Net promotion
+- `configs/latent_alphaflow_semantic_256_unet_tiny.yaml`: U-Net AlphaFlow tiny/debug pilot
+- `configs/latent_alphaflow_semantic_256_unet.yaml`: default AlphaFlow U-Net project baseline for few-step paired generation
+- `configs/latent_alphaflow_semantic_256_unet_large.yaml`: U-Net AlphaFlow large-capacity path with the same effective batch target as the base route
+- `configs/latent_alphaflow_semantic_256_unet_paper_attempt.yaml`: U-Net AlphaFlow paper-aligned schedule attempt, not a paper-equivalent claim
 
 ## AlphaFlow Weighting Semantics
 
@@ -413,9 +455,11 @@ Config intent:
 - The paper-like MeanFlow config uses `logit_normal(-0.4, 1.0)`, `border_fm_ratio=0.75`, and adaptive power `1.0`.
 - The default MeanFlow route now points to the U-Net baseline because the pinned benchmark protocol showed it beat the ConvNet baseline at `NFE=4/2` without regressing at `NFE=8`.
 - The legacy ConvNet MeanFlow baseline is still kept for rollback and comparison.
-- The default AlphaFlow route now also points to the U-Net baseline; the legacy ConvNet AlphaFlow config remains checked in as a rollback baseline.
+- The default AlphaFlow route now also points to the U-Net project baseline; the legacy ConvNet AlphaFlow config remains checked in as a rollback baseline.
+- The promoted U-Net AlphaFlow route keeps the tokenizer and paired task fixed while increasing the effective batch through gradient accumulation. On the checked-in 2-GPU recipes the effective batch target is `64`.
 - The U-Net time-scale configs under `configs/ablations/` are engineering-only ablations of the scalar embedding input scale; they do not change the objective and they are not paper-equivalent claims.
 - The project AlphaFlow baseline uses the alpha curriculum and `border_fm_ratio=0.25`; it does not reinterpret that ratio as random `alpha=1` overrides.
+- The paper-aligned AlphaFlow attempt only moves the curriculum schedule and clamping closer to the paper's semantics. It does not add a separate EMA teacher, so it is still not paper-equivalent.
 - In the current AlphaFlow implementation, `alpha=0` samples fall back to MeanFlow `paper_like` weighting while `alpha>0` samples use `alpha_adaptive_exact`.
 - The AlphaFlow implementation includes the `alpha^{-1}` prefactor and configurable curriculum, but `u_theta^-` is currently approximated with a detached online target branch rather than a separate EMA teacher. That is a project-layer engineering approximation, not a full paper-equivalent teacher setup.
 - The `logit_normal` interval sampler is still an engineering approximation of the paper-aligned interval sampling policy: the code samples two scalar times independently from the chosen marginal distribution and sorts them into `(r, t)`.

@@ -1,3 +1,4 @@
+import math
 from copy import deepcopy
 
 import pytorch_lightning as pl
@@ -78,6 +79,45 @@ class LatentFlowTrainer(pl.LightningModule):
         if value is None:
             return None
         return value.to(device=device, dtype=dtype)
+
+    def _configure_objective_training_budget(self):
+        objective = getattr(self, "objective", None)
+        set_budget = getattr(objective, "set_training_budget", None)
+        if set_budget is None:
+            return
+        trainer = getattr(self, "trainer", None)
+        if trainer is None:
+            return
+
+        total_steps = getattr(trainer, "estimated_stepping_batches", None)
+        try:
+            total_steps = None if total_steps is None else int(total_steps)
+        except (TypeError, ValueError):
+            total_steps = None
+        if total_steps is not None and total_steps <= 0:
+            total_steps = None
+
+        total_epochs = getattr(trainer, "max_epochs", None)
+        try:
+            total_epochs = None if total_epochs is None else int(total_epochs)
+        except (TypeError, ValueError):
+            total_epochs = None
+        if total_epochs is not None and total_epochs <= 0:
+            total_epochs = None
+
+        optimizer_steps_per_epoch = None
+        if total_steps is not None and total_epochs is not None:
+            optimizer_steps_per_epoch = max(1, int(math.ceil(total_steps / float(total_epochs))))
+
+        set_budget(
+            total_steps=total_steps,
+            total_epochs=total_epochs,
+            optimizer_steps_per_epoch=optimizer_steps_per_epoch,
+        )
+
+    def on_fit_start(self):
+        super().on_fit_start()
+        self._configure_objective_training_budget()
 
     def predict_field(self, z_t, t=None, condition=None, r=None, delta_t=None):
         if condition is not None:

@@ -2,20 +2,17 @@ model:
   base_learning_rate: 6.25e-06
   target: latent_meanflow.trainers.latent_flow_trainer.LatentFlowTrainer
   params:
-    # Project AlphaFlow U-Net baseline for few-step paired generation.
+    # Large-capacity U-Net AlphaFlow route for better few-step paired quality.
     #
-    # This is the conservative main-line recipe:
-    # - keep the tokenizer, paired image-mask task, and AlphaFlow math fixed
-    # - use the project-layer LatentIntervalUNet as the default field backbone
-    # - scale the alpha curriculum by the planned training budget
-    # - keep clamping moderate rather than aggressively small
+    # This keeps the project AlphaFlow objective and paired tokenizer route
+    # fixed, but widens the U-Net from 64 -> 96 base channels while preserving
+    # the same multiscale family as the MeanFlow U-Net large config.
     #
-    # With the checked-in training assumptions this uses:
-    # - per-device batch size = 8
-    # - accumulate_grad_batches = 4
+    # To avoid hard-requiring more VRAM, it lowers the per-device microbatch
+    # and compensates with more gradient accumulation:
+    # - per-device batch size = 4
+    # - accumulate_grad_batches = 8
     # - effective batch size = 64 on 2 GPUs
-    #
-    # This is a project baseline, not a paper-equivalent claim.
     objective_name: alphaflow
     tokenizer_config_path: configs/autoencoder_semantic_pair_256.yaml
     tokenizer_ckpt_path: logs/autoencoder/checkpoints/last.ckpt
@@ -28,8 +25,8 @@ model:
     backbone_config:
       target: latent_meanflow.models.backbones.latent_interval_unet.LatentIntervalUNet
       params:
-        model_channels: 64
-        time_embed_dim: 256
+        model_channels: 96
+        time_embed_dim: 384
         num_res_blocks: 2
         channel_mult: [1, 2, 4]
         attention_resolutions: [4]
@@ -45,9 +42,7 @@ model:
         time_eps: 1.0e-4
         min_delta: 0.0
         loss_type: mse
-        # trajectory_fm_ratio means alpha=1 trajectory flow matching (L_TFM).
         trajectory_fm_ratio: 0.0
-        # border_fm_ratio means the r=t border-case supervision ratio (L_FM').
         border_fm_ratio: 0.25
         weighting_mode: alpha_adaptive_exact
         adaptive_weight_power: 1.0
@@ -61,10 +56,6 @@ model:
         alpha_schedule_config:
           target: latent_meanflow.objectives.alphaflow.BudgetSigmoidAlphaScheduler
           params:
-            # Conservative project baseline:
-            # keep alpha near the TFM side early, then transition through most
-            # of the run toward the MeanFlow limit. The trainer overrides the
-            # fallback budget below with the actual optimizer-step budget.
             transition_start_fraction: 0.05
             transition_end_fraction: 0.85
             gamma: 16.0
@@ -80,7 +71,7 @@ model:
 data:
   target: main.DataModuleFromConfig
   params:
-    batch_size: 8
+    batch_size: 4
     num_workers: 4
     wrap: false
     train:
@@ -120,5 +111,5 @@ lightning:
   trainer:
     benchmark: false
     num_sanity_val_steps: 0
-    accumulate_grad_batches: 4
+    accumulate_grad_batches: 8
     strategy: ddp_find_unused_parameters_false

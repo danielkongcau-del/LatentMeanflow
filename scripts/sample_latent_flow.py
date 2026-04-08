@@ -33,7 +33,12 @@ def parse_args():
     parser.add_argument("--outdir", type=Path, default=REPO_ROOT / "outputs" / "latent_flow_samples")
     parser.add_argument("--n-samples", type=int, default=16)
     parser.add_argument("--batch-size", type=int, default=4)
-    parser.add_argument("--nfe", type=int, default=1, help="Number of function evaluations. Use 1 or 2 for few-step sampling.")
+    parser.add_argument(
+        "--nfe",
+        type=int,
+        default=1,
+        help="Number of function evaluations. Common few-step sweeps use 8, 4, 2, and 1.",
+    )
     parser.add_argument("--seed", type=int, default=23)
     parser.add_argument("--class-label", type=int, default=None, help="Optional image-level condition.")
     parser.add_argument("--overlay-alpha", type=float, default=0.4)

@@ -76,6 +76,11 @@ Run this matrix in order:
 2. MeanFlow ConvNet large vs MeanFlow U-Net large
 3. If MeanFlow U-Net wins clearly, then add AlphaFlow U-Net as the next branch
 
+Once that condition is met, use
+[docs/unet_alphaflow_training_plan.md](unet_alphaflow_training_plan.md) as the
+main U-Net AlphaFlow training runbook instead of treating AlphaFlow as an
+informal side branch.
+
 ## Base Pair
 
 Resolve the checkpoints:
@@ -161,7 +166,9 @@ D:\Anaconda\envs\lmf\python.exe scripts\eval_backbone_nfe_sweep.py `
 ## Optional Next Branch: AlphaFlow U-Net
 
 Only add this branch if the MeanFlow U-Net benchmark already shows a clear gain
-over the ConvNet baseline.
+over the ConvNet baseline. For the promoted U-Net AlphaFlow training recipe and
+project-baseline vs paper-attempt schedule comparison, see
+[docs/unet_alphaflow_training_plan.md](unet_alphaflow_training_plan.md).
 
 ```powershell
 $alphaUnetRun = "logs/<timestamp>_latent_alphaflow_semantic_256_unet"
