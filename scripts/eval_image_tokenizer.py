@@ -18,6 +18,7 @@ for path in (REPO_ROOT, LDM_ROOT, TAMING_ROOT):
 from latent_meanflow.utils.image_tokenizer_audit import (
     compare_summaries,
     evaluate_image_tokenizer,
+    write_latent_stats_artifacts,
     write_eval_markdown,
     write_summary_csv,
 )
@@ -121,6 +122,8 @@ def main():
     summary_json_path = outdir / "summary.json"
     summary_md_path = outdir / "summary.md"
     summary_csv_path = outdir / "summary.csv"
+    latent_stats_records = write_latent_stats_artifacts(outdir, summaries)
+    payload["latent_stats"] = latent_stats_records
     summary_json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     write_eval_markdown(summary_md_path, summaries=summaries, comparison=comparison)
     write_summary_csv(summary_csv_path, summaries=summaries)
@@ -128,6 +131,7 @@ def main():
     print(f"Saved image tokenizer evaluation JSON to {summary_json_path}")
     print(f"Saved image tokenizer evaluation markdown to {summary_md_path}")
     print(f"Saved image tokenizer evaluation CSV to {summary_csv_path}")
+    print(f"Saved latent stats artifacts under {outdir / 'latent_stats'}")
 
 
 if __name__ == "__main__":

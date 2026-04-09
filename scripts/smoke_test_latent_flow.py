@@ -1,3 +1,4 @@
+import json
 import subprocess
 import sys
 import tempfile
@@ -116,7 +117,30 @@ def write_tokenizer_config(root):
     return config_path
 
 
-def build_trainer(objective_name, tokenizer_config, tokenizer_ckpt):
+def write_latent_stats(root):
+    stats_path = root / "latent_stats.json"
+    stats_path.write_text(
+        json.dumps(
+            {
+                "format_version": 1,
+                "latent_shape": [4, 16, 16],
+                "latent_spatial_shape": [16, 16],
+                "stats": {
+                    "global": {"mean": 0.125, "std": 0.9},
+                    "per_channel": {
+                        "mean": [0.10, -0.20, 0.05, 0.30],
+                        "std": [1.20, 0.80, 0.60, 1.50],
+                    },
+                },
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return stats_path
+
+
+def build_trainer(objective_name, tokenizer_config, tokenizer_ckpt, latent_normalization_config=None):
     backbone_config = {
         "target": "latent_meanflow.models.backbones.latent_interval_velocity_convnet.LatentIntervalVelocityConvNet",
         "params": {
@@ -207,6 +231,7 @@ def build_trainer(objective_name, tokenizer_config, tokenizer_ckpt):
         freeze_tokenizer=True,
         use_class_condition=False,
         log_sample_nfe=2,
+        latent_normalization_config=latent_normalization_config,
     )
 
 
@@ -279,6 +304,7 @@ def main():
         build_dataset(data_root)
         tokenizer_ckpt = build_tokenizer_ckpt(root)
         tokenizer_config = write_tokenizer_config(root)
+        latent_stats_path = write_latent_stats(root)
 
         dataset = MultiSemanticImageMaskPairDataset(
             roots=[data_root],
@@ -310,9 +336,41 @@ def main():
             assert decoded_2["mask_index"].shape == (2, 32, 32)
 
         alphaflow_model = build_trainer("alphaflow", tokenizer_config, tokenizer_ckpt)
-        alphaflow_ckpt = root / "latent_alphaflow.ckpt"
+        alphaflow_ckpt = root / "latent_alphaflow" / "checkpoints" / "last.ckpt"
+        alphaflow_ckpt.parent.mkdir(parents=True, exist_ok=True)
         torch.save({"state_dict": alphaflow_model.state_dict()}, alphaflow_ckpt)
         alphaflow_config = write_alphaflow_config(root, tokenizer_config, tokenizer_ckpt)
+
+        normalized_model = build_trainer(
+            "alphaflow",
+            tokenizer_config,
+            tokenizer_ckpt,
+            latent_normalization_config={
+                "mode": "per_channel_affine",
+                "stats_path": latent_stats_path,
+                "std_floor": 0.05,
+            },
+        )
+        normalized_outputs = normalized_model(batch, objective_step=4)
+        normalized_outputs["loss"].backward()
+        encoded = normalized_model.encode_batch(batch)
+        restored = normalized_model.denormalize_latents(encoded["z"])
+        if torch.allclose(encoded["z"], encoded["z_tokenizer"]):
+            raise AssertionError("Expected normalized latents to differ from raw tokenizer latents")
+        if not torch.allclose(restored, encoded["z_tokenizer"], atol=1.0e-5, rtol=1.0e-5):
+            raise AssertionError("Latent normalization bridge is not invertible within tolerance")
+        decoded_from_normalized = normalized_model.decode_latents(encoded["z"])
+        decoded_from_raw = normalized_model.tokenizer.decode_latents(encoded["z_tokenizer"])
+        if not torch.allclose(
+            decoded_from_normalized["rgb_recon"],
+            decoded_from_raw["rgb_recon"],
+            atol=1.0e-5,
+            rtol=1.0e-5,
+        ):
+            raise AssertionError("Decoding after denormalization does not match raw tokenizer decoding")
+        normalized_sampled = normalized_model.sample_latents(batch_size=2, nfe=2, device=torch.device("cpu"))
+        normalized_decoded = normalized_model.decode_latents(normalized_sampled)
+        assert normalized_decoded["rgb_recon"].shape == (2, 3, 32, 32)
 
         outdir_1 = root / "samples_nfe1"
         outdir_2 = root / "samples_nfe2"
@@ -342,6 +400,7 @@ def main():
         print("Latent flow smoke test passed")
         print("Objectives checked: fm, meanflow, alphaflow")
         print("Sampling checked: NFE=1 and NFE=2")
+        print("Latent normalization bridge checked: per-channel affine + inverse decode")
 
 
 if __name__ == "__main__":

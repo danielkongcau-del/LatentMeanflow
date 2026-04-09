@@ -165,6 +165,7 @@ class MaskConditionedLatentFlowTrainer(_MaskConditionedImageMixin, LatentFlowTra
         sample_posterior=False,
         freeze_tokenizer=True,
         log_sample_nfe=2,
+        latent_normalization_config=None,
         monitor="val/loss",
         mask_condition_key="mask_onehot",
         mask_index_key="mask_index",
@@ -189,6 +190,7 @@ class MaskConditionedLatentFlowTrainer(_MaskConditionedImageMixin, LatentFlowTra
             use_class_condition=False,
             class_label_key="class_label",
             log_sample_nfe=log_sample_nfe,
+            latent_normalization_config=latent_normalization_config,
             monitor=monitor,
         )
         self._init_mask_conditioning(

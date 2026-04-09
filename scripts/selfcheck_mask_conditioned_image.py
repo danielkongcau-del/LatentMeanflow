@@ -22,7 +22,9 @@ from scripts.train_mask_conditioned_image import DEFAULT_CONFIGS
 CONFIGS = [
     REPO_ROOT / "configs" / "latent_fm_mask2image_unet.yaml",
     REPO_ROOT / "configs" / "latent_meanflow_mask2image_unet.yaml",
+    REPO_ROOT / "configs" / "latent_meanflow_mask2image_unet_norm.yaml",
     REPO_ROOT / "configs" / "latent_alphaflow_mask2image_unet.yaml",
+    REPO_ROOT / "configs" / "latent_alphaflow_mask2image_unet_norm.yaml",
     REPO_ROOT / "configs" / "latent_alphaflow_mask2image_unet_tiny.yaml",
     REPO_ROOT / "configs" / "latent_alphaflow_mask2image_f8_unet.yaml",
     REPO_ROOT / "configs" / "ablations" / "latent_alphaflow_mask2image_unet_input_concat.yaml",
@@ -31,6 +33,7 @@ CONFIGS = [
     REPO_ROOT / "configs" / "ablations" / "latent_alphaflow_mask2image_unet_fullres_pyramid.yaml",
     REPO_ROOT / "configs" / "ablations" / "latent_alphaflow_mask2image_unet_fullres_pyramid_boundary.yaml",
     REPO_ROOT / "configs" / "ablations" / "latent_alphaflow_mask2image_unet_fullres_pyramid_boundary_encoder.yaml",
+    REPO_ROOT / "configs" / "ablations" / "latent_alphaflow_mask2image_unet_fullres_pyramid_boundary_encoder_norm.yaml",
 ]
 
 
@@ -73,6 +76,17 @@ def main():
             OmegaConf.select(config, "model.params.backbone_config.params", default={})
         ):
             raise AssertionError(f"{config_path.name} should not rely on handwritten spatial_condition_channels")
+        latent_normalization_mode = OmegaConf.select(
+            config,
+            "model.params.latent_normalization_config.mode",
+            default="none",
+        )
+        if config_path.name.endswith("_norm.yaml") and latent_normalization_mode == "none":
+            raise AssertionError(f"{config_path.name} should enable latent normalization explicitly")
+        if config_path.name.endswith("_norm.yaml"):
+            stats_path = OmegaConf.select(config, "model.params.latent_normalization_config.stats_path")
+            if not stats_path:
+                raise AssertionError(f"{config_path.name} is missing latent normalization stats_path")
 
         backbone = instantiate_from_config(backbone_cfg)
         latent_h, latent_w = _latent_shape_from_tokenizer_config(tokenizer_config_path)

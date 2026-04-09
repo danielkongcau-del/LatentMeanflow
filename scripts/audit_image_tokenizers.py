@@ -22,6 +22,7 @@ from latent_meanflow.utils.image_tokenizer_audit import (
     evaluate_image_tokenizer,
     flatten_summary,
     format_value,
+    write_latent_stats_artifacts,
     write_summary_csv,
 )
 
@@ -273,6 +274,7 @@ def main():
     summary_json_path = outdir / "summary.json"
     summary_md_path = outdir / "summary.md"
     summary_csv_path = outdir / "summary.csv"
+    payload["latent_stats"] = write_latent_stats_artifacts(outdir, ranking)
     summary_json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     write_summary_csv(summary_csv_path, ranking)
     _write_audit_markdown(summary_md_path, payload)
@@ -280,6 +282,7 @@ def main():
     print(f"Saved tokenizer audit JSON to {summary_json_path}")
     print(f"Saved tokenizer audit markdown to {summary_md_path}")
     print(f"Saved tokenizer audit CSV to {summary_csv_path}")
+    print(f"Saved latent stats artifacts under {outdir / 'latent_stats'}")
 
 
 if __name__ == "__main__":

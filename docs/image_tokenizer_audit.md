@@ -9,6 +9,12 @@ Use [scripts/eval_image_tokenizer.py](/e:/CodeSpace/LarentMeanflow/scripts/eval_
 for one checkpoint or [scripts/audit_image_tokenizers.py](/e:/CodeSpace/LarentMeanflow/scripts/audit_image_tokenizers.py)
 for a ranked multi-checkpoint sweep.
 
+The evaluator now also writes stable latent statistics artifacts for downstream
+consumption:
+
+- `latent_stats.json`
+- `latent_stats/<tokenizer_name>.json`
+
 The upgraded evaluator also records:
 
 - whether the tokenizer config uses LPIPS
@@ -149,6 +155,16 @@ Pick the monitored best checkpoint from a run directory:
 python scripts/find_image_tokenizer_checkpoint.py \
   --config configs/autoencoder_image_24gb_lpips_256.yaml \
   --run-dir logs/autoencoder_image
+```
+
+Evaluate one tokenizer checkpoint and write summaries plus the downstream
+latent-stats bridge artifact:
+
+```bash
+python scripts/eval_image_tokenizer.py \
+  --config configs/autoencoder_image_256.yaml \
+  --ckpt logs/autoencoder_image/checkpoints/last.ckpt \
+  --outdir outputs/image_tokenizer_eval/autoencoder_image_256
 ```
 
 Audit two direct checkpoints:

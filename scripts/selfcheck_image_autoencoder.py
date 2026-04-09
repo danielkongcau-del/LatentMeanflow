@@ -295,6 +295,8 @@ def _run_eval_script_smoke():
             raise AssertionError("eval_image_tokenizer summary is missing config metadata")
         if not (outdir / "summary.csv").exists():
             raise AssertionError("eval_image_tokenizer summary.csv was not written")
+        if not (outdir / "latent_stats.json").exists():
+            raise AssertionError("eval_image_tokenizer latent_stats.json was not written")
 
         audit_outdir = root / "audit_out"
         subprocess.run(
@@ -321,6 +323,8 @@ def _run_eval_script_smoke():
             raise AssertionError("audit_image_tokenizers did not produce any ranking rows")
         if not (audit_outdir / "summary.csv").exists():
             raise AssertionError("audit_image_tokenizers summary.csv was not written")
+        if not (audit_outdir / "latent_stats.json").exists():
+            raise AssertionError("audit_image_tokenizers latent_stats.json was not written")
 
         run_dir = root / "tokenizer_run"
         ckpt_dir = run_dir / "checkpoints"

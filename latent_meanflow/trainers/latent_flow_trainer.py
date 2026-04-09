@@ -4,8 +4,10 @@ from copy import deepcopy
 import pytorch_lightning as pl
 import torch
 from ldm.util import instantiate_from_config
+from omegaconf import OmegaConf
 
 from latent_meanflow.models.tokenizer import SemanticTokenizerAdapter
+from latent_meanflow.utils.latent_normalization import build_latent_normalizer
 
 
 class LatentFlowTrainer(pl.LightningModule):
@@ -22,10 +24,13 @@ class LatentFlowTrainer(pl.LightningModule):
         use_class_condition=False,
         class_label_key="class_label",
         log_sample_nfe=2,
+        latent_normalization_config=None,
         monitor="val/loss",
     ):
         super().__init__()
-        self.save_hyperparameters(ignore=["backbone_config", "objective_config", "sampler_config"])
+        self.save_hyperparameters(
+            ignore=["backbone_config", "objective_config", "sampler_config", "latent_normalization_config"]
+        )
 
         self.sample_posterior = bool(sample_posterior)
         self.freeze_tokenizer = bool(freeze_tokenizer)
@@ -34,6 +39,15 @@ class LatentFlowTrainer(pl.LightningModule):
         self.log_sample_nfe = int(log_sample_nfe)
         self.monitor = str(monitor)
         self.learning_rate = 1.0e-4
+        if latent_normalization_config is None:
+            self.latent_normalization_config = None
+        elif OmegaConf.is_config(latent_normalization_config):
+            self.latent_normalization_config = OmegaConf.to_container(
+                latent_normalization_config,
+                resolve=True,
+            )
+        else:
+            self.latent_normalization_config = deepcopy(latent_normalization_config)
 
         self.tokenizer = SemanticTokenizerAdapter.from_pretrained(
             config_path=tokenizer_config_path,
@@ -44,6 +58,10 @@ class LatentFlowTrainer(pl.LightningModule):
         self.latent_channels = self.tokenizer.latent_channels
         self.latent_spatial_shape = self.tokenizer.latent_spatial_shape
         self.num_classes = self.tokenizer.num_classes
+        self.latent_normalizer = build_latent_normalizer(
+            self.latent_normalization_config,
+            latent_channels=self.latent_channels,
+        )
 
         backbone_cfg = deepcopy(backbone_config)
         backbone_cfg.setdefault("params", {})
@@ -118,6 +136,19 @@ class LatentFlowTrainer(pl.LightningModule):
     def on_fit_start(self):
         super().on_fit_start()
         self._configure_objective_training_budget()
+        info = self.latent_normalizer.describe()
+        self.print(
+            "[LatentFlowTrainer] latent_normalization="
+            f"mode={info['mode']}, enabled={info['enabled']}, "
+            f"stats_path={info['stats_path']}, std_floor={info['std_floor']}, "
+            f"clamped_channel_count={info['clamped_channel_count']}"
+        )
+
+    def normalize_latents(self, z):
+        return self.latent_normalizer.normalize(z)
+
+    def denormalize_latents(self, z):
+        return self.latent_normalizer.denormalize(z)
 
     def predict_field(self, z_t, t=None, condition=None, r=None, delta_t=None):
         if condition is not None:
@@ -128,10 +159,14 @@ class LatentFlowTrainer(pl.LightningModule):
         return self.backbone(z_t, t=t, condition=condition, r=r, delta_t=delta_t)
 
     def encode_batch(self, batch):
-        return self.tokenizer.encode_batch(batch, sample_posterior=self.sample_posterior)
+        encoded = self.tokenizer.encode_batch(batch, sample_posterior=self.sample_posterior)
+        raw_z = encoded["z"]
+        encoded["z_tokenizer"] = raw_z
+        encoded["z"] = self.normalize_latents(raw_z)
+        return encoded
 
     def decode_latents(self, z):
-        return self.tokenizer.decode_latents(z)
+        return self.tokenizer.decode_latents(self.denormalize_latents(z))
 
     def sample_latents(self, batch_size, nfe=None, device=None, condition=None, noise=None):
         if device is None:
@@ -162,9 +197,25 @@ class LatentFlowTrainer(pl.LightningModule):
             global_step=objective_step,
             target_model_fn=self.predict_field,
         )
+        channel_std = x_lat.detach().permute(1, 0, 2, 3).reshape(self.latent_channels, -1).std(
+            dim=1,
+            unbiased=False,
+        )
+        latent_bridge_metrics = {
+            "latent_input_mean": x_lat.detach().mean(),
+            "latent_input_std": x_lat.detach().std(unbiased=False),
+            "latent_input_channel_std_min": channel_std.min(),
+            "latent_input_channel_std_max": channel_std.max(),
+            "latent_normalization_enabled": torch.tensor(
+                1.0 if self.latent_normalizer.enabled else 0.0,
+                device=x_lat.device,
+                dtype=x_lat.dtype,
+            ),
+        }
         return {
             "x_lat": x_lat,
             "posterior": encoded["posterior"],
+            "latent_bridge_metrics": latent_bridge_metrics,
             **objective_outputs,
         }
 
@@ -183,6 +234,7 @@ class LatentFlowTrainer(pl.LightningModule):
         outputs = self(batch, objective_step=int(self.global_step))
         loss_dict = outputs.get("loss_dict", {"loss": outputs["loss"], "total_loss": outputs["loss"]})
         metrics = self._collect_log_scalars(split, loss_dict)
+        metrics.update(self._collect_log_scalars(split, outputs.get("latent_bridge_metrics", {})))
         prog_bar_metrics = {}
         base_error_key = f"{split}/base_error_mean"
         if base_error_key in metrics:

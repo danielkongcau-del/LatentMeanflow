@@ -257,6 +257,15 @@ summaries:
 python scripts/eval_image_tokenizer.py --config configs/autoencoder_image_256.yaml --ckpt /path/to/image_tokenizer.ckpt --outdir outputs/image_tokenizer_eval/base
 ```
 
+That evaluation also writes a stable latent-statistics bridge artifact:
+
+```text
+outputs/image_tokenizer_eval/base/latent_stats.json
+```
+
+Use that file when enabling the optional downstream latent normalization
+bridge.
+
 Compare the stronger image-only `f=8` tokenizer against the base image-only
 tokenizer on the same split and batches:
 
@@ -334,7 +343,9 @@ Checked-in configs:
 
 - `configs/latent_fm_mask2image_unet.yaml`
 - `configs/latent_meanflow_mask2image_unet.yaml`
+- `configs/latent_meanflow_mask2image_unet_norm.yaml`
 - `configs/latent_alphaflow_mask2image_unet.yaml`
+- `configs/latent_alphaflow_mask2image_unet_norm.yaml`
 - `configs/latent_alphaflow_mask2image_unet_tiny.yaml`
 - `configs/latent_alphaflow_mask2image_f8_unet.yaml`
 
@@ -346,6 +357,7 @@ Renderer conditioning ablations:
 - `configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid.yaml`
 - `configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid_boundary.yaml`
 - `configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid_boundary_encoder.yaml`
+- `configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid_boundary_encoder_norm.yaml`
 
 Use the dedicated wrapper so bare `--objective fm/meanflow/alphaflow` resolves
 inside the mask-conditioned route rather than the existing paired joint route:
@@ -353,6 +365,14 @@ inside the mask-conditioned route rather than the existing paired joint route:
 ```bash
 python scripts/train_mask_conditioned_image.py --objective alphaflow --config configs/latent_alphaflow_mask2image_unet_tiny.yaml --tokenizer-ckpt /path/to/image_tokenizer.ckpt --gpus 0
 python scripts/train_mask_conditioned_image.py --objective alphaflow --config configs/latent_alphaflow_mask2image_unet.yaml --tokenizer-ckpt /path/to/image_tokenizer.ckpt --gpus 0
+```
+
+Run the explicit normalized AlphaFlow pilot after exporting matching tokenizer
+latent stats:
+
+```bash
+python scripts/eval_image_tokenizer.py --config configs/autoencoder_image_256.yaml --ckpt logs/autoencoder_image/checkpoints/last.ckpt --outdir outputs/image_tokenizer_eval/autoencoder_image_256
+python scripts/train_mask_conditioned_image.py --objective alphaflow --config configs/latent_alphaflow_mask2image_unet_norm.yaml --gpus 0
 ```
 
 Sample the fixed `NFE=8/4/2/1` few-step sweep:
@@ -381,6 +401,8 @@ For the condition-path comparison protocol, use
 [docs/mask_conditioned_renderer_benchmark.md](docs/mask_conditioned_renderer_benchmark.md).
 For the fixed layout-faithfulness evaluation protocol, use
 [docs/mask_conditioned_eval_protocol.md](docs/mask_conditioned_eval_protocol.md).
+For the explicit tokenizer-to-flow normalization bridge, use
+[docs/latent_normalization_bridge.md](docs/latent_normalization_bridge.md).
 
 ### Latent FM Path
 
@@ -715,9 +737,12 @@ Config intent:
 - `configs/latent_alphaflow_semantic_f8_unet.yaml`: AlphaFlow U-Net route reserved for the stronger `f=8` tokenizer branch
 - `configs/latent_fm_mask2image_unet.yaml`: flow-matching baseline for `p(image | semantic_mask)` with image-only tokenizer latents
 - `configs/latent_meanflow_mask2image_unet.yaml`: MeanFlow baseline for `p(image | semantic_mask)` with image-only tokenizer latents
+- `configs/latent_meanflow_mask2image_unet_norm.yaml`: MeanFlow mask-conditioned route with explicit tokenizer-latent normalization
 - `configs/latent_alphaflow_mask2image_unet.yaml`: recommended AlphaFlow baseline for `p(image | semantic_mask)`
+- `configs/latent_alphaflow_mask2image_unet_norm.yaml`: first explicit normalized AlphaFlow pilot for `p(image | semantic_mask)`
 - `configs/latent_alphaflow_mask2image_unet_tiny.yaml`: tiny/debug AlphaFlow mask-conditioned sanity route
 - `configs/latent_alphaflow_mask2image_f8_unet.yaml`: AlphaFlow mask-conditioned route for the stronger image-only `f=8` tokenizer branch
+- `configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid_boundary_encoder_norm.yaml`: strongest full-resolution condition route with the same explicit latent normalization bridge
 
 ## AlphaFlow Weighting Semantics
 

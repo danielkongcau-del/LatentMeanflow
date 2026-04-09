@@ -13,6 +13,7 @@ from torch.utils.data import DataLoader
 from ldm.util import instantiate_from_config
 
 from latent_meanflow.utils import colorize_mask_index
+from latent_meanflow.utils.latent_normalization import write_latent_stats_json
 
 
 def move_to_device(value, device):
@@ -760,3 +761,32 @@ def write_summary_csv(path, summaries):
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def write_latent_stats_artifacts(outdir, summaries, *, write_primary_alias=True):
+    outdir = Path(outdir)
+    stats_dir = outdir / "latent_stats"
+    stats_dir.mkdir(parents=True, exist_ok=True)
+
+    written = []
+    for summary in summaries:
+        stats_path = stats_dir / f"{summary['name']}.json"
+        write_latent_stats_json(stats_path, summary)
+        written.append(
+            {
+                "name": summary["name"],
+                "path": str(stats_path.resolve()),
+            }
+        )
+
+    if write_primary_alias and summaries:
+        primary_path = outdir / "latent_stats.json"
+        write_latent_stats_json(primary_path, summaries[0])
+        written.insert(
+            0,
+            {
+                "name": summaries[0]["name"],
+                "path": str(primary_path.resolve()),
+            },
+        )
+    return written
