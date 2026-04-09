@@ -32,3 +32,23 @@ The preserved `.git_local_backup/` directories contain the original nested Git m
 This directory is a vendored copy of the upstream `flow_matching` repository. It is currently reference code only and is not on the active training path for the paired image-mask model.
 
 Keeping it under `third_party/` avoids mixing exploratory upstream code with the project layer.
+
+## `third_party/segmentation`
+
+This directory is a vendored copy of a legacy remote-sensing / agricultural
+segmentation codebase kept as a potential frozen segmentation-teacher source for
+evaluation.
+
+It is not wired into the main LatentMeanflow training path yet.
+
+Local ignore rules live in:
+
+- `third_party/segmentation/.gitignore`
+
+Those rules keep the vendored code trackable while preventing routine teacher
+training artifacts from polluting the main repository status:
+
+- `Data/*` runtime contents, while keeping `Data/README.md`
+- `logs/`, `outputs/`, `runs/`, `wandb/`, `checkpoints/`
+- cached Python bytecode and editor metadata
+- downloaded model weights such as `*.pth`, `*.pt`, `*.ckpt`

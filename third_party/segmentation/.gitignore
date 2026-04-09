@@ -1,0 +1,49 @@
+# OS / editor
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Local datasets and experiment state
+Data/*
+!Data/README.md
+logs/
+log/
+outputs/
+output/
+output_dir*/
+snapshots*/
+runs/
+wandb/
+work_dirs/
+results/
+experiments/
+exp/
+checkpoints/
+ckpts/
+tmp/
+temp/
+
+# Predictor dumps
+predict/outputs/
+predict/output*/
+predict/results/
+
+# Local model artifacts
+*.ckpt
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.onnx
+*.engine
+pretrained_weights/*.npz
