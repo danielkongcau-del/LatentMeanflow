@@ -136,12 +136,13 @@ def _write_audit_markdown(path, payload):
         "",
         "## Ranked Candidates",
         "",
-        "| Rank | Name | Readiness | RGB LPIPS | RGB L1 | Collapsed Channels | Latent Shape |",
-        "| ---: | --- | ---: | ---: | ---: | ---: | --- |",
+        "| Rank | Name | Readiness | LPIPS Wt | Adv | RGB LPIPS | RGB L1 | Collapsed Channels | Latent Shape |",
+        "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
     ]
 
     for rank, summary in enumerate(payload["ranking"], start=1):
         collapse = summary["channel_collapse"]
+        metadata = summary["config_metadata"]
         lines.append(
             "| "
             + " | ".join(
@@ -149,6 +150,8 @@ def _write_audit_markdown(path, payload):
                     str(rank),
                     summary["name"],
                     format_value(summary["downstream_readiness"]["score"]),
+                    format_value(metadata["loss_weights"]["rgb_lpips_weight"]),
+                    str(metadata["adversarial"]["enabled"]),
                     format_value(summary["rgb_lpips"]),
                     format_value(summary["rgb_l1"]),
                     f"{collapse['collapsed_channel_count']}/{len(summary['per_channel_stats'])}",
@@ -171,6 +174,11 @@ def _write_audit_markdown(path, payload):
                 f"- split: `{summary['split']}`",
                 f"- latent shape: `{summary['latent_shape']}`",
                 f"- downsample factor: `{summary['downsample_factor']}`",
+                f"- adversarial enabled: `{summary['config_metadata']['adversarial']['enabled']}`",
+                f"- generator adversarial weight: `{format_value(summary['config_metadata']['adversarial']['generator_adversarial_weight'])}`",
+                f"- RGB LPIPS weight: `{format_value(summary['config_metadata']['loss_weights']['rgb_lpips_weight'])}`",
+                f"- latent std floor weight: `{format_value(summary['config_metadata']['loss_weights']['latent_channel_std_floor_weight'])}`",
+                f"- latent std floor: `{format_value(summary['config_metadata']['loss_weights']['latent_channel_std_floor'])}`",
                 f"- RGB L1: `{format_value(summary['rgb_l1'])}`",
                 f"- RGB LPIPS: `{format_value(summary['rgb_lpips'])}`",
                 f"- latent mean/std: `{format_value(summary['latent_mean'])}` / `{format_value(summary['latent_std'])}`",

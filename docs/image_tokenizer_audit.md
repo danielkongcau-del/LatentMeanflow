@@ -9,6 +9,12 @@ Use [scripts/eval_image_tokenizer.py](/e:/CodeSpace/LarentMeanflow/scripts/eval_
 for one checkpoint or [scripts/audit_image_tokenizers.py](/e:/CodeSpace/LarentMeanflow/scripts/audit_image_tokenizers.py)
 for a ranked multi-checkpoint sweep.
 
+The upgraded evaluator also records:
+
+- whether the tokenizer config uses LPIPS
+- whether the config enables the lightweight patch discriminator
+- the latent std-floor anti-collapse settings
+
 The audit treats three failure modes separately:
 
 - `blur severity`
@@ -95,6 +101,16 @@ This is enough to make two hard calls:
 That baseline is not being called "best" because it is healthy. It is the
 baseline because it is the tokenizer that already has real measured numbers and
 is already wired into downstream mask-conditioned image generation work.
+
+Stronger project-layer training-ready configs now exist:
+
+- [configs/autoencoder_image_adv_256.yaml](/e:/CodeSpace/LarentMeanflow/configs/autoencoder_image_adv_256.yaml)
+- [configs/autoencoder_image_lpips_adv_256.yaml](/e:/CodeSpace/LarentMeanflow/configs/autoencoder_image_lpips_adv_256.yaml)
+- [configs/autoencoder_image_f8_adv_256.yaml](/e:/CodeSpace/LarentMeanflow/configs/autoencoder_image_f8_adv_256.yaml)
+- [configs/autoencoder_image_f8_lpips_adv_256.yaml](/e:/CodeSpace/LarentMeanflow/configs/autoencoder_image_f8_lpips_adv_256.yaml)
+
+They are training-ready, not audited winners. The baseline decision only moves
+after the new checkpoints beat the existing route under the same audit script.
 
 ## Why `f=8` Is Not Automatically Better
 

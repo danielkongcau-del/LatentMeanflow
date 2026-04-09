@@ -210,6 +210,8 @@ Base image-only geometry:
 
 - `configs/autoencoder_image_256.yaml`
 - `configs/autoencoder_image_24gb_lpips_256.yaml`
+- `configs/autoencoder_image_adv_256.yaml`
+- `configs/autoencoder_image_lpips_adv_256.yaml`
 
 both produce a `64x64x4` latent from a `256x256` input.
 
@@ -217,6 +219,8 @@ Stronger image-only `f=8` geometry:
 
 - `configs/autoencoder_image_f8_256.yaml`
 - `configs/autoencoder_image_f8_24gb_lpips_256.yaml`
+- `configs/autoencoder_image_f8_adv_256.yaml`
+- `configs/autoencoder_image_f8_lpips_adv_256.yaml`
 
 both produce a `32x32x4` latent from a `256x256` input.
 
@@ -237,6 +241,13 @@ Train the LPIPS-enabled image-only variants:
 ```bash
 python scripts/train_image_autoencoder.py --config configs/autoencoder_image_24gb_lpips_256.yaml --gpus 0
 python scripts/train_image_autoencoder.py --config configs/autoencoder_image_f8_24gb_lpips_256.yaml --gpus 0
+```
+
+Train the stronger project-layer adversarial variants:
+
+```bash
+python scripts/train_image_autoencoder.py --config configs/autoencoder_image_adv_256.yaml --gpus 0
+python scripts/train_image_autoencoder.py --config configs/autoencoder_image_lpips_adv_256.yaml --gpus 0
 ```
 
 Evaluate one image-only tokenizer checkpoint and write JSON + markdown
@@ -273,7 +284,7 @@ them for downstream `p(image | semantic_mask)` work:
 ```bash
 python scripts/audit_image_tokenizers.py \
   --candidate base_lpips|configs/autoencoder_image_24gb_lpips_256.yaml|/path/to/base_lpips.ckpt \
-  --candidate f8_lpips|configs/autoencoder_image_f8_24gb_lpips_256.yaml|/path/to/f8_lpips.ckpt \
+  --candidate base_lpips_adv|configs/autoencoder_image_lpips_adv_256.yaml|/path/to/base_lpips_adv.ckpt \
   --export-visuals \
   --outdir outputs/image_tokenizer_audit/current
 ```
@@ -683,8 +694,12 @@ Config intent:
 - `configs/autoencoder_semantic_pair_f8_24gb_lpips_256.yaml`: stronger `f=8` tokenizer candidate with LPIPS
 - `configs/autoencoder_image_256.yaml`: project-layer image-only tokenizer baseline with `64x64x4` latents for future `p(image | mask)` work
 - `configs/autoencoder_image_24gb_lpips_256.yaml`: image-only tokenizer baseline with LPIPS and `64x64x4` latents
+- `configs/autoencoder_image_adv_256.yaml`: stronger base-geometry image-only tokenizer with a lightweight patch discriminator and explicit anti-collapse penalty
+- `configs/autoencoder_image_lpips_adv_256.yaml`: recommended stronger base-geometry image-only tokenizer recipe with LPIPS + adversarial + anti-collapse support
 - `configs/autoencoder_image_f8_256.yaml`: stronger image-only tokenizer candidate with `32x32x4` latents
 - `configs/autoencoder_image_f8_24gb_lpips_256.yaml`: stronger image-only `f=8` tokenizer candidate with LPIPS
+- `configs/autoencoder_image_f8_adv_256.yaml`: follow-up adversarial `f=8` image-only tokenizer branch
+- `configs/autoencoder_image_f8_lpips_adv_256.yaml`: stronger `f=8` LPIPS + adversarial image-only tokenizer follow-up branch
 - `configs/latent_meanflow_semantic_256.yaml`: legacy ConvNet MeanFlow baseline
 - `configs/latent_meanflow_semantic_256_unet_tiny.yaml`: tiny/debug U-Net MeanFlow parallel path
 - `configs/latent_meanflow_semantic_256_unet.yaml`: default MeanFlow backbone path after the benchmark-backed promotion

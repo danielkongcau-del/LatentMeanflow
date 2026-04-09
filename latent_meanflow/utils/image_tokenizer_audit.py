@@ -48,6 +48,54 @@ def load_model(config_path, ckpt_path, device):
     return config, model
 
 
+def extract_tokenizer_config_metadata(config, model):
+    model_params = OmegaConf.select(config, "model.params", default={})
+    loss_params = OmegaConf.select(config, "model.params.lossconfig.params", default={})
+    discriminator_config = OmegaConf.select(config, "model.params.discriminator_config", default=None)
+    discriminator_params = {}
+    discriminator_target = None
+    if discriminator_config is not None:
+        discriminator_target = OmegaConf.select(discriminator_config, "target", default=None)
+        discriminator_params = dict(OmegaConf.select(discriminator_config, "params", default={}) or {})
+
+    return {
+        "model_target": str(OmegaConf.select(config, "model.target", default="")),
+        "embed_dim": int(OmegaConf.select(model_params, "embed_dim", default=getattr(model, "embed_dim", 0))),
+        "sample_posterior": bool(
+            OmegaConf.select(model_params, "sample_posterior", default=getattr(model, "sample_posterior", True))
+        ),
+        "loss_target": str(OmegaConf.select(config, "model.params.lossconfig.target", default="")),
+        "loss_weights": {
+            "rgb_l1_weight": float(OmegaConf.select(loss_params, "rgb_l1_weight", default=1.0)),
+            "rgb_lpips_weight": float(OmegaConf.select(loss_params, "rgb_lpips_weight", default=0.0)),
+            "kl_weight": float(OmegaConf.select(loss_params, "kl_weight", default=0.0)),
+            "latent_channel_std_floor_weight": float(
+                OmegaConf.select(loss_params, "latent_channel_std_floor_weight", default=0.0)
+            ),
+            "latent_channel_std_floor": float(
+                OmegaConf.select(loss_params, "latent_channel_std_floor", default=0.0)
+            ),
+            "latent_utilization_threshold": float(
+                OmegaConf.select(loss_params, "latent_utilization_threshold", default=0.05)
+            ),
+        },
+        "adversarial": {
+            "enabled": bool(getattr(model, "use_discriminator", False)),
+            "generator_adversarial_weight": float(
+                OmegaConf.select(model_params, "generator_adversarial_weight", default=0.0)
+            ),
+            "discriminator_start_step": int(
+                OmegaConf.select(model_params, "discriminator_start_step", default=0)
+            ),
+            "discriminator_learning_rate": OmegaConf.select(
+                model_params, "discriminator_learning_rate", default=None
+            ),
+            "discriminator_target": discriminator_target,
+            "discriminator_params": discriminator_params,
+        },
+    }
+
+
 def resolve_dataset_config(config, split):
     key = "validation" if split == "validation" else "train"
     dataset_config = OmegaConf.select(config, f"data.params.{key}")
@@ -537,6 +585,7 @@ def evaluate_image_tokenizer(
         "config": str(Path(config_path).resolve()),
         "checkpoint": str(Path(ckpt_path).resolve()),
         "split": split,
+        "config_metadata": extract_tokenizer_config_metadata(config, model),
         "image_shape": list(image_shape),
         "latent_shape": [model.latent_channels, *latent_shape],
         "latent_spatial_shape": list(latent_shape),
@@ -601,6 +650,11 @@ def write_eval_markdown(path, summaries, comparison=None):
                 f"- split: `{summary['split']}`",
                 f"- latent shape: `{summary['latent_shape']}`",
                 f"- downsample factor: `{summary['downsample_factor']}`",
+                f"- adversarial enabled: `{summary['config_metadata']['adversarial']['enabled']}`",
+                f"- generator adversarial weight: `{format_value(summary['config_metadata']['adversarial']['generator_adversarial_weight'])}`",
+                f"- RGB LPIPS weight: `{format_value(summary['config_metadata']['loss_weights']['rgb_lpips_weight'])}`",
+                f"- latent std floor weight: `{format_value(summary['config_metadata']['loss_weights']['latent_channel_std_floor_weight'])}`",
+                f"- latent std floor: `{format_value(summary['config_metadata']['loss_weights']['latent_channel_std_floor'])}`",
                 f"- RGB L1: `{format_value(summary['rgb_l1'])}`",
                 f"- RGB LPIPS: `{format_value(summary['rgb_lpips'])}`",
                 f"- latent mean/std: `{format_value(summary['latent_mean'])}` / `{format_value(summary['latent_std'])}`",
@@ -656,6 +710,11 @@ def flatten_summary(summary):
         "config": summary["config"],
         "checkpoint": summary["checkpoint"],
         "split": summary["split"],
+        "adversarial_enabled": summary["config_metadata"]["adversarial"]["enabled"],
+        "generator_adversarial_weight": summary["config_metadata"]["adversarial"]["generator_adversarial_weight"],
+        "rgb_lpips_weight": summary["config_metadata"]["loss_weights"]["rgb_lpips_weight"],
+        "latent_channel_std_floor_weight": summary["config_metadata"]["loss_weights"]["latent_channel_std_floor_weight"],
+        "latent_channel_std_floor": summary["config_metadata"]["loss_weights"]["latent_channel_std_floor"],
         "image_shape": json.dumps(summary["image_shape"]),
         "latent_shape": json.dumps(summary["latent_shape"]),
         "downsample_factor": json.dumps(summary["downsample_factor"]),

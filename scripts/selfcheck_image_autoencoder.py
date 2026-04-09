@@ -56,6 +56,10 @@ def _instantiate_checked_in_configs():
         "configs/autoencoder_image_f8_256.yaml": (32, 32),
         "configs/autoencoder_image_24gb_lpips_256.yaml": (64, 64),
         "configs/autoencoder_image_f8_24gb_lpips_256.yaml": (32, 32),
+        "configs/autoencoder_image_adv_256.yaml": (64, 64),
+        "configs/autoencoder_image_lpips_adv_256.yaml": (64, 64),
+        "configs/autoencoder_image_f8_adv_256.yaml": (32, 32),
+        "configs/autoencoder_image_f8_lpips_adv_256.yaml": (32, 32),
     }
     for rel_path, expected_spatial_shape in expectations.items():
         config = OmegaConf.load(REPO_ROOT / rel_path)
@@ -122,6 +126,71 @@ def _run_forward_backward():
         images = model.log_images(batch, sample_posterior=False)
         assert images["inputs_image"].shape == (2, 3, 32, 32)
         assert images["reconstructions_image"].shape == (2, 3, 32, 32)
+
+
+def _run_adversarial_config_smoke():
+    with tempfile.TemporaryDirectory(prefix="image_autoencoder_adv_smoke_") as tmpdir:
+        root = Path(tmpdir)
+        build_synthetic_dataset(root)
+
+        dataset = MultiSemanticImageMaskPairDataset(
+            roots=[root],
+            split="train",
+            size=32,
+            image_dir="images",
+            mask_dir="masks",
+            gray_to_class_id={36: 0, 73: 1, 109: 2, 146: 3, 182: 4, 219: 5, 255: 6},
+            ignore_index=-1,
+        )
+        loader = DataLoader(dataset, batch_size=2, shuffle=False, num_workers=0)
+        batch = next(iter(loader))
+
+        model = ImageAutoencoder(
+            ddconfig={
+                "double_z": True,
+                "z_channels": 4,
+                "resolution": 32,
+                "in_channels": 3,
+                "out_ch": 3,
+                "ch": 32,
+                "ch_mult": [1, 2],
+                "num_res_blocks": 1,
+                "attn_resolutions": [],
+                "dropout": 0.0,
+            },
+            lossconfig={
+                "target": "latent_meanflow.models.image_autoencoder.ImageAutoencoderLoss",
+                "params": {
+                    "rgb_l1_weight": 1.0,
+                    "rgb_lpips_weight": 0.0,
+                    "kl_weight": 1.0e-6,
+                    "latent_channel_std_floor_weight": 0.1,
+                    "latent_channel_std_floor": 0.2,
+                    "latent_utilization_threshold": 0.05,
+                },
+            },
+            embed_dim=4,
+            sample_posterior=True,
+            generator_adversarial_weight=0.05,
+            discriminator_start_step=0,
+            discriminator_config={
+                "target": "latent_meanflow.models.image_autoencoder.PatchDiscriminator",
+                "params": {
+                    "in_channels": 3,
+                    "base_channels": 16,
+                    "max_channels": 64,
+                    "num_layers": 3,
+                    "use_spectral_norm": False,
+                },
+            },
+        )
+
+        outputs = model(batch)
+        if "latent_std_floor_penalty" not in outputs["loss_dict"]:
+            raise AssertionError("ImageAutoencoder loss_dict is missing latent anti-collapse metrics")
+        optimizers = model.configure_optimizers()
+        if not isinstance(optimizers, list) or len(optimizers) != 2:
+            raise AssertionError("Adversarial ImageAutoencoder should expose two optimizers")
 
 
 def _run_eval_script_smoke():
@@ -222,6 +291,8 @@ def _run_eval_script_smoke():
             raise AssertionError("eval_image_tokenizer summary is missing required fields")
         if "channel_collapse" not in candidate or "downstream_readiness" not in candidate:
             raise AssertionError("eval_image_tokenizer summary is missing audit fields")
+        if "config_metadata" not in candidate:
+            raise AssertionError("eval_image_tokenizer summary is missing config metadata")
         if not (outdir / "summary.csv").exists():
             raise AssertionError("eval_image_tokenizer summary.csv was not written")
 
@@ -286,10 +357,12 @@ def main():
     torch.manual_seed(0)
     _instantiate_checked_in_configs()
     _run_forward_backward()
+    _run_adversarial_config_smoke()
     _run_eval_script_smoke()
     print("Image autoencoder selfcheck passed")
     print("checked configs: base/f8 and LPIPS variants instantiate with expected latent shapes")
     print("forward/backward: ok")
+    print("adversarial config smoke: ok")
     print("eval_image_tokenizer smoke: ok")
     print("audit_image_tokenizers smoke: ok")
     print("find_image_tokenizer_checkpoint smoke: ok")
