@@ -3,9 +3,9 @@ import time
 import numpy as np
 import cv2
 import os
+import glob
 from torchvision import transforms
 from utils import add_mask_to_source_multi_classes
-from pathlib import Path, PureWindowsPath
 from dataset import SegDataset
 from choices import get_criterion
 from matplotlib import pyplot as plt
@@ -19,6 +19,20 @@ from collections import namedtuple
 import torch.utils.data as data
 import torch.nn.functional as F
 import json
+
+
+SUPPORTED_IMAGE_GLOBS = ("*.png", "*.jpg", "*.jpeg", "*.bmp", "*.tif", "*.tiff")
+
+
+def _list_input_images(root):
+    image_root = os.fspath(root)
+    if "\\" in image_root:
+        image_root = image_root.replace("\\", "/")
+    paths = []
+    for pattern in SUPPORTED_IMAGE_GLOBS:
+        paths.extend(glob.glob(os.path.join(image_root, pattern)))
+    # Preserve deterministic order while avoiding pathlib cross-platform issues.
+    return sorted({os.path.normpath(path) for path in paths})
 
 def miouandpa(config, output, target):
     pa, miou = None, None
@@ -208,12 +222,10 @@ def predict_images(net, args, dst_size=(512, 512), save_dir=None):
     pred_dicts = []
 
     times = []
-    test_images_path = os.fspath(args.test_images)
-    if "\\" in test_images_path:
-        test_images_path = test_images_path.replace("\\", "/")
-    paths = [i for i in Path(test_images_path).glob('*.jpg')]
+    paths = _list_input_images(args.test_images)
     for path in paths:
-        frame = Image.open((str(path))).convert('RGB')
+        file_name = os.path.basename(path)
+        frame = Image.open(str(path)).convert('RGB')
         start = time.time()
 
         img_transform = transforms.Compose(
@@ -234,7 +246,7 @@ def predict_images(net, args, dst_size=(512, 512), save_dir=None):
         dst_prediction = cv2.resize(prediction_np, dst_size)
 
         pred_dict = Counter(dst_prediction.flatten())
-        pred_dict2 = {'path': path.name, 0: pred_dict[0], 1: pred_dict[1], 2: pred_dict[2], 3: pred_dict[3]}
+        pred_dict2 = {'path': file_name, 0: pred_dict[0], 1: pred_dict[1], 2: pred_dict[2], 3: pred_dict[3]}
         pred_dicts.append(pred_dict2)
         print(pred_dict2)
         dst_show = add_mask_to_source_multi_classes(np.array(dst_frame), dst_prediction, args.out_channels)
@@ -243,9 +255,9 @@ def predict_images(net, args, dst_size=(512, 512), save_dir=None):
         end = time.time()
         cost_time = end - start
         times.append(cost_time)
-        print('Processed image:{}\t\tTime:{}'.format(path.name, cost_time))
+        print('Processed image:{}\t\tTime:{}'.format(file_name, cost_time))
         if save_dir is not None:
-            Image.fromarray(dst_show).save(save_dir + f'/vis/{path.name}')
+            Image.fromarray(dst_show).save(save_dir + f'/vis/{file_name}')
             # cv2.imwrite(save_dir + '/test_image-' + args.pt_dir + '-' + path.name + '.jpg', dst_show)
         else:
             plt.imshow(dst_show)
@@ -319,7 +331,7 @@ def predict_Attention_images(net, args, dst_size=(512, 512), save_dir=None, mode
 
     pred_dicts = []
     times = []
-    paths = [i for i in Path(args.test_images).glob('*.jpg')]
+    paths = _list_input_images(args.test_images)
     filename = 'outc'
     # search [inc down1 down2 down3 down4 outc]
     if filename == 'down4':
@@ -341,7 +353,8 @@ def predict_Attention_images(net, args, dst_size=(512, 512), save_dir=None, mode
         outshape = (512, 512)
         save_dir = os.path.join(save_dir, filename)
     for path in paths:
-        name = path.name.split('.')
+        file_name = os.path.basename(path)
+        name = file_name.split('.')
         frame = cv2.imread(str(path))
         start = time.time()
         img_transform = transforms.Compose(
