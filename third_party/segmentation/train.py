@@ -16,7 +16,7 @@ from predictor import eval_dataset_full, predict_images
 def get_train_args():
     parser = ArgumentParser()
     parser.add_argument("--batch-size", type=int, default=8)
-    parser.add_argument("--net-name", type=str, default='SegFormer')
+    parser.add_argument("--net-name", type=str, default='deeplabv3-resnet')
     parser.add_argument("--save-suffix", type=str)
     parser.add_argument("--gpu", type=int, default=0)
     parser.add_argument("--out-channels", type=int, default=1)
@@ -33,7 +33,7 @@ def get_train_args():
     parser.add_argument("--opt-name", type=str, default='adamw')
     parser.add_argument("--sch-name", type=str, default='warmup_poly')
     parser.add_argument("--epoch", type=int, default=120)
-    parser.add_argument("--save-dir", type=str, default='./results/SegFormer_Ori')
+    parser.add_argument("--save-dir", type=str, default='./results/deeplabv3_resnet')
     parser.add_argument("--pt-dir", type=str)
     parser.add_argument("--pt-stride", type=int, default=40)
     parser.add_argument("--weighting", type=str, default='none')

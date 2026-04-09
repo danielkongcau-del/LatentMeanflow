@@ -1,56 +1,61 @@
-from Nets.TUnet import ScoreNet
-from Nets.WindowNet import windowNet_window7_224
-from Nets.SegConvFormer import SegConvFormer
-from Nets.ENet import ENet
-from Nets.SegConvFormerv3 import SegConvFormerV3
-from Nets.SegConvFormerv4 import SegConvFormerV4
-from Nets.AttentionUnet import SampleOrMHSAUNet
-from Nets.CSNet import CSNet
-from Nets.AblationCSNet import AblationCSNet
-from Nets.segformer import segformermodel
-from Nets.segm.segmenter import segmentermodel
-# from Nets.segm.segmenter import segmentermodel
-from Nets.munet import MUNet
-from Nets.cpunet import CPUNet
+def _optional_import(module_name, attr_name):
+    try:
+        module = __import__(module_name, fromlist=[attr_name])
+        return getattr(module, attr_name)
+    except Exception:
+        return None
 
-from Nets.UNet import UNet
-from Nets.SegNet import SegNet
-from Nets.LaneNet0508 import LaneNet0508
-from Nets.deeplabv3 import DeepLab
-from Nets.moe_csnet import moe_CSNet
-from Nets.moe_csnet_decoder import moe_CSNet_decoder
-from Nets.SegNet_moe import SegNet_moe
-from Nets.nuseg_moe import config_transnuseg
-from Nets.transunet import config_transunet
-from Nets.swinsmt import config_swinsmt
-from Nets.munet_moe import MUNet_moe
-from Nets.patchformer import  config_patcher
-from Nets.agriseg_lighting import AgriSeg_Lighting
-from Nets.agriseg import AgriSeg
-from Nets.segm.segmenter import segmentermodel
-from Nets.UNet_moe import UNet_moe
-from Nets.UNet_dmoe import UNet_Dmoe
-from Nets.cpunet_moe import CPUNet_moe
-from Nets.swinmoba import SwinMoBA_Seg
-from Nets.Dy_Seg import Dy_Seg
-from Nets.Dy_Seg_Global import Dy_Seg_Global
-from Nets.CMTFNet import CMTFNet
-from Nets.SMAFormer import SMAFormer
-from Nets.BRAUnet import BRAUnet
-from Nets.ScaleFormer import ScaleFormer
-from Nets.GGNetHA.BRAUnetHA import BRAUnetHA
-from Nets.GGNetHA.CMTFNetHA import CMTFNetHA
-from Nets.GGNetHA.ScaleFormerHA import ScaleFormerHA
-from Nets.GGNetHA.transunetHA import config_transunetHA
-from Nets.GGNetHA.swinmobaHA import SwinMoBA_SegHA
-from Nets.GGNetHA.segformerHA import segformermodelHA
+
+ScoreNet = _optional_import("Nets.TUnet", "ScoreNet")
+windowNet_window7_224 = _optional_import("Nets.WindowNet", "windowNet_window7_224")
+SegConvFormer = _optional_import("Nets.SegConvFormer", "SegConvFormer")
+ENet = _optional_import("Nets.ENet", "ENet")
+SegConvFormerV3 = _optional_import("Nets.SegConvFormerv3", "SegConvFormerV3")
+SegConvFormerV4 = _optional_import("Nets.SegConvFormerv4", "SegConvFormerV4")
+SampleOrMHSAUNet = _optional_import("Nets.AttentionUnet", "SampleOrMHSAUNet")
+CSNet = _optional_import("Nets.CSNet", "CSNet")
+AblationCSNet = _optional_import("Nets.AblationCSNet", "AblationCSNet")
+segformermodel = _optional_import("Nets.segformer", "segformermodel")
+segmentermodel = _optional_import("Nets.segm.segmenter", "segmentermodel")
+MUNet = _optional_import("Nets.munet", "MUNet")
+CPUNet = _optional_import("Nets.cpunet", "CPUNet")
+UNet = _optional_import("Nets.UNet", "UNet")
+SegNet = _optional_import("Nets.SegNet", "SegNet")
+LaneNet0508 = _optional_import("Nets.LaneNet0508", "LaneNet0508")
+DeepLab = _optional_import("Nets.deeplabv3", "DeepLab")
+moe_CSNet = _optional_import("Nets.moe_csnet", "moe_CSNet")
+moe_CSNet_decoder = _optional_import("Nets.moe_csnet_decoder", "moe_CSNet_decoder")
+SegNet_moe = _optional_import("Nets.SegNet_moe", "SegNet_moe")
+config_transnuseg = _optional_import("Nets.nuseg_moe", "config_transnuseg")
+config_transunet = _optional_import("Nets.transunet", "config_transunet")
+config_swinsmt = _optional_import("Nets.swinsmt", "config_swinsmt")
+MUNet_moe = _optional_import("Nets.munet_moe", "MUNet_moe")
+config_patcher = _optional_import("Nets.patchformer", "config_patcher")
+AgriSeg_Lighting = _optional_import("Nets.agriseg_lighting", "AgriSeg_Lighting")
+AgriSeg = _optional_import("Nets.agriseg", "AgriSeg")
+UNet_moe = _optional_import("Nets.UNet_moe", "UNet_moe")
+UNet_Dmoe = _optional_import("Nets.UNet_dmoe", "UNet_Dmoe")
+CPUNet_moe = _optional_import("Nets.cpunet_moe", "CPUNet_moe")
+SwinMoBA_Seg = _optional_import("Nets.swinmoba", "SwinMoBA_Seg")
+Dy_Seg = _optional_import("Nets.Dy_Seg", "Dy_Seg")
+Dy_Seg_Global = _optional_import("Nets.Dy_Seg_Global", "Dy_Seg_Global")
+CMTFNet = _optional_import("Nets.CMTFNet", "CMTFNet")
+SMAFormer = _optional_import("Nets.SMAFormer", "SMAFormer")
+BRAUnet = _optional_import("Nets.BRAUnet", "BRAUnet")
+ScaleFormer = _optional_import("Nets.ScaleFormer", "ScaleFormer")
+BRAUnetHA = _optional_import("Nets.GGNetHA.BRAUnetHA", "BRAUnetHA")
+CMTFNetHA = _optional_import("Nets.GGNetHA.CMTFNetHA", "CMTFNetHA")
+ScaleFormerHA = _optional_import("Nets.GGNetHA.ScaleFormerHA", "ScaleFormerHA")
+config_transunetHA = _optional_import("Nets.GGNetHA.transunetHA", "config_transunetHA")
+SwinMoBA_SegHA = _optional_import("Nets.GGNetHA.swinmobaHA", "SwinMoBA_SegHA")
+segformermodelHA = _optional_import("Nets.GGNetHA.segformerHA", "segformermodelHA")
 
 
 import torch
 import torch.nn as nn
-from Nets.deeplabv3_moe import DeepLab_moe
-from torchsummary import summary
-from Nets.segformer_moe import Segformer_moe
+DeepLab_moe = _optional_import("Nets.deeplabv3_moe", "DeepLab_moe")
+summary = _optional_import("torchsummary", "summary")
+Segformer_moe = _optional_import("Nets.segformer_moe", "Segformer_moe")
 from lr_scheduler import *
 
 
@@ -111,6 +116,8 @@ def get_criterion(out_channels, class_weights=None):
 
 def choose_net(name, out_channels, img_size=512):
     if name == 'unet':
+        if UNet is None:
+            raise ImportError("UNet dependencies are unavailable in the current environment.")
         return UNet(n_classes=out_channels, drop_path_rate=0.1)
     elif name == 'segnet':
         return SegNet(label_nbr=out_channels, drop_path_rate=0.1)
@@ -133,8 +140,12 @@ def choose_net(name, out_channels, img_size=512):
     elif name == 'segmenter':
         return segmentermodel(num_classes=out_channels, use_checkpoint=True)
     elif name == 'deeplabv3-resnet':
+        if DeepLab is None:
+            raise ImportError("DeepLab v3+ dependencies are unavailable in the current environment.")
         return DeepLab(num_classes=out_channels, backbone='resnet', drop_path_rate=0.1,)    
     elif name == 'csnet':
+        if CSNet is None:
+            raise ImportError("CSNet dependencies are unavailable in the current environment.")
         return CSNet(n_classes=out_channels, num_heads=2, drop_path_rate=0.1, choice='CNNSimpleAttention',
                                 patch_size=16)
     elif name == 'nuseg_moe':

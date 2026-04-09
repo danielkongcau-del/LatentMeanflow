@@ -57,7 +57,17 @@ Supported routes:
 - load a live teacher with `--teacher-hf-model`
 - reuse precomputed teacher masks with `--teacher-mask-root`
 
-Teacher training inside this repository is not implemented yet.
+Main recommended route:
+
+- train an in-domain remote-sensing teacher on real image-mask data with the
+  vendored `third_party/segmentation` harness
+- compare candidates on held-out `val` / `test`
+- freeze the winner
+- export precomputed teacher masks
+- evaluate the renderer with `--teacher-mask-root`
+
+Live Hugging Face teachers remain available for sanity checks only. They are
+not the main evaluation route.
 
 ## Standard Workflow
 
@@ -70,9 +80,43 @@ python scripts/find_checkpoint.py \
   --monitor val/base_error_mean
 ```
 
-### 2. Run The Fixed Layout-Faithfulness Sweep
+### 2. Train And Freeze An In-Domain Teacher
 
-With a live Hugging Face segmentation teacher:
+Use [docs/segmentation_teacher_bakeoff.md](segmentation_teacher_bakeoff.md) to:
+
+- prepare the contiguous teacher dataset view
+- train `deeplabv3-resnet`, `csnet`, and `unet`
+- compare them on held-out data
+- freeze the winner
+
+### 3. Export Precomputed Teacher Masks
+
+```bash
+python scripts/export_teacher_masks.py \
+  --run-dir logs/segmentation_teacher/<winner_run> \
+  --generated-root outputs/mask_conditioned_renderer_benchmark/fullres_pyramid_boundary \
+  --split validation \
+  --outdir outputs/precomputed_teacher_masks/<winner_alias>_validation
+```
+
+### 4. Run The Fixed Layout-Faithfulness Sweep
+
+Main route with precomputed in-domain teacher masks:
+
+```bash
+python scripts/eval_mask_layout_faithfulness.py \
+  --config configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid_boundary.yaml \
+  --generated-root outputs/mask_conditioned_renderer_benchmark/fullres_pyramid_boundary \
+  --outdir outputs/mask_conditioned_layout_eval/fullres_pyramid_boundary_metrics \
+  --split validation \
+  --seed 23 \
+  --n-samples 32 \
+  --batch-size 4 \
+  --nfe-values 8 4 2 1 \
+  --teacher-mask-root outputs/precomputed_teacher_masks/<winner_alias>_validation
+```
+
+Live Hugging Face teacher sanity check only:
 
 ```bash
 python scripts/eval_mask_layout_faithfulness.py \
@@ -85,21 +129,6 @@ python scripts/eval_mask_layout_faithfulness.py \
   --batch-size 4 \
   --nfe-values 8 4 2 1 \
   --teacher-hf-model <hf-teacher-model-id-or-local-path>
-```
-
-With precomputed teacher masks:
-
-```bash
-python scripts/eval_mask_layout_faithfulness.py \
-  --config configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid_boundary.yaml \
-  --generated-root outputs/mask_conditioned_renderer_benchmark/fullres_pyramid_boundary \
-  --outdir outputs/mask_conditioned_layout_eval/fullres_pyramid_boundary_metrics \
-  --split validation \
-  --seed 23 \
-  --n-samples 32 \
-  --batch-size 4 \
-  --nfe-values 8 4 2 1 \
-  --teacher-mask-root outputs/precomputed_teacher_masks
 ```
 
 Optional teacher label remap:

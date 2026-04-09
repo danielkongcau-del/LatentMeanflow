@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import thop
 from Nets.backbone.resnet import Resnet
 from Nets.backbone.mobilenetv2 import mobilenetv2
 from Nets.backbone.xception import xception

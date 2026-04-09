@@ -388,11 +388,45 @@ Evaluate the generated images against ground truth sanity metrics:
 python scripts/eval_mask_conditioned_image.py --config configs/latent_alphaflow_mask2image_unet.yaml --ckpt <best-ckpt> --outdir outputs/mask_conditioned_eval/example --split validation --seed 23 --nfe-values 8 4 2 1
 ```
 
-Evaluate layout faithfulness with a fixed segmentation teacher. This is the
+The main evaluation route now uses an in-domain remote-sensing teacher trained
+on real image-mask data with the vendored `third_party/segmentation` harness,
+then exported as precomputed teacher masks.
+
+Prepare the teacher dataset view:
+
+```bash
+python scripts/prepare_segmentation_teacher_data.py --src-root data/remote --dst-root outputs/segmentation_teacher_data/remote_semantic_indexed --label-spec configs/label_specs/remote_semantic.yaml --splits train val test
+```
+
+Run the first teacher candidate:
+
+```bash
+python third_party/segmentation/train.py --net-name deeplabv3-resnet --out-channels 7 --height 512 --width 512 --batch-size 4 --epoch 120 --train-set outputs/segmentation_teacher_data/remote_semantic_indexed/train --val-set outputs/segmentation_teacher_data/remote_semantic_indexed/val --test-set outputs/segmentation_teacher_data/remote_semantic_indexed/test --save-dir logs/segmentation_teacher/deeplabv3_resnet_h512_w512
+```
+
+Compare teacher candidates on the same held-out split:
+
+```bash
+python scripts/eval_segmentation_teacher_candidates.py --dataset-root outputs/segmentation_teacher_data/remote_semantic_indexed --split val --label-spec configs/label_specs/remote_semantic.yaml --candidate-run deeplabv3_resnet=logs/segmentation_teacher/deeplabv3_resnet_h512_w512 --candidate-run csnet=logs/segmentation_teacher/csnet_h512_w512 --candidate-run unet=logs/segmentation_teacher/unet_h512_w512 --outdir outputs/segmentation_teacher_bakeoff/val
+```
+
+Export precomputed teacher masks for renderer evaluation:
+
+```bash
+python scripts/export_teacher_masks.py --run-dir logs/segmentation_teacher/deeplabv3_resnet_h512_w512 --generated-root outputs/mask_conditioned_renderer_benchmark/fullres_pyramid_boundary --split validation --outdir outputs/precomputed_teacher_masks/deeplabv3_resnet_validation
+```
+
+Evaluate layout faithfulness with the frozen exported teacher masks. This is the
 primary research-style protocol for `p(image | semantic_mask)`:
 
 ```bash
-python scripts/eval_mask_layout_faithfulness.py --config configs/latent_alphaflow_mask2image_unet.yaml --ckpt <best-ckpt> --outdir outputs/mask_conditioned_layout_eval/example --split validation --seed 23 --nfe-values 8 4 2 1 --teacher-hf-model <hf-teacher-model-id-or-local-path>
+python scripts/eval_mask_layout_faithfulness.py --config configs/latent_alphaflow_mask2image_unet.yaml --generated-root outputs/mask_conditioned_renderer_benchmark/fullres_pyramid_boundary --outdir outputs/mask_conditioned_layout_eval/example --split validation --seed 23 --nfe-values 8 4 2 1 --teacher-mask-root outputs/precomputed_teacher_masks/deeplabv3_resnet_validation
+```
+
+Live Hugging Face teachers remain available for sanity checks only:
+
+```bash
+python scripts/eval_mask_layout_faithfulness.py --config configs/latent_alphaflow_mask2image_unet.yaml --ckpt <best-ckpt> --outdir outputs/mask_conditioned_layout_eval/example_hf_sanity --split validation --seed 23 --nfe-values 8 4 2 1 --teacher-hf-model <hf-teacher-model-id-or-local-path>
 ```
 
 For the full run order, sampling protocol, and success criteria, use
@@ -401,6 +435,9 @@ For the condition-path comparison protocol, use
 [docs/mask_conditioned_renderer_benchmark.md](docs/mask_conditioned_renderer_benchmark.md).
 For the fixed layout-faithfulness evaluation protocol, use
 [docs/mask_conditioned_eval_protocol.md](docs/mask_conditioned_eval_protocol.md).
+For the in-domain segmentation teacher bakeoff and precomputed teacher mask
+workflow, use
+[docs/segmentation_teacher_bakeoff.md](docs/segmentation_teacher_bakeoff.md).
 For the explicit tokenizer-to-flow normalization bridge, use
 [docs/latent_normalization_bridge.md](docs/latent_normalization_bridge.md).
 

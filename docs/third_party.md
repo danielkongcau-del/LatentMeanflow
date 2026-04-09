@@ -36,10 +36,19 @@ Keeping it under `third_party/` avoids mixing exploratory upstream code with the
 ## `third_party/segmentation`
 
 This directory is a vendored copy of a legacy remote-sensing / agricultural
-segmentation codebase kept as a potential frozen segmentation-teacher source for
-evaluation.
+segmentation codebase now used as the in-domain teacher bakeoff harness for the
+project-layer `p(image | semantic_mask)` layout-faithfulness evaluation route.
 
-It is not wired into the main LatentMeanflow training path yet.
+It is still not wired into the generator training path. Its current role is:
+
+- train teacher candidates only on real remote-sensing image-mask data
+- compare them on held-out `val` / `test`
+- freeze the winning checkpoint
+- export precomputed teacher masks for `--teacher-mask-root`
+
+The project-layer runbook for this workflow lives in:
+
+- `docs/segmentation_teacher_bakeoff.md`
 
 Local ignore rules live in:
 
