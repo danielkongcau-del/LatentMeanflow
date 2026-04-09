@@ -413,21 +413,18 @@ python scripts/eval_segmentation_teacher_candidates.py --dataset-root outputs/se
 Export precomputed teacher masks for renderer evaluation:
 
 ```bash
-python scripts/export_teacher_masks.py --run-dir logs/segmentation_teacher/deeplabv3_resnet_h512_w512 --generated-root outputs/mask_conditioned_renderer_benchmark/fullres_pyramid_boundary --split validation --outdir outputs/precomputed_teacher_masks/deeplabv3_resnet_validation
+python scripts/export_teacher_masks.py --run-dir logs/segmentation_teacher/deeplabv3_resnet_h512_w512 --generated-root outputs/mask_conditioned_renderer_benchmark/fullres_pyramid_boundary --split validation --outdir outputs/precomputed_teacher_masks/deeplabv3_resnet/validation
 ```
 
 Evaluate layout faithfulness with the frozen exported teacher masks. This is the
 primary research-style protocol for `p(image | semantic_mask)`:
 
 ```bash
-python scripts/eval_mask_layout_faithfulness.py --config configs/latent_alphaflow_mask2image_unet.yaml --generated-root outputs/mask_conditioned_renderer_benchmark/fullres_pyramid_boundary --outdir outputs/mask_conditioned_layout_eval/example --split validation --seed 23 --nfe-values 8 4 2 1 --teacher-mask-root outputs/precomputed_teacher_masks/deeplabv3_resnet_validation
+python scripts/eval_mask_layout_faithfulness.py --config configs/latent_alphaflow_mask2image_unet.yaml --generated-root outputs/mask_conditioned_renderer_benchmark/fullres_pyramid_boundary --outdir outputs/mask_conditioned_layout_eval/example --split validation --seed 23 --nfe-values 8 4 2 1 --teacher-mask-root outputs/precomputed_teacher_masks/deeplabv3_resnet/validation
 ```
 
-Live Hugging Face teachers remain available for sanity checks only:
-
-```bash
-python scripts/eval_mask_layout_faithfulness.py --config configs/latent_alphaflow_mask2image_unet.yaml --ckpt <best-ckpt> --outdir outputs/mask_conditioned_layout_eval/example_hf_sanity --split validation --seed 23 --nfe-values 8 4 2 1 --teacher-hf-model <hf-teacher-model-id-or-local-path>
-```
+Live Hugging Face teachers remain sanity-only and are documented in
+[docs/mask_conditioned_eval_protocol.md](docs/mask_conditioned_eval_protocol.md).
 
 For the full run order, sampling protocol, and success criteria, use
 [docs/mask_conditioned_image_plan.md](docs/mask_conditioned_image_plan.md).

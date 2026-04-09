@@ -69,6 +69,12 @@ Interpretation:
 - `csnet`: stronger domain-specific candidate from the vendored remote-sensing repo
 - `unet`: simple fallback and sanity baseline
 
+## Recommended First Pass
+
+- first: `deeplabv3-resnet`
+- second: `csnet`
+- fallback: `unet`
+
 ## Data Preparation
 
 The real dataset uses grayscale semantic masks defined by:
@@ -240,13 +246,14 @@ python scripts/export_teacher_masks.py \
   --run-dir logs/segmentation_teacher/deeplabv3_resnet_h512_w512 \
   --generated-root outputs/mask_conditioned_renderer_benchmark/fullres_pyramid_boundary \
   --split validation \
-  --outdir outputs/precomputed_teacher_masks/deeplabv3_resnet_validation
+  --outdir outputs/precomputed_teacher_masks/deeplabv3_resnet/validation
 ```
 
 This writes:
 
 ```text
-outputs/precomputed_teacher_masks/deeplabv3_resnet_validation/
+outputs/precomputed_teacher_masks/deeplabv3_resnet/
+  validation/
   summary.json
   summary.csv
   summary.md
@@ -258,7 +265,39 @@ outputs/precomputed_teacher_masks/deeplabv3_resnet_validation/
     ...
 ```
 
-This exported root is the object passed to `--teacher-mask-root`.
+Pass the split-scoped path to `--teacher-mask-root`, for example:
+
+```text
+outputs/precomputed_teacher_masks/deeplabv3_resnet/validation
+```
+
+The renderer evaluation contract is:
+
+```text
+<teacher-mask-root>/
+  nfe8/teacher_mask_raw/*.png
+  nfe4/teacher_mask_raw/*.png
+  nfe2/teacher_mask_raw/*.png
+  nfe1/teacher_mask_raw/*.png
+```
+
+## Minimal Smoke Test
+
+The repository ships a lightweight end-to-end selfcheck that validates:
+
+- teacher data preparation CLI
+- teacher candidate bakeoff CLI
+- teacher mask export CLI
+- renderer layout-faithfulness eval with `--teacher-mask-root`
+
+Run:
+
+```bash
+python scripts/selfcheck_segmentation_teacher_workflow.py
+```
+
+This uses a mock randomly initialized teacher checkpoint. The metrics are not
+meaningful. The purpose is only to verify CLI wiring and path contracts.
 
 ## Renderer Evaluation With The Frozen Teacher
 

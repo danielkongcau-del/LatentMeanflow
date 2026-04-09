@@ -103,6 +103,8 @@ def _write_summary_md(path, summary):
         f"- teacher net: `{summary['teacher_net_name']}`",
         f"- generated_root: `{summary['generated_root']}`",
         f"- split tag: `{summary['split']}`",
+        f"- teacher_mask_root to pass into renderer eval: `{summary['teacher_mask_root']}`",
+        "- contract: renderer eval expects `nfe*/teacher_mask_raw/*.png` under the exact path passed to `--teacher-mask-root`.",
         "",
         "| NFE | Exported teacher masks | Color masks | Overlays |",
         "| --- | --- | --- | --- |",
@@ -174,8 +176,18 @@ def main():
         "teacher_input_height": int(teacher_metadata["height"]),
         "teacher_input_width": int(teacher_metadata["width"]),
         "generated_root": str(Path(args.generated_root).resolve()),
+        "teacher_mask_root": str(outdir.resolve()),
         "split": str(args.split),
         "label_spec": str(Path(args.label_spec).resolve()),
+        "path_contract": {
+            "teacher_mask_root_argument": str(outdir.resolve()),
+            "required_subdirs": [
+                "nfe*/teacher_mask_raw",
+                "nfe*/teacher_mask_color",
+                "nfe*/teacher_overlay",
+            ],
+            "recommended_layout": "outputs/precomputed_teacher_masks/<winner_alias>/<split>",
+        },
         "results": rows,
     }
 

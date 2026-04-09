@@ -69,6 +69,9 @@ Main recommended route:
 Live Hugging Face teachers remain available for sanity checks only. They are
 not the main evaluation route.
 
+Main route = exported in-domain teacher masks.
+Live HF teacher = sanity check only.
+
 ## Standard Workflow
 
 ### 1. Resolve The Best Checkpoint
@@ -96,8 +99,20 @@ python scripts/export_teacher_masks.py \
   --run-dir logs/segmentation_teacher/<winner_run> \
   --generated-root outputs/mask_conditioned_renderer_benchmark/fullres_pyramid_boundary \
   --split validation \
-  --outdir outputs/precomputed_teacher_masks/<winner_alias>_validation
+  --outdir outputs/precomputed_teacher_masks/<winner_alias>/validation
 ```
+
+Recommended directory contract:
+
+```text
+outputs/precomputed_teacher_masks/<winner_alias>/validation/
+  nfe8/teacher_mask_raw/*.png
+  nfe4/teacher_mask_raw/*.png
+  nfe2/teacher_mask_raw/*.png
+  nfe1/teacher_mask_raw/*.png
+```
+
+Pass the split-scoped directory itself to `--teacher-mask-root`.
 
 ### 4. Run The Fixed Layout-Faithfulness Sweep
 
@@ -113,7 +128,7 @@ python scripts/eval_mask_layout_faithfulness.py \
   --n-samples 32 \
   --batch-size 4 \
   --nfe-values 8 4 2 1 \
-  --teacher-mask-root outputs/precomputed_teacher_masks/<winner_alias>_validation
+  --teacher-mask-root outputs/precomputed_teacher_masks/<winner_alias>/validation
 ```
 
 Live Hugging Face teacher sanity check only:

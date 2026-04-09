@@ -183,6 +183,18 @@ def _load_teacher_predictions_from_root(root, nfe, stems, num_classes, remap):
     return masks
 
 
+def _resolve_teacher_artifact_counts(*, generated_nfe_dir, teacher_mask_root, nfe):
+    if teacher_mask_root is None:
+        teacher_dir = generated_nfe_dir
+    else:
+        teacher_dir = Path(teacher_mask_root) / f"nfe{int(nfe)}"
+    return {
+        "teacher_mask_count": _count_pngs(teacher_dir / "teacher_mask_raw"),
+        "teacher_mask_color_count": _count_pngs(teacher_dir / "teacher_mask_color"),
+        "teacher_overlay_count": _count_pngs(teacher_dir / "teacher_overlay"),
+    }
+
+
 def _compute_layout_metrics(
     *,
     target_masks,
@@ -467,6 +479,11 @@ def main():
             device=device,
             compute_lpips=not args.skip_lpips,
         )
+        teacher_artifact_counts = _resolve_teacher_artifact_counts(
+            generated_nfe_dir=nfe_dir,
+            teacher_mask_root=teacher_mask_root,
+            nfe=nfe,
+        )
 
         results.append(
             {
@@ -478,9 +495,9 @@ def main():
                 "ground_truth_image_count": _count_pngs(nfe_dir / "ground_truth_image"),
                 "overlay_count": _count_pngs(nfe_dir / "overlay"),
                 "panel_count": _count_pngs(nfe_dir / "panel"),
-                "teacher_mask_count": _count_pngs(nfe_dir / "teacher_mask_raw"),
-                "teacher_mask_color_count": _count_pngs(nfe_dir / "teacher_mask_color"),
-                "teacher_overlay_count": _count_pngs(nfe_dir / "teacher_overlay"),
+                "teacher_mask_count": teacher_artifact_counts["teacher_mask_count"],
+                "teacher_mask_color_count": teacher_artifact_counts["teacher_mask_color_count"],
+                "teacher_overlay_count": teacher_artifact_counts["teacher_overlay_count"],
                 "teacher_miou": layout_metrics["teacher_miou"],
                 "teacher_per_class_iou_json": json.dumps(
                     layout_metrics["teacher_per_class_iou"],
@@ -519,6 +536,7 @@ def main():
         "nfe_values": [int(value) for value, _ in nfe_dirs],
         "primary_metric": "teacher_miou",
         "teacher_source": args.teacher_hf_model if args.teacher_hf_model is not None else str(teacher_mask_root),
+        "teacher_route": "live_hf_teacher" if args.teacher_hf_model is not None else "precomputed_teacher_masks",
         "teacher_remap_json": None if args.teacher_remap_json is None else str(args.teacher_remap_json.resolve()),
         "boundary_tolerance_px": int(args.boundary_tolerance_px),
         "small_region_threshold_ratio": float(args.small_region_threshold_ratio),

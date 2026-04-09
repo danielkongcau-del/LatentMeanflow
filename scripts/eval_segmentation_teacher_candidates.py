@@ -113,6 +113,7 @@ def _lowest_iou_items(per_class_iou_by_name, top_k=3):
 
 
 def _write_summary_md(path, summary):
+    winner = summary["winner_summary"]
     lines = [
         "# Segmentation Teacher Bakeoff",
         "",
@@ -120,6 +121,11 @@ def _write_summary_md(path, summary):
         f"- split: `{summary['split']}`",
         f"- label_spec: `{summary['label_spec']}`",
         f"- supported first-round candidates: `{', '.join(summary['supported_candidates'])}`",
+        f"- winner: `{winner['candidate']}`",
+        f"- winner checkpoint: `{winner['checkpoint_path']}`",
+        f"- winner mIoU: `{_format_metric(winner['miou'])}`",
+        f"- winner boundary_f1: `{_format_metric(winner['boundary_f1'])}`",
+        f"- winner small_class_miou: `{_format_metric(winner['small_class_miou'])}`",
         "- selection rule:",
         "  - if no focus classes are set: `0.55*mIoU + 0.20*boundary_f1 + 0.15*small_class_miou + 0.10*worst_class_iou`",
         "  - if focus classes are set: `0.45*mIoU + 0.20*boundary_f1 + 0.15*small_class_miou + 0.10*worst_class_iou + 0.10*focus_class_mean_iou`",
@@ -241,6 +247,9 @@ def main():
                     ensure_ascii=True,
                     sort_keys=True,
                 ),
+                "small_class_names_json": json.dumps(result["small_class_names"], ensure_ascii=True),
+                "focus_class_names_json": json.dumps(result["focus_class_names"], ensure_ascii=True),
+                "lowest_iou_classes_json": json.dumps(result["lowest_iou_classes"], ensure_ascii=True),
             }
         )
 
@@ -255,6 +264,19 @@ def main():
         "ranking": ranking,
         "winner": ranking[0]["candidate"],
         "winner_checkpoint": ranking[0]["checkpoint_path"],
+        "winner_summary": {
+            "candidate": ranking[0]["candidate"],
+            "net_name": ranking[0]["net_name"],
+            "checkpoint_path": ranking[0]["checkpoint_path"],
+            "selection_score": ranking[0]["selection_score"],
+            "miou": ranking[0]["miou"],
+            "boundary_f1": ranking[0]["boundary_f1"],
+            "pixel_accuracy": ranking[0]["pixel_accuracy"],
+            "small_class_miou": ranking[0]["small_class_miou"],
+            "focus_class_mean_iou": ranking[0]["focus_class_mean_iou"],
+            "worst_class_name": ranking[0]["worst_class_name"],
+            "worst_class_iou": ranking[0]["worst_class_iou"],
+        },
     }
 
     summary_json_path = outdir / "summary.json"
@@ -262,33 +284,37 @@ def main():
     summary_md_path = outdir / "summary.md"
     summary_json_path.write_text(json.dumps(summary, indent=2, ensure_ascii=True), encoding="utf-8")
     with summary_csv_path.open("w", newline="", encoding="utf-8") as handle:
+        fieldnames = [
+            "rank",
+            "candidate",
+            "net_name",
+            "run_dir",
+            "checkpoint_path",
+            "selection_score",
+            "miou",
+            "boundary_f1",
+            "pixel_accuracy",
+            "small_class_miou",
+            "focus_class_mean_iou",
+            "worst_class_name",
+            "worst_class_iou",
+            "epoch_budget",
+            "train_batch_size",
+            "input_height",
+            "input_width",
+            "sample_count",
+            "per_class_iou_json",
+            "per_class_pixel_ratio_json",
+            "small_class_names_json",
+            "focus_class_names_json",
+            "lowest_iou_classes_json",
+        ]
         writer = csv.DictWriter(
             handle,
-            fieldnames=[
-                "rank",
-                "candidate",
-                "net_name",
-                "run_dir",
-                "checkpoint_path",
-                "selection_score",
-                "miou",
-                "boundary_f1",
-                "pixel_accuracy",
-                "small_class_miou",
-                "focus_class_mean_iou",
-                "worst_class_name",
-                "worst_class_iou",
-                "epoch_budget",
-                "train_batch_size",
-                "input_height",
-                "input_width",
-                "sample_count",
-                "per_class_iou_json",
-                "per_class_pixel_ratio_json",
-            ],
+            fieldnames=fieldnames,
         )
         writer.writeheader()
-        writer.writerows(ranking)
+        writer.writerows([{field: row.get(field) for field in fieldnames} for row in ranking])
     _write_summary_md(summary_md_path, summary)
 
     print(f"Saved teacher bakeoff summary to {outdir}")

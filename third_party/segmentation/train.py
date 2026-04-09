@@ -201,8 +201,8 @@ def search_train(args):
     args.epoch = 120
     args.batch_size = 4
     args.gpu = 0
-    # train_net_names only support ['CNNSimpleAttention', 'SimpleAttention', 'cpunet', 'munet']
-    train_net_names = ['SwinUNetHA']  #   swin_unet   munet   deeplabv3-resnet   transunet  Dy_Seg_Global segformer  CMTFNet  BRAUNet++  SMAFormer  ScaleFormer
+    # Legacy local search helper kept outside the main teacher route.
+    train_net_names = ['SwinUNetHA']
     save_suffix = 'aug'
     task = 0
     args, sizes, erodes, weightings = get_choices(args, task=task)
