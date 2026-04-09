@@ -220,6 +220,66 @@ def _run_eval_script_smoke():
         candidate = summary["summaries"][0]
         if "rgb_l1" not in candidate or "latent_mean" not in candidate or "latent_shape" not in candidate:
             raise AssertionError("eval_image_tokenizer summary is missing required fields")
+        if "channel_collapse" not in candidate or "downstream_readiness" not in candidate:
+            raise AssertionError("eval_image_tokenizer summary is missing audit fields")
+        if not (outdir / "summary.csv").exists():
+            raise AssertionError("eval_image_tokenizer summary.csv was not written")
+
+        audit_outdir = root / "audit_out"
+        subprocess.run(
+            [
+                sys.executable,
+                str(REPO_ROOT / "scripts" / "audit_image_tokenizers.py"),
+                "--candidate",
+                f"smoke|{config_path}|{ckpt_path}",
+                "--outdir",
+                str(audit_outdir),
+                "--max-batches",
+                "1",
+                "--export-visuals",
+                "--visual-samples",
+                "1",
+                "--crop-size",
+                "16",
+            ],
+            check=True,
+            cwd=REPO_ROOT,
+        )
+        audit_summary = json.loads((audit_outdir / "summary.json").read_text(encoding="utf-8"))
+        if not audit_summary["ranking"]:
+            raise AssertionError("audit_image_tokenizers did not produce any ranking rows")
+        if not (audit_outdir / "summary.csv").exists():
+            raise AssertionError("audit_image_tokenizers summary.csv was not written")
+
+        run_dir = root / "tokenizer_run"
+        ckpt_dir = run_dir / "checkpoints"
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
+        best_ckpt = ckpt_dir / "epoch=000001.ckpt"
+        last_ckpt = ckpt_dir / "last.ckpt"
+        callback_state = {
+            "callbacks": {
+                "ModelCheckpoint{monitor=val/total_loss}": {
+                    "monitor": "val/total_loss",
+                    "best_model_path": str(best_ckpt),
+                }
+            }
+        }
+        torch.save(callback_state, last_ckpt)
+        torch.save({}, best_ckpt)
+        resolved_path = subprocess.check_output(
+            [
+                sys.executable,
+                str(REPO_ROOT / "scripts" / "find_image_tokenizer_checkpoint.py"),
+                "--config",
+                str(config_path),
+                "--run-dir",
+                str(run_dir),
+            ],
+            cwd=REPO_ROOT,
+            text=True,
+        ).strip()
+        if Path(resolved_path).resolve() != best_ckpt.resolve():
+            raise AssertionError("find_image_tokenizer_checkpoint did not resolve the monitored best checkpoint")
 
 
 def main():
@@ -231,6 +291,8 @@ def main():
     print("checked configs: base/f8 and LPIPS variants instantiate with expected latent shapes")
     print("forward/backward: ok")
     print("eval_image_tokenizer smoke: ok")
+    print("audit_image_tokenizers smoke: ok")
+    print("find_image_tokenizer_checkpoint smoke: ok")
 
 
 if __name__ == "__main__":

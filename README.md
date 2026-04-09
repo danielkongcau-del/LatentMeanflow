@@ -258,6 +258,26 @@ python scripts/eval_image_tokenizer.py \
   --outdir outputs/image_tokenizer_eval/f8_vs_base
 ```
 
+Resolve the monitored best tokenizer checkpoint from a run directory instead of
+guessing by latest file timestamp:
+
+```bash
+python scripts/find_image_tokenizer_checkpoint.py \
+  --config configs/autoencoder_image_24gb_lpips_256.yaml \
+  --run-dir logs/autoencoder_image
+```
+
+Audit one or more tokenizer checkpoints, export blur/error visuals, and rank
+them for downstream `p(image | semantic_mask)` work:
+
+```bash
+python scripts/audit_image_tokenizers.py \
+  --candidate base_lpips|configs/autoencoder_image_24gb_lpips_256.yaml|/path/to/base_lpips.ckpt \
+  --candidate f8_lpips|configs/autoencoder_image_f8_24gb_lpips_256.yaml|/path/to/f8_lpips.ckpt \
+  --export-visuals \
+  --outdir outputs/image_tokenizer_audit/current
+```
+
 ### Mask-Conditioned Image Route
 
 The project-layer conditional renderer is a separate route:
