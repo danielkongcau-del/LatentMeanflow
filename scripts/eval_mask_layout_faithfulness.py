@@ -31,6 +31,7 @@ from scripts.sample_mask_conditioned_image import (
     DEFAULT_CONFIG,
     DEFAULT_NFE_VALUES,
     _prepare_outdir,
+    apply_tokenizer_overrides,
     generate_mask_conditioned_sweep,
     load_config,
     load_examples,
@@ -50,6 +51,18 @@ def parse_args():
     )
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--ckpt", type=Path, default=None)
+    parser.add_argument(
+        "--tokenizer-config",
+        type=Path,
+        default=None,
+        help="Optional override for model.params.tokenizer_config_path.",
+    )
+    parser.add_argument(
+        "--tokenizer-ckpt",
+        type=Path,
+        default=None,
+        help="Optional override for model.params.tokenizer_ckpt_path.",
+    )
     parser.add_argument("--generated-root", type=Path, default=None)
     parser.add_argument("--outdir", type=Path, required=True)
     parser.add_argument("--split", type=str, default="validation")
@@ -331,6 +344,11 @@ def main():
         )
 
     config = load_config(args.config)
+    apply_tokenizer_overrides(
+        config,
+        tokenizer_config=args.tokenizer_config,
+        tokenizer_ckpt=args.tokenizer_ckpt,
+    )
     monitor = _check_monitor(config, expected_monitor=args.expected_monitor)
     condition_metadata = _resolve_condition_metadata(config)
     num_classes = _resolve_num_classes(config, args.label_spec)
@@ -491,6 +509,8 @@ def main():
         "task": "p(image | semantic_mask)",
         "config": str(args.config.resolve()),
         "checkpoint": None if ckpt_path is None else str(ckpt_path),
+        "tokenizer_config": str(Path(config.model.params.tokenizer_config_path).resolve()),
+        "tokenizer_checkpoint": str(Path(config.model.params.tokenizer_ckpt_path).resolve()),
         "generated_root": str(generated_root),
         "monitor": monitor,
         "source_mode": source_mode,

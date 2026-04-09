@@ -21,6 +21,7 @@ for path in (REPO_ROOT, LDM_ROOT, TAMING_ROOT):
 from scripts.sample_mask_conditioned_image import (
     DEFAULT_CONFIG,
     DEFAULT_NFE_VALUES,
+    apply_tokenizer_overrides,
     generate_mask_conditioned_sweep,
     load_examples,
     load_config,
@@ -41,6 +42,18 @@ def parse_args():
     )
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--ckpt", type=Path, default=None)
+    parser.add_argument(
+        "--tokenizer-config",
+        type=Path,
+        default=None,
+        help="Optional override for model.params.tokenizer_config_path.",
+    )
+    parser.add_argument(
+        "--tokenizer-ckpt",
+        type=Path,
+        default=None,
+        help="Optional override for model.params.tokenizer_ckpt_path.",
+    )
     parser.add_argument("--outdir", type=Path, required=True)
     parser.add_argument("--generated-root", type=Path, default=None)
     parser.add_argument("--split", type=str, default="validation")
@@ -142,6 +155,11 @@ def main():
     _prepare_outdir(outdir, overwrite=args.overwrite)
 
     config = load_config(args.config)
+    apply_tokenizer_overrides(
+        config,
+        tokenizer_config=args.tokenizer_config,
+        tokenizer_ckpt=args.tokenizer_ckpt,
+    )
     generated_root = None if args.generated_root is None else args.generated_root.resolve()
     source_mode = None
 
@@ -220,6 +238,8 @@ def main():
     summary = {
         "config": str(args.config.resolve()),
         "checkpoint": None if args.ckpt is None else str(args.ckpt.resolve()),
+        "tokenizer_config": str(Path(config.model.params.tokenizer_config_path).resolve()),
+        "tokenizer_checkpoint": str(Path(config.model.params.tokenizer_ckpt_path).resolve()),
         "generated_root": str(generated_root),
         "source_mode": source_mode,
         "task": "p(image | semantic_mask)",

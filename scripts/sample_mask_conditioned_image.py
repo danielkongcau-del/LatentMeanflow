@@ -47,6 +47,18 @@ def parse_args():
     )
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--ckpt", type=Path, default=None)
+    parser.add_argument(
+        "--tokenizer-config",
+        type=Path,
+        default=None,
+        help="Optional override for model.params.tokenizer_config_path.",
+    )
+    parser.add_argument(
+        "--tokenizer-ckpt",
+        type=Path,
+        default=None,
+        help="Optional override for model.params.tokenizer_ckpt_path.",
+    )
     parser.add_argument("--outdir", type=Path, required=True)
     parser.add_argument("--split", type=str, default="validation", help="Dataset split key: train, validation, or val.")
     parser.add_argument("--mask-dir", type=Path, default=None, help="Optional standalone semantic mask directory.")
@@ -65,6 +77,24 @@ def parse_args():
     parser.add_argument("--two-step-time", type=float, default=None)
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
+
+
+def apply_tokenizer_overrides(config, *, tokenizer_config=None, tokenizer_ckpt=None):
+    if tokenizer_config is not None:
+        OmegaConf.update(
+            config,
+            "model.params.tokenizer_config_path",
+            str(tokenizer_config.resolve()),
+            merge=False,
+        )
+    if tokenizer_ckpt is not None:
+        OmegaConf.update(
+            config,
+            "model.params.tokenizer_ckpt_path",
+            str(tokenizer_ckpt.resolve()),
+            merge=False,
+        )
+    return config
 
 
 def _normalize_rgb_for_save(image):
@@ -366,6 +396,11 @@ def generate_mask_conditioned_sweep(
 def main():
     args = parse_args()
     config = load_config(args.config)
+    apply_tokenizer_overrides(
+        config,
+        tokenizer_config=args.tokenizer_config,
+        tokenizer_ckpt=args.tokenizer_ckpt,
+    )
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(int(args.seed))
 
@@ -414,6 +449,8 @@ def main():
     summary = {
         "config": str(args.config.resolve()),
         "checkpoint": str(ckpt_path.resolve()),
+        "tokenizer_config": str(Path(config.model.params.tokenizer_config_path).resolve()),
+        "tokenizer_checkpoint": str(Path(config.model.params.tokenizer_ckpt_path).resolve()),
         "source_mode": source_mode,
         "split": args.split,
         "mask_dir": None if args.mask_dir is None else str(args.mask_dir.resolve()),
