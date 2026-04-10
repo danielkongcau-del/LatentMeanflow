@@ -1,5 +1,6 @@
 import json
 import os
+import pathlib
 import shutil
 import sys
 from pathlib import Path
@@ -24,6 +25,18 @@ from latent_meanflow.utils.palette import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SEGMENTATION_ROOT = REPO_ROOT / "third_party" / "segmentation"
 SUPPORTED_TEACHER_CANDIDATES = ("deeplabv3-resnet", "csnet", "unet")
+ORIGINAL_POSIX_PATH = pathlib.PosixPath
+
+
+def _restore_pathlib_posix_path():
+    pathlib.PosixPath = ORIGINAL_POSIX_PATH
+
+
+def _resolve_path_str(path_like):
+    path_str = os.fspath(path_like)
+    if "\\" in path_str:
+        path_str = path_str.replace("\\", "/")
+    return os.path.abspath(path_str)
 
 
 def ensure_segmentation_vendor_on_path():
@@ -224,24 +237,25 @@ def prepare_segmentation_teacher_dataset(
 
 
 def resolve_teacher_checkpoint(run_dir, checkpoint_path=None):
-    run_dir = Path(run_dir).resolve()
-    train_args_path = run_dir / "train_args.json"
-    if not train_args_path.exists():
+    run_dir = _resolve_path_str(run_dir)
+    train_args_path = os.path.join(run_dir, "train_args.json")
+    if not os.path.exists(train_args_path):
         raise FileNotFoundError(f"Missing train_args.json under teacher run directory: {run_dir}")
-    train_args = json.loads(train_args_path.read_text(encoding="utf-8"))
+    with open(train_args_path, "r", encoding="utf-8") as handle:
+        train_args = json.load(handle)
     if checkpoint_path is not None:
-        checkpoint_path = Path(checkpoint_path).resolve()
-        if not checkpoint_path.exists():
+        checkpoint_path = _resolve_path_str(checkpoint_path)
+        if not os.path.exists(checkpoint_path):
             raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
         return checkpoint_path, train_args
     net_name = str(train_args["net_name"])
-    best_path = run_dir / f"{net_name}_best.pt"
-    if not best_path.exists():
+    best_path = os.path.join(run_dir, f"{net_name}_best.pt")
+    if not os.path.exists(best_path):
         raise FileNotFoundError(
             f"Best checkpoint not found: {best_path}. The bakeoff workflow expects the vendored trainer's "
             "explicit val-mIoU winner checkpoint."
         )
-    return best_path.resolve(), train_args
+    return os.path.abspath(best_path), train_args
 
 
 def _strip_module_prefix(state_dict):
@@ -254,8 +268,10 @@ def _strip_module_prefix(state_dict):
 
 def load_teacher_model(*, run_dir, device, checkpoint_path=None):
     checkpoint_path, train_args = resolve_teacher_checkpoint(run_dir, checkpoint_path=checkpoint_path)
+    resolved_run_dir = _resolve_path_str(run_dir)
     ensure_segmentation_vendor_on_path()
     from choices import choose_net
+    _restore_pathlib_posix_path()
 
     net_name = str(train_args["net_name"])
     out_channels = int(train_args["out_channels"])
@@ -275,7 +291,7 @@ def load_teacher_model(*, run_dir, device, checkpoint_path=None):
     model = model.to(device)
     model.eval()
     metadata = {
-        "run_dir": str(Path(run_dir).resolve()),
+        "run_dir": resolved_run_dir,
         "checkpoint_path": str(checkpoint_path),
         "net_name": net_name,
         "out_channels": out_channels,
@@ -602,15 +618,16 @@ def evaluate_teacher_on_dataset(
 
 
 def write_teacher_mask_triplet(*, mask_index, rgb_uint8, outdir, stem, num_classes, overlay_alpha):
-    raw_dir = Path(outdir) / "teacher_mask_raw"
-    color_dir = Path(outdir) / "teacher_mask_color"
-    overlay_dir = Path(outdir) / "teacher_overlay"
-    raw_dir.mkdir(parents=True, exist_ok=True)
-    color_dir.mkdir(parents=True, exist_ok=True)
-    overlay_dir.mkdir(parents=True, exist_ok=True)
+    outdir = _resolve_path_str(outdir)
+    raw_dir = os.path.join(outdir, "teacher_mask_raw")
+    color_dir = os.path.join(outdir, "teacher_mask_color")
+    overlay_dir = os.path.join(outdir, "teacher_overlay")
+    os.makedirs(raw_dir, exist_ok=True)
+    os.makedirs(color_dir, exist_ok=True)
+    os.makedirs(overlay_dir, exist_ok=True)
     mask_np = np.asarray(mask_index, dtype=np.int64)
     color_mask = colorize_mask_index(mask_np, num_classes=num_classes)
     overlay = overlay_color_mask_on_image(np.asarray(rgb_uint8, dtype=np.uint8), color_mask, alpha=overlay_alpha)
-    Image.fromarray(mask_np.astype(np.uint16)).save(raw_dir / f"{stem}.png")
-    Image.fromarray(color_mask).save(color_dir / f"{stem}.png")
-    Image.fromarray(overlay).save(overlay_dir / f"{stem}.png")
+    Image.fromarray(mask_np.astype(np.uint16)).save(os.path.join(raw_dir, f"{stem}.png"))
+    Image.fromarray(color_mask).save(os.path.join(color_dir, f"{stem}.png"))
+    Image.fromarray(overlay).save(os.path.join(overlay_dir, f"{stem}.png"))
