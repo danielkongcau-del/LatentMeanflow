@@ -34,6 +34,13 @@ def _list_input_images(root):
     # Preserve deterministic order while avoiding pathlib cross-platform issues.
     return sorted({os.path.normpath(path) for path in paths})
 
+
+def _squeeze_prediction_mask(prediction_np):
+    prediction_np = np.asarray(prediction_np)
+    if prediction_np.ndim == 3 and prediction_np.shape[0] == 1:
+        prediction_np = prediction_np[0]
+    return prediction_np
+
 def miouandpa(config, output, target):
     pa, miou = None, None
 
@@ -234,7 +241,7 @@ def predict_images(net, args, dst_size=(512, 512), save_dir=None):
         img_tensor = img_transform(frame).unsqueeze(0)
         prediction_np, _, _ = predict_a_batch(net=net, out_channels=args.out_channels, batch_data=img_tensor,batch_label=None, class_weights=None,
                                               do_criterion=False, do_metric=False)
-        prediction_np = prediction_np.astype('uint8')
+        prediction_np = _squeeze_prediction_mask(prediction_np).astype('uint8')
         if args.erode > 0:
             kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (args.erode, args.erode))
             prediction_np = cv2.erode(prediction_np, kernel)
@@ -246,7 +253,9 @@ def predict_images(net, args, dst_size=(512, 512), save_dir=None):
         dst_prediction = cv2.resize(prediction_np, dst_size)
 
         pred_dict = Counter(dst_prediction.flatten())
-        pred_dict2 = {'path': file_name, 0: pred_dict[0], 1: pred_dict[1], 2: pred_dict[2], 3: pred_dict[3]}
+        pred_dict2 = {'path': file_name}
+        for class_id in range(int(args.out_channels)):
+            pred_dict2[class_id] = pred_dict[class_id]
         pred_dicts.append(pred_dict2)
         print(pred_dict2)
         dst_show = add_mask_to_source_multi_classes(np.array(dst_frame), dst_prediction, args.out_channels)
