@@ -300,37 +300,41 @@ def median_freq_balancing(dataloader, num_classes):
     return med / freq
 
 
+def _build_multi_class_colors(num_classes):
+    base_colors = np.array(
+        [
+            [233, 244, 163],
+            [255, 255, 0],
+            [0, 255, 0],
+            [255, 0, 255],
+            [0, 255, 255],
+            [255, 128, 0],
+            [0, 128, 255],
+            [255, 0, 0],
+            [128, 255, 0],
+            [128, 0, 255],
+        ],
+        dtype=np.uint8,
+    )
+    if int(num_classes) <= len(base_colors):
+        return base_colors[: int(num_classes)]
+    repeats = int(np.ceil(float(num_classes) / float(len(base_colors))))
+    return np.tile(base_colors, (repeats, 1))[: int(num_classes)]
+
+
 def add_mask_to_source_multi_classes(source_np, mask_np, num_classes):
-    colors = [[0, 0, 0], [233, 244, 163], [255, 255, 0], [0, 255, 0], [255, 0, 255], [0, 255, 255], [255, 255, 0]]
-    foreground_mask_bool = mask_np.astype('bool')
-    foreground_mask = mask_np * foreground_mask_bool
-    foreground = np.zeros((source_np.shape), dtype='uint8')
-    background = source_np.copy()
+    mask_np = np.asarray(mask_np)
+    if mask_np.ndim == 3 and mask_np.shape[0] == 1:
+        mask_np = mask_np[0]
+    if mask_np.ndim == 3 and mask_np.shape[-1] == 1:
+        mask_np = mask_np[..., 0]
+    mask_np = mask_np.astype(np.int64, copy=False)
 
-    for i in range(1, num_classes + 1):
-        fg_tmp = np.where(foreground_mask == i, 1, 0)
-        fg_tmp_mask_bool = fg_tmp.astype('bool')
-
-        fg_color_tmp = np.zeros(source_np.shape, dtype='uint8')
-        fg_color_tmp[:, :] = colors[i]
-        for c in range(3):
-            fg_color_tmp[:, :, c] *= fg_tmp_mask_bool
-        foreground += fg_color_tmp
-    foreground = cv2.addWeighted(source_np, 0.0, foreground, 1, 0) # 原来是0.8 0.2
-
-    for i in range(3):
-        foreground[:, :, i] *= foreground_mask_bool
-        background[:, :, i] *= ~foreground_mask_bool
-
-    show = foreground
-    # show = foreground + background
-    # plt.imshow(show)
-    # plt.pause(0.5)
-
-    # img = np.zeros(source_np.shape, dtype='uint8')
-    # for class_id in range(1, num_classes + 1):
-    #     img[mask_np == class_id] = colors[class_id]
-
+    colors = _build_multi_class_colors(num_classes)
+    show = np.zeros(source_np.shape, dtype='uint8')
+    valid_mask = (mask_np >= 0) & (mask_np < int(num_classes))
+    if np.any(valid_mask):
+        show[valid_mask] = colors[mask_np[valid_mask]]
     return show
 
 
