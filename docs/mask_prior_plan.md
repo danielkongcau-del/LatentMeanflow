@@ -67,6 +67,7 @@ Project-layer files for this route:
 - `scripts/train_mask_prior.py`
 - `scripts/sample_mask_prior.py`
 - `scripts/eval_mask_prior.py`
+- `scripts/eval_mask_prior_composed_renderer.py`
 - `configs/latent_alphaflow_mask_prior_unet_tiny.yaml`
 - `configs/latent_alphaflow_mask_prior_unet.yaml`
 
@@ -90,6 +91,7 @@ Base target:
 3. Train the base AlphaFlow route.
 4. Run the fixed `NFE=8/4/2/1` sweep.
 5. Evaluate generated masks against the real-mask bank before composing with the renderer.
+6. Use `docs/mask_prior_eval_protocol.md` for the fixed mask-only and compose evaluation protocol.
 
 ## Commands
 

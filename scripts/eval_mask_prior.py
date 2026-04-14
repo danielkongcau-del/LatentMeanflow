@@ -4,6 +4,7 @@ import json
 import sys
 from pathlib import Path
 
+import cv2
 import numpy as np
 import torch
 from PIL import Image
@@ -41,14 +42,18 @@ from scripts.sample_mask_prior import (
 
 
 MASK_EXTS = (".png", ".jpg", ".jpeg", ".bmp")
+AREA_RATIO_HISTOGRAM_BINS = np.asarray(
+    [0.0, 1.0e-4, 1.0e-3, 5.0e-3, 1.0e-2, 2.0e-2, 5.0e-2, 1.0e-1, 2.0e-1, 5.0e-1, 1.0],
+    dtype=np.float64,
+)
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
             "Evaluate the project-layer unconditional semantic-mask route p(semantic_mask). "
-            "This baseline compares generated masks against real-mask distribution statistics "
-            "and nearest-real layout agreement; it does not assume paired targets."
+            "This protocol is distributional: it compares generated masks against a real-mask bank "
+            "using class-area, topology, boundary, and small-region statistics instead of paired IoU."
         )
     )
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
@@ -67,6 +72,12 @@ def parse_args():
     parser.add_argument("--nfe-values", type=int, nargs="+", default=DEFAULT_NFE_VALUES)
     parser.add_argument("--seed", type=int, default=23)
     parser.add_argument("--two-step-time", type=float, default=None)
+    parser.add_argument(
+        "--small-region-threshold-ratio",
+        type=float,
+        default=0.02,
+        help="Connected components no larger than this ratio of valid pixels count as small regions.",
+    )
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--expected-monitor", type=str, default="val/base_error_mean")
     return parser.parse_args()
@@ -77,7 +88,7 @@ def _check_monitor(config, expected_monitor):
     if expected_monitor is not None and configured_monitor != expected_monitor:
         raise ValueError(
             f"Evaluation monitor mismatch: expected '{expected_monitor}', got '{configured_monitor}'. "
-            "Use the best checkpoint selected by val/base_error_mean for the main baseline."
+            "Use the best checkpoint selected by val/base_error_mean for the main mask-prior baseline."
         )
     return configured_monitor
 
@@ -147,39 +158,221 @@ def _resolve_label_spec_metadata(label_spec):
     return int(num_classes), ignore_index
 
 
-def _boundary_density(mask, ignore_index=None):
+def _valid_mask(mask, ignore_index=None):
     valid_mask = np.ones(mask.shape, dtype=bool)
     if ignore_index is not None:
         valid_mask &= mask != int(ignore_index)
-    vertical = (mask[1:, :] != mask[:-1, :]) & valid_mask[1:, :] & valid_mask[:-1, :]
-    horizontal = (mask[:, 1:] != mask[:, :-1]) & valid_mask[:, 1:] & valid_mask[:, :-1]
-    boundary_pixels = float(vertical.sum() + horizontal.sum())
-    valid_pixels = float(max(1, valid_mask.sum()))
-    return boundary_pixels / valid_pixels
+    return valid_mask
 
 
 def _class_ratio(mask, num_classes, ignore_index=None):
-    valid_mask = np.ones(mask.shape, dtype=bool)
-    if ignore_index is not None:
-        valid_mask &= mask != int(ignore_index)
+    valid_mask = _valid_mask(mask, ignore_index=ignore_index)
     valid_values = mask[valid_mask]
     if valid_values.size == 0:
-        return np.zeros((num_classes,), dtype=np.float64)
+        return np.zeros((num_classes,), dtype=np.float64), np.zeros((num_classes,), dtype=np.float64), 0.0
     counts = np.bincount(valid_values.astype(np.int64), minlength=num_classes).astype(np.float64)
-    counts /= float(valid_values.size)
-    return counts
+    ratios = counts / float(valid_values.size)
+    return ratios, counts, float(valid_values.size)
 
 
-def _class_presence(mask, num_classes, ignore_index=None):
-    ratio = _class_ratio(mask, num_classes=num_classes, ignore_index=ignore_index)
-    return (ratio > 0.0).astype(np.float64)
+def _boundary_length(mask, ignore_index=None):
+    valid_mask = _valid_mask(mask, ignore_index=ignore_index)
+    vertical = (mask[1:, :] != mask[:-1, :]) & valid_mask[1:, :] & valid_mask[:-1, :]
+    horizontal = (mask[:, 1:] != mask[:, :-1]) & valid_mask[:, 1:] & valid_mask[:, :-1]
+    boundary_length = float(vertical.sum() + horizontal.sum())
+    valid_pixels = float(max(1, valid_mask.sum()))
+    return boundary_length, boundary_length / valid_pixels
+
+
+def _component_profile(mask, *, num_classes, ignore_index=None, small_region_threshold_ratio=0.02):
+    valid_mask = _valid_mask(mask, ignore_index=ignore_index)
+    valid_pixels = float(max(1, valid_mask.sum()))
+
+    component_count = np.zeros((num_classes,), dtype=np.float64)
+    largest_component_area_ratio = np.zeros((num_classes,), dtype=np.float64)
+    mean_component_area_ratio = np.zeros((num_classes,), dtype=np.float64)
+    small_region_count = np.zeros((num_classes,), dtype=np.float64)
+    small_region_area_ratio = np.zeros((num_classes,), dtype=np.float64)
+    component_area_lists = {int(class_id): [] for class_id in range(int(num_classes))}
+
+    for class_id in range(int(num_classes)):
+        binary_mask = ((mask == class_id) & valid_mask).astype(np.uint8)
+        if int(binary_mask.sum()) <= 0:
+            continue
+        num_labels, _, stats, _ = cv2.connectedComponentsWithStats(binary_mask, connectivity=8)
+        if int(num_labels) <= 1:
+            continue
+        component_areas = stats[1:, cv2.CC_STAT_AREA].astype(np.float64)
+        component_ratios = component_areas / valid_pixels
+        component_count[class_id] = float(component_ratios.size)
+        mean_component_area_ratio[class_id] = float(component_ratios.mean())
+        largest_component_area_ratio[class_id] = float(component_ratios.max())
+        component_area_lists[int(class_id)].extend(component_ratios.tolist())
+
+        small_mask = component_ratios <= float(small_region_threshold_ratio)
+        if np.any(small_mask):
+            small_region_count[class_id] = float(small_mask.sum())
+            small_region_area_ratio[class_id] = float(component_ratios[small_mask].sum())
+
+    return {
+        "component_count": component_count,
+        "largest_component_area_ratio": largest_component_area_ratio,
+        "mean_component_area_ratio": mean_component_area_ratio,
+        "small_region_count": small_region_count,
+        "small_region_area_ratio": small_region_area_ratio,
+        "component_area_lists": component_area_lists,
+    }
+
+
+def _quantile_or_none(values, q):
+    values = np.asarray(values, dtype=np.float64)
+    if values.size == 0:
+        return None
+    return float(np.quantile(values, q))
+
+
+def _mean_or_none(values):
+    values = np.asarray(values, dtype=np.float64)
+    if values.size == 0:
+        return None
+    return float(values.mean())
+
+
+def _std_or_none(values):
+    values = np.asarray(values, dtype=np.float64)
+    if values.size == 0:
+        return None
+    return float(values.std())
+
+
+def _per_class_stats_from_matrix(matrix):
+    stats = {}
+    for class_id in range(matrix.shape[1]):
+        values = np.asarray(matrix[:, class_id], dtype=np.float64)
+        stats[int(class_id)] = {
+            "mean": float(values.mean()),
+            "std": float(values.std()),
+            "median": float(np.median(values)),
+            "p05": float(np.quantile(values, 0.05)),
+            "p95": float(np.quantile(values, 0.95)),
+        }
+    return stats
+
+
+def _per_class_component_area_stats(component_area_lists):
+    stats = {}
+    for class_id, values in component_area_lists.items():
+        values = np.asarray(values, dtype=np.float64)
+        stats[int(class_id)] = {
+            "mean": _mean_or_none(values),
+            "std": _std_or_none(values),
+            "median": _quantile_or_none(values, 0.5),
+            "p95": _quantile_or_none(values, 0.95),
+            "count": int(values.size),
+        }
+    return stats
+
+
+def _area_ratio_histograms(ratios, bins):
+    hist_counts = {}
+    hist_freqs = {}
+    for class_id in range(ratios.shape[1]):
+        counts, _ = np.histogram(ratios[:, class_id], bins=bins)
+        hist_counts[int(class_id)] = counts.astype(np.int64)
+        hist_freqs[int(class_id)] = counts.astype(np.float64) / float(max(1, ratios.shape[0]))
+    return hist_counts, hist_freqs
+
+
+def _summarize_distribution(masks, *, num_classes, ignore_index=None, small_region_threshold_ratio=0.02):
+    if not masks:
+        raise ValueError("Mask collection must not be empty.")
+
+    ratios_list = []
+    counts_total = np.zeros((num_classes,), dtype=np.float64)
+    total_valid_pixels = 0.0
+    boundary_lengths = []
+    boundary_ratios = []
+    unique_class_counts = []
+
+    component_count_rows = []
+    largest_component_rows = []
+    mean_component_rows = []
+    small_region_count_rows = []
+    small_region_area_rows = []
+    component_area_lists = {int(class_id): [] for class_id in range(int(num_classes))}
+
+    for mask in masks:
+        mask = np.asarray(mask, dtype=np.int64)
+        ratios, counts, valid_pixels = _class_ratio(mask, num_classes=num_classes, ignore_index=ignore_index)
+        ratios_list.append(ratios)
+        counts_total += counts
+        total_valid_pixels += valid_pixels
+        unique_class_counts.append(float((ratios > 0.0).sum()))
+
+        boundary_length, boundary_ratio = _boundary_length(mask, ignore_index=ignore_index)
+        boundary_lengths.append(boundary_length)
+        boundary_ratios.append(boundary_ratio)
+
+        component_profile = _component_profile(
+            mask,
+            num_classes=num_classes,
+            ignore_index=ignore_index,
+            small_region_threshold_ratio=small_region_threshold_ratio,
+        )
+        component_count_rows.append(component_profile["component_count"])
+        largest_component_rows.append(component_profile["largest_component_area_ratio"])
+        mean_component_rows.append(component_profile["mean_component_area_ratio"])
+        small_region_count_rows.append(component_profile["small_region_count"])
+        small_region_area_rows.append(component_profile["small_region_area_ratio"])
+        for class_id, values in component_profile["component_area_lists"].items():
+            component_area_lists[int(class_id)].extend(values)
+
+    ratios = np.stack(ratios_list, axis=0)
+    presences = (ratios > 0.0).astype(np.float64)
+    component_count_matrix = np.stack(component_count_rows, axis=0)
+    largest_component_matrix = np.stack(largest_component_rows, axis=0)
+    mean_component_matrix = np.stack(mean_component_rows, axis=0)
+    small_region_count_matrix = np.stack(small_region_count_rows, axis=0)
+    small_region_area_matrix = np.stack(small_region_area_rows, axis=0)
+    histogram_counts, histogram_freqs = _area_ratio_histograms(ratios, bins=AREA_RATIO_HISTOGRAM_BINS)
+
+    global_class_pixel_ratio = (
+        counts_total / float(max(1.0, total_valid_pixels))
+        if total_valid_pixels > 0.0
+        else np.zeros((num_classes,), dtype=np.float64)
+    )
+
+    return {
+        "sample_count": int(len(masks)),
+        "histogram_bins": AREA_RATIO_HISTOGRAM_BINS.tolist(),
+        "global_class_pixel_ratio": global_class_pixel_ratio,
+        "class_ratio_stats": _per_class_stats_from_matrix(ratios),
+        "class_presence_mean": presences.mean(axis=0),
+        "class_area_histogram_counts": {
+            int(class_id): counts.tolist() for class_id, counts in histogram_counts.items()
+        },
+        "class_area_histogram_freq": {
+            int(class_id): freqs.round(6).tolist() for class_id, freqs in histogram_freqs.items()
+        },
+        "boundary_length_mean": float(np.mean(boundary_lengths)),
+        "boundary_length_std": float(np.std(boundary_lengths)),
+        "boundary_length_ratio_mean": float(np.mean(boundary_ratios)),
+        "boundary_length_ratio_std": float(np.std(boundary_ratios)),
+        "unique_class_count_mean": float(np.mean(unique_class_counts)),
+        "unique_class_count_std": float(np.std(unique_class_counts)),
+        "component_count_stats": _per_class_stats_from_matrix(component_count_matrix),
+        "largest_component_area_ratio_stats": _per_class_stats_from_matrix(largest_component_matrix),
+        "mean_component_area_ratio_stats": _per_class_stats_from_matrix(mean_component_matrix),
+        "component_area_ratio_stats": _per_class_component_area_stats(component_area_lists),
+        "small_region_count_stats": _per_class_stats_from_matrix(small_region_count_matrix),
+        "small_region_area_ratio_stats": _per_class_stats_from_matrix(small_region_area_matrix),
+        "small_region_sample_frequency": (small_region_count_matrix > 0.0).mean(axis=0),
+        "small_region_threshold_ratio": float(small_region_threshold_ratio),
+    }
 
 
 def _mask_miou(mask_a, mask_b, num_classes, ignore_index=None):
-    valid_mask = np.ones(mask_a.shape, dtype=bool)
-    if ignore_index is not None:
-        valid_mask &= mask_a != int(ignore_index)
-        valid_mask &= mask_b != int(ignore_index)
+    valid_mask = _valid_mask(mask_a, ignore_index=ignore_index) & _valid_mask(mask_b, ignore_index=ignore_index)
     if not np.any(valid_mask):
         return 0.0
 
@@ -195,40 +388,6 @@ def _mask_miou(mask_a, mask_b, num_classes, ignore_index=None):
     if not values:
         return 0.0
     return float(sum(values) / len(values))
-
-
-def _load_generated_masks(nfe_dir, n_samples):
-    mask_dir = nfe_dir / "mask_raw"
-    if not mask_dir.exists():
-        raise FileNotFoundError(f"Missing mask_raw directory under {nfe_dir}")
-    mask_paths = sorted(mask_dir.glob("*.png"))[: int(n_samples)]
-    if not mask_paths:
-        raise RuntimeError(f"No generated masks found under {mask_dir}")
-    masks = [_load_mask_png(path) for path in mask_paths]
-    stems = [path.stem for path in mask_paths]
-    return masks, stems
-
-
-def _summarize_distribution(masks, *, num_classes, ignore_index=None):
-    ratios = np.stack(
-        [_class_ratio(mask, num_classes=num_classes, ignore_index=ignore_index) for mask in masks],
-        axis=0,
-    )
-    presences = np.stack(
-        [_class_presence(mask, num_classes=num_classes, ignore_index=ignore_index) for mask in masks],
-        axis=0,
-    )
-    boundary = np.asarray([_boundary_density(mask, ignore_index=ignore_index) for mask in masks], dtype=np.float64)
-    unique_class_count = np.asarray(
-        [int(presence.sum()) for presence in presences],
-        dtype=np.float64,
-    )
-    return {
-        "class_ratio_mean": ratios.mean(axis=0),
-        "class_presence_mean": presences.mean(axis=0),
-        "boundary_density_mean": float(boundary.mean()),
-        "unique_class_count_mean": float(unique_class_count.mean()),
-    }
 
 
 def _nearest_real_mious(fake_masks, real_masks, *, num_classes, ignore_index=None):
@@ -257,20 +416,112 @@ def _pairwise_fake_mious(fake_masks, *, num_classes, ignore_index=None):
     return np.asarray(scores, dtype=np.float64)
 
 
+def _load_generated_masks(nfe_dir, n_samples):
+    mask_dir = nfe_dir / "mask_raw"
+    if not mask_dir.exists():
+        raise FileNotFoundError(f"Missing mask_raw directory under {nfe_dir}")
+    mask_paths = sorted(mask_dir.glob("*.png"))[: int(n_samples)]
+    if not mask_paths:
+        raise RuntimeError(f"No generated masks found under {mask_dir}")
+    masks = [_load_mask_png(path) for path in mask_paths]
+    stems = [path.stem for path in mask_paths]
+    return masks, stems
+
+
+def _get_per_class_vector(stats_map, field_name, num_classes):
+    values = np.zeros((num_classes,), dtype=np.float64)
+    for class_id in range(int(num_classes)):
+        value = stats_map[int(class_id)][field_name]
+        values[class_id] = 0.0 if value is None else float(value)
+    return values
+
+
+def _compare_distribution(generated_stats, reference_stats, *, num_classes):
+    generated_hist = np.asarray(
+        [generated_stats["class_area_histogram_freq"][int(class_id)] for class_id in range(int(num_classes))],
+        dtype=np.float64,
+    )
+    reference_hist = np.asarray(
+        [reference_stats["class_area_histogram_freq"][int(class_id)] for class_id in range(int(num_classes))],
+        dtype=np.float64,
+    )
+    histogram_l1_per_class = np.abs(generated_hist - reference_hist).sum(axis=1)
+
+    generated_component_count = _get_per_class_vector(
+        generated_stats["component_count_stats"],
+        "mean",
+        num_classes=num_classes,
+    )
+    reference_component_count = _get_per_class_vector(
+        reference_stats["component_count_stats"],
+        "mean",
+        num_classes=num_classes,
+    )
+    generated_component_area = _get_per_class_vector(
+        generated_stats["component_area_ratio_stats"],
+        "mean",
+        num_classes=num_classes,
+    )
+    reference_component_area = _get_per_class_vector(
+        reference_stats["component_area_ratio_stats"],
+        "mean",
+        num_classes=num_classes,
+    )
+    generated_small_freq = np.asarray(generated_stats["small_region_sample_frequency"], dtype=np.float64)
+    reference_small_freq = np.asarray(reference_stats["small_region_sample_frequency"], dtype=np.float64)
+
+    return {
+        "global_class_pixel_ratio_l1": float(
+            np.abs(
+                np.asarray(generated_stats["global_class_pixel_ratio"], dtype=np.float64)
+                - np.asarray(reference_stats["global_class_pixel_ratio"], dtype=np.float64)
+            ).sum()
+        ),
+        "class_area_histogram_l1_mean": float(histogram_l1_per_class.mean()),
+        "class_area_histogram_l1_max": float(histogram_l1_per_class.max()),
+        "histogram_l1_per_class": histogram_l1_per_class,
+        "component_count_l1_mean": float(np.abs(generated_component_count - reference_component_count).mean()),
+        "component_area_ratio_l1_mean": float(np.abs(generated_component_area - reference_component_area).mean()),
+        "boundary_length_ratio_gap": abs(
+            float(generated_stats["boundary_length_ratio_mean"])
+            - float(reference_stats["boundary_length_ratio_mean"])
+        ),
+        "small_region_frequency_l1_mean": float(np.abs(generated_small_freq - reference_small_freq).mean()),
+        "unique_class_count_gap": abs(
+            float(generated_stats["unique_class_count_mean"]) - float(reference_stats["unique_class_count_mean"])
+        ),
+    }
+
+
+def _to_json_ready(value):
+    if isinstance(value, dict):
+        return {str(key): _to_json_ready(inner) for key, inner in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_json_ready(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return [_to_json_ready(item) for item in value.tolist()]
+    if isinstance(value, (np.floating,)):
+        return float(value)
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    return value
+
+
 def _write_markdown_report(path, summary):
     lines = [
-        "# Mask Prior Report",
+        "# Mask Prior Evaluation Protocol",
         "",
         f"- task: `{summary['task']}`",
         f"- config: `{summary['config']}`",
         f"- checkpoint: `{summary['checkpoint']}`",
         f"- monitor: `{summary['monitor']}`",
         f"- reference source: `{summary['reference_source']}`",
+        f"- small-region threshold ratio: `{summary['small_region_threshold_ratio']}`",
         "",
-        "Primary readout: nearest-real mIoU plus collapse sanity. This is an unconditional `p(mask)` route, so there is no paired target mask.",
+        "Mask-only evaluation is distributional. It compares generated masks against the real split on area, topology, boundary, and small-region statistics. `nearest_real_miou_mean` remains a real-bank plausibility sanity metric, not a paired target metric.",
         "",
-        "| NFE | nearest-real mIoU | pairwise fake mIoU | class-ratio L1 | boundary gap | unique-class gap |",
-        "| --- | --- | --- | --- | --- | --- |",
+        "| NFE | nearest-real mIoU | pairwise fake mIoU | global class ratio L1 | area hist L1 | component count gap | boundary gap | small-region freq gap |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for result in summary["results"]:
         pairwise = result["pairwise_fake_miou_mean"]
@@ -281,15 +532,26 @@ def _write_markdown_report(path, summary):
                     str(int(result["nfe"])),
                     f"{float(result['nearest_real_miou_mean']):.4f}",
                     "n/a" if pairwise is None else f"{float(pairwise):.4f}",
-                    f"{float(result['class_ratio_l1']):.4f}",
-                    f"{float(result['boundary_density_gap']):.4f}",
-                    f"{float(result['unique_class_count_gap']):.4f}",
+                    f"{float(result['global_class_pixel_ratio_l1']):.4f}",
+                    f"{float(result['class_area_histogram_l1_mean']):.4f}",
+                    f"{float(result['component_count_l1_mean']):.4f}",
+                    f"{float(result['boundary_length_ratio_gap']):.4f}",
+                    f"{float(result['small_region_frequency_l1_mean']):.4f}",
                 ]
             )
             + " |"
         )
-    lines.append("")
-    lines.append("Higher nearest-real mIoU is better. Higher pairwise fake mIoU can indicate mode collapse.")
+    lines.extend(
+        [
+            "",
+            "Interpretation:",
+            "",
+            "- Lower is better for all gap metrics.",
+            "- Higher `nearest_real_miou_mean` is better.",
+            "- Very high `pairwise_fake_miou_mean` can indicate reduced diversity or mode collapse.",
+            "- `summary.json` contains the full per-class histograms and connected-component statistics for both the real bank and every generated NFE sweep.",
+        ]
+    )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -356,6 +618,7 @@ def main():
         reference_masks,
         num_classes=num_classes,
         ignore_index=ignore_index,
+        small_region_threshold_ratio=args.small_region_threshold_ratio,
     )
     results = []
     for nfe, nfe_dir in nfe_dirs:
@@ -364,6 +627,7 @@ def main():
             generated_masks,
             num_classes=num_classes,
             ignore_index=ignore_index,
+            small_region_threshold_ratio=args.small_region_threshold_ratio,
         )
         nearest_real_mious = _nearest_real_mious(
             generated_masks,
@@ -375,6 +639,11 @@ def main():
             generated_masks,
             num_classes=num_classes,
             ignore_index=ignore_index,
+        )
+        distribution_gap = _compare_distribution(
+            generated_stats,
+            reference_stats,
+            num_classes=num_classes,
         )
 
         results.append(
@@ -392,42 +661,80 @@ def main():
                 "pairwise_fake_miou_std": None
                 if pairwise_fake_mious.size == 0
                 else float(pairwise_fake_mious.std()),
-                "class_ratio_l1": float(
-                    np.abs(generated_stats["class_ratio_mean"] - reference_stats["class_ratio_mean"]).sum()
-                ),
-                "class_presence_l1": float(
-                    np.abs(generated_stats["class_presence_mean"] - reference_stats["class_presence_mean"]).sum()
-                ),
-                "boundary_density_generated_mean": generated_stats["boundary_density_mean"],
-                "boundary_density_reference_mean": reference_stats["boundary_density_mean"],
-                "boundary_density_gap": abs(
-                    generated_stats["boundary_density_mean"] - reference_stats["boundary_density_mean"]
-                ),
-                "unique_class_count_generated_mean": generated_stats["unique_class_count_mean"],
-                "unique_class_count_reference_mean": reference_stats["unique_class_count_mean"],
-                "unique_class_count_gap": abs(
-                    generated_stats["unique_class_count_mean"] - reference_stats["unique_class_count_mean"]
-                ),
-                "generated_class_ratio_mean_json": json.dumps(
-                    generated_stats["class_ratio_mean"].round(6).tolist(),
+                "global_class_pixel_ratio_l1": distribution_gap["global_class_pixel_ratio_l1"],
+                "class_area_histogram_l1_mean": distribution_gap["class_area_histogram_l1_mean"],
+                "class_area_histogram_l1_max": distribution_gap["class_area_histogram_l1_max"],
+                "component_count_l1_mean": distribution_gap["component_count_l1_mean"],
+                "component_area_ratio_l1_mean": distribution_gap["component_area_ratio_l1_mean"],
+                "boundary_length_generated_mean": float(generated_stats["boundary_length_mean"]),
+                "boundary_length_reference_mean": float(reference_stats["boundary_length_mean"]),
+                "boundary_length_ratio_generated_mean": float(generated_stats["boundary_length_ratio_mean"]),
+                "boundary_length_ratio_reference_mean": float(reference_stats["boundary_length_ratio_mean"]),
+                "boundary_length_ratio_gap": distribution_gap["boundary_length_ratio_gap"],
+                "small_region_frequency_l1_mean": distribution_gap["small_region_frequency_l1_mean"],
+                "unique_class_count_generated_mean": float(generated_stats["unique_class_count_mean"]),
+                "unique_class_count_reference_mean": float(reference_stats["unique_class_count_mean"]),
+                "unique_class_count_gap": distribution_gap["unique_class_count_gap"],
+                "generated_global_class_pixel_ratio_json": json.dumps(
+                    _to_json_ready(np.asarray(generated_stats["global_class_pixel_ratio"]).round(6)),
                     ensure_ascii=True,
                 ),
-                "reference_class_ratio_mean_json": json.dumps(
-                    reference_stats["class_ratio_mean"].round(6).tolist(),
+                "reference_global_class_pixel_ratio_json": json.dumps(
+                    _to_json_ready(np.asarray(reference_stats["global_class_pixel_ratio"]).round(6)),
                     ensure_ascii=True,
                 ),
-                "generated_class_presence_mean_json": json.dumps(
-                    generated_stats["class_presence_mean"].round(6).tolist(),
+                "generated_class_ratio_stats_json": json.dumps(
+                    _to_json_ready(generated_stats["class_ratio_stats"]),
+                    ensure_ascii=True,
+                    sort_keys=True,
+                ),
+                "reference_class_ratio_stats_json": json.dumps(
+                    _to_json_ready(reference_stats["class_ratio_stats"]),
+                    ensure_ascii=True,
+                    sort_keys=True,
+                ),
+                "generated_component_count_stats_json": json.dumps(
+                    _to_json_ready(generated_stats["component_count_stats"]),
+                    ensure_ascii=True,
+                    sort_keys=True,
+                ),
+                "reference_component_count_stats_json": json.dumps(
+                    _to_json_ready(reference_stats["component_count_stats"]),
+                    ensure_ascii=True,
+                    sort_keys=True,
+                ),
+                "generated_component_area_ratio_stats_json": json.dumps(
+                    _to_json_ready(generated_stats["component_area_ratio_stats"]),
+                    ensure_ascii=True,
+                    sort_keys=True,
+                ),
+                "reference_component_area_ratio_stats_json": json.dumps(
+                    _to_json_ready(reference_stats["component_area_ratio_stats"]),
+                    ensure_ascii=True,
+                    sort_keys=True,
+                ),
+                "generated_small_region_frequency_json": json.dumps(
+                    _to_json_ready(np.asarray(generated_stats["small_region_sample_frequency"]).round(6)),
                     ensure_ascii=True,
                 ),
-                "reference_class_presence_mean_json": json.dumps(
-                    reference_stats["class_presence_mean"].round(6).tolist(),
+                "reference_small_region_frequency_json": json.dumps(
+                    _to_json_ready(np.asarray(reference_stats["small_region_sample_frequency"]).round(6)),
                     ensure_ascii=True,
+                ),
+                "generated_class_area_histogram_json": json.dumps(
+                    _to_json_ready(generated_stats["class_area_histogram_freq"]),
+                    ensure_ascii=True,
+                    sort_keys=True,
+                ),
+                "reference_class_area_histogram_json": json.dumps(
+                    _to_json_ready(reference_stats["class_area_histogram_freq"]),
+                    ensure_ascii=True,
+                    sort_keys=True,
                 ),
                 "metrics_note": (
-                    "nearest_real_miou_mean measures layout plausibility against the real-mask bank. "
-                    "pairwise_fake_miou_mean is a collapse sanity metric; class_ratio_l1 and boundary_density_gap "
-                    "are marginal-distribution sanity metrics."
+                    "Mask-only evaluation is distributional. Global class-area, connected-component, boundary, "
+                    "and small-region statistics are the main protocol. nearest_real_miou_mean remains a real-bank "
+                    "plausibility sanity metric; pairwise_fake_miou_mean is a diversity-collapse sanity metric."
                 ),
             }
         )
@@ -441,27 +748,34 @@ def main():
         "seed": int(args.seed),
         "n_samples": int(args.n_samples),
         "nfe_values": [int(value) for value, _ in nfe_dirs],
-        "primary_metric": "nearest_real_miou_mean",
+        "primary_metric": "mask_distribution_gap_bundle",
         "reference_source": reference_source if args.mask_dir is None else str(args.mask_dir.resolve()),
         "label_spec": str(args.label_spec.resolve()),
         "num_classes": int(num_classes),
+        "small_region_threshold_ratio": float(args.small_region_threshold_ratio),
         "primary_readout": [
+            "global_class_pixel_ratio_l1",
+            "class_area_histogram_l1_mean",
+            "component_count_l1_mean",
+            "boundary_length_ratio_gap",
+            "small_region_frequency_l1_mean",
             "nearest_real_miou_mean",
-            "pairwise_fake_miou_mean",
-            "class_ratio_l1",
-            "boundary_density_gap",
         ],
         "protocol_notes": {
             "task_type": "This route models p(semantic_mask) only.",
-            "paired_target_note": "Unconditional mask generation has no paired ground truth; evaluation uses real-mask bank statistics and nearest-real agreement.",
+            "paired_target_note": "Unconditional mask generation has no paired target mask; evaluation compares generated masks against the real-mask distribution and a real-mask bank.",
             "nfe_rule": "Use the fixed NFE=8/4/2/1 sweep instead of reporting only NFE=1.",
-            "collapse_note": "A very high pairwise_fake_miou_mean may indicate reduced diversity or mode collapse.",
+            "small_region_note": "Small regions are connected components whose area is no larger than small_region_threshold_ratio of valid pixels in a sample.",
+            "boundary_note": "Boundary length is measured by vertical and horizontal class-transition counts, normalized by valid pixels.",
+            "checkpoint_rule": "Use best checkpoints selected by val/base_error_mean.",
         },
+        "reference_distribution": _to_json_ready(reference_stats),
         "results": results,
     }
 
     summary_json_path = outdir / "summary.json"
     summary_csv_path = outdir / "summary.csv"
+    summary_md_path = outdir / "summary.md"
     report_md_path = outdir / "report.md"
     summary_json_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     with summary_csv_path.open("w", newline="", encoding="utf-8") as handle:
@@ -476,28 +790,44 @@ def main():
                 "nearest_real_miou_std",
                 "pairwise_fake_miou_mean",
                 "pairwise_fake_miou_std",
-                "class_ratio_l1",
-                "class_presence_l1",
-                "boundary_density_generated_mean",
-                "boundary_density_reference_mean",
-                "boundary_density_gap",
+                "global_class_pixel_ratio_l1",
+                "class_area_histogram_l1_mean",
+                "class_area_histogram_l1_max",
+                "component_count_l1_mean",
+                "component_area_ratio_l1_mean",
+                "boundary_length_generated_mean",
+                "boundary_length_reference_mean",
+                "boundary_length_ratio_generated_mean",
+                "boundary_length_ratio_reference_mean",
+                "boundary_length_ratio_gap",
+                "small_region_frequency_l1_mean",
                 "unique_class_count_generated_mean",
                 "unique_class_count_reference_mean",
                 "unique_class_count_gap",
-                "generated_class_ratio_mean_json",
-                "reference_class_ratio_mean_json",
-                "generated_class_presence_mean_json",
-                "reference_class_presence_mean_json",
+                "generated_global_class_pixel_ratio_json",
+                "reference_global_class_pixel_ratio_json",
+                "generated_class_ratio_stats_json",
+                "reference_class_ratio_stats_json",
+                "generated_component_count_stats_json",
+                "reference_component_count_stats_json",
+                "generated_component_area_ratio_stats_json",
+                "reference_component_area_ratio_stats_json",
+                "generated_small_region_frequency_json",
+                "reference_small_region_frequency_json",
+                "generated_class_area_histogram_json",
+                "reference_class_area_histogram_json",
                 "metrics_note",
             ],
         )
         writer.writeheader()
         writer.writerows(results)
+    _write_markdown_report(summary_md_path, summary)
     _write_markdown_report(report_md_path, summary)
 
     print(f"Saved mask-prior JSON to {summary_json_path}")
     print(f"Saved mask-prior CSV to {summary_csv_path}")
-    print(f"Saved mask-prior report to {report_md_path}")
+    print(f"Saved mask-prior markdown to {summary_md_path}")
+    print(f"Saved compatibility report to {report_md_path}")
 
 
 if __name__ == "__main__":

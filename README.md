@@ -438,6 +438,29 @@ workflow, use
 For the explicit tokenizer-to-flow normalization bridge, use
 [docs/latent_normalization_bridge.md](docs/latent_normalization_bridge.md).
 
+### Mask Prior Route
+
+The project-layer unconditional semantic-mask route is now a separate upstream
+task:
+
+- it models `p(semantic_mask)`
+- it is evaluated separately from the renderer
+- it composes into the frozen downstream route `p(image | semantic_mask)`
+
+Use:
+
+- [docs/mask_prior_plan.md](docs/mask_prior_plan.md) for the conservative
+  baseline definition
+- [docs/mask_prior_eval_protocol.md](docs/mask_prior_eval_protocol.md) for the
+  fixed mask-only and compose-to-image evaluation protocol
+
+Checked-in entry points:
+
+- `scripts/train_mask_prior.py`
+- `scripts/sample_mask_prior.py`
+- `scripts/eval_mask_prior.py`
+- `scripts/eval_mask_prior_composed_renderer.py`
+
 ### Latent FM Path
 
 Train the latent flow-matching prior on semantic tokenizer latents:
@@ -786,6 +809,10 @@ The current promoted downstream chain for `p(image | semantic_mask)` is:
 - mask-conditioned image renderer
 
 This pinned route does not yet include an unconditional `p(mask)` prior.
+
+The upstream `p(mask)` route is evaluated separately with the fixed protocol in
+[docs/mask_prior_eval_protocol.md](docs/mask_prior_eval_protocol.md), then
+composed into this frozen downstream chain.
 
 Use the following project-layer defaults:
 
