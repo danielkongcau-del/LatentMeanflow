@@ -413,14 +413,14 @@ python scripts/eval_segmentation_teacher_candidates.py --dataset-root outputs/se
 Export precomputed teacher masks for renderer evaluation:
 
 ```bash
-python scripts/export_teacher_masks.py --run-dir logs/segmentation_teacher/deeplabv3_resnet_h512_w512 --generated-root outputs/mask_conditioned_renderer_benchmark/fullres_pyramid_boundary --split validation --outdir outputs/precomputed_teacher_masks/deeplabv3_resnet/validation
+python scripts/export_teacher_masks.py --run-dir logs/segmentation_teacher/deeplabv3_resnet_h512_w512 --generated-root outputs/mask_conditioned_renderer_benchmark/fullres_pyramid_boundary_encoder --split validation --outdir outputs/precomputed_teacher_masks/deeplabv3_resnet/validation
 ```
 
 Evaluate layout faithfulness with the frozen exported teacher masks. This is the
 primary research-style protocol for `p(image | semantic_mask)`:
 
 ```bash
-python scripts/eval_mask_layout_faithfulness.py --config configs/latent_alphaflow_mask2image_unet.yaml --generated-root outputs/mask_conditioned_renderer_benchmark/fullres_pyramid_boundary --outdir outputs/mask_conditioned_layout_eval/example --split validation --seed 23 --nfe-values 8 4 2 1 --teacher-mask-root outputs/precomputed_teacher_masks/deeplabv3_resnet/validation
+python scripts/eval_mask_layout_faithfulness.py --config configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid_boundary_encoder.yaml --generated-root outputs/mask_conditioned_renderer_benchmark/fullres_pyramid_boundary_encoder --outdir outputs/mask_conditioned_layout_eval/fullres_pyramid_boundary_encoder_metrics --split validation --seed 23 --nfe-values 8 4 2 1 --teacher-mask-root outputs/precomputed_teacher_masks/deeplabv3_resnet/validation
 ```
 
 Live Hugging Face teachers remain sanity-only and are documented in
@@ -777,6 +777,35 @@ Config intent:
 - `configs/latent_alphaflow_mask2image_unet_tiny.yaml`: tiny/debug AlphaFlow mask-conditioned sanity route
 - `configs/latent_alphaflow_mask2image_f8_unet.yaml`: AlphaFlow mask-conditioned route for the stronger image-only `f=8` tokenizer branch
 - `configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid_boundary_encoder_norm.yaml`: strongest full-resolution condition route with the same explicit latent normalization bridge
+
+## Current Pinned Downstream Route
+
+The current promoted downstream chain for `p(image | semantic_mask)` is:
+
+- image-only tokenizer
+- mask-conditioned image renderer
+
+This pinned route does not yet include an unconditional `p(mask)` prior.
+
+Use the following project-layer defaults:
+
+- tokenizer config: `configs/autoencoder_image_lpips_adv_256.yaml`
+- tokenizer checkpoint rule: resolve the promoted checkpoint with `scripts/find_image_tokenizer_checkpoint.py --selection best`; do not silently swap to `last.ckpt`
+- renderer config: `configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid_boundary_encoder.yaml`
+- renderer checkpoint rule: resolve the promoted checkpoint with `scripts/find_checkpoint.py --selection best --monitor val/base_error_mean`; do not use `last.ckpt` when reproducing promoted numbers
+- formal reporting sweep: `NFE=8/4/2/1`
+- current default inference point: `NFE=2`
+
+Resolve the pinned local checkpoints explicitly:
+
+```bash
+python scripts/find_image_tokenizer_checkpoint.py --config configs/autoencoder_image_lpips_adv_256.yaml --run-dir logs/<timestamp>_image_lpips_adv_256 --selection best
+python scripts/find_checkpoint.py --run-dir logs/<timestamp>_latent_alphaflow_mask2image_unet_fullres_pyramid_boundary_encoder --selection best --monitor val/base_error_mean
+```
+
+The exact `logs/<timestamp>_...` run directories are local runtime artifacts, not
+repo-tracked files. Pin them explicitly on the current machine before sampling,
+benchmarking, or reporting results.
 
 ## AlphaFlow Weighting Semantics
 

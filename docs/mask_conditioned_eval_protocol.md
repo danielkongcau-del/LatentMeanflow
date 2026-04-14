@@ -15,6 +15,24 @@ generated image actually obeys the input semantic layout.
 - The same seed, checkpoint rule, teacher source, and sample subset must be
   used for every renderer being compared.
 
+## Current Pinned Route
+
+The current promoted downstream route for `p(image | semantic_mask)` is:
+
+- tokenizer config: `configs/autoencoder_image_lpips_adv_256.yaml`
+- tokenizer checkpoint rule: resolve the promoted checkpoint with `scripts/find_image_tokenizer_checkpoint.py --selection best`
+- renderer config: `configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid_boundary_encoder.yaml`
+- renderer checkpoint rule: resolve the promoted checkpoint with `scripts/find_checkpoint.py --selection best --monitor val/base_error_mean`
+- formal reporting sweep: `NFE=8/4/2/1`
+- current default inference point: `NFE=2`
+
+This pinned route is the current `image-only tokenizer -> mask2image renderer`
+chain. It does not yet include an unconditional `p(mask)` prior.
+
+The exact `logs/<timestamp>_...` run directories are local runtime artifacts, not
+repo-tracked files. Resolve the best checkpoints explicitly on the current
+machine before sampling, exporting teacher masks, or reporting results.
+
 ## What The Metrics Mean
 
 - `L1` / `LPIPS`
@@ -120,9 +138,9 @@ Main route with precomputed in-domain teacher masks:
 
 ```bash
 python scripts/eval_mask_layout_faithfulness.py \
-  --config configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid_boundary.yaml \
-  --generated-root outputs/mask_conditioned_renderer_benchmark/fullres_pyramid_boundary \
-  --outdir outputs/mask_conditioned_layout_eval/fullres_pyramid_boundary_metrics \
+  --config configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid_boundary_encoder.yaml \
+  --generated-root outputs/mask_conditioned_renderer_benchmark/fullres_pyramid_boundary_encoder \
+  --outdir outputs/mask_conditioned_layout_eval/fullres_pyramid_boundary_encoder_metrics \
   --split validation \
   --seed 23 \
   --n-samples 32 \
@@ -135,9 +153,9 @@ Live Hugging Face teacher sanity check only:
 
 ```bash
 python scripts/eval_mask_layout_faithfulness.py \
-  --config configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid_boundary.yaml \
+  --config configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid_boundary_encoder.yaml \
   --ckpt <best-ckpt> \
-  --outdir outputs/mask_conditioned_layout_eval/fullres_pyramid_boundary \
+  --outdir outputs/mask_conditioned_layout_eval/fullres_pyramid_boundary_encoder \
   --split validation \
   --seed 23 \
   --n-samples 32 \
@@ -150,9 +168,9 @@ Optional teacher label remap:
 
 ```bash
 python scripts/eval_mask_layout_faithfulness.py \
-  --config configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid_boundary.yaml \
+  --config configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid_boundary_encoder.yaml \
   --ckpt <best-ckpt> \
-  --outdir outputs/mask_conditioned_layout_eval/fullres_pyramid_boundary \
+  --outdir outputs/mask_conditioned_layout_eval/fullres_pyramid_boundary_encoder \
   --teacher-hf-model <hf-teacher-model-id-or-local-path> \
   --teacher-remap-json configs/teacher_remap_example.json
 ```
