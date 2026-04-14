@@ -16,6 +16,7 @@ for path in (REPO_ROOT, LDM_ROOT, TAMING_ROOT):
 from ldm.util import instantiate_from_config
 from latent_meanflow.conditioning import LatentConditioning
 from latent_meanflow.trainers.mask_conditioned_image_trainer import resolve_mask_condition_channels
+from scripts.sample_mask_conditioned_image import DEFAULT_CONFIG as DEFAULT_SAMPLE_CONFIG
 from scripts.train_mask_conditioned_image import DEFAULT_CONFIGS
 
 
@@ -114,11 +115,13 @@ def main():
     expected_defaults = {
         "fm": "latent_fm_mask2image_unet.yaml",
         "meanflow": "latent_meanflow_mask2image_unet.yaml",
-        "alphaflow": "latent_alphaflow_mask2image_unet.yaml",
+        "alphaflow": "latent_alphaflow_mask2image_unet_fullres_pyramid_boundary_encoder.yaml",
     }
     for objective, expected_name in expected_defaults.items():
         if Path(DEFAULT_CONFIGS[objective]).name != expected_name:
             raise AssertionError(f"Unexpected wrapper default for {objective}: {DEFAULT_CONFIGS[objective]}")
+    if Path(DEFAULT_SAMPLE_CONFIG).name != "latent_alphaflow_mask2image_unet_fullres_pyramid_boundary_encoder.yaml":
+        raise AssertionError(f"Unexpected sampling default: {DEFAULT_SAMPLE_CONFIG}")
 
     expected_channels = resolve_mask_condition_channels(
         semantic_mask_label_spec_path=REPO_ROOT / "configs" / "label_specs" / "remote_semantic.yaml"

@@ -35,7 +35,12 @@ from scripts.sample_latent_flow import (
 )
 
 
-DEFAULT_CONFIG = REPO_ROOT / "configs" / "latent_alphaflow_mask2image_unet.yaml"
+DEFAULT_CONFIG = (
+    REPO_ROOT
+    / "configs"
+    / "ablations"
+    / "latent_alphaflow_mask2image_unet_fullres_pyramid_boundary_encoder.yaml"
+)
 DEFAULT_NFE_VALUES = [8, 4, 2, 1]
 MASK_EXTS = (".png", ".jpg", ".jpeg", ".bmp")
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".bmp")

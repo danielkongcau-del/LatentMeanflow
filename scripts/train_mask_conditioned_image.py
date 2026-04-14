@@ -11,7 +11,7 @@ TRAIN_LATENT_FLOW = REPO_ROOT / "scripts" / "train_latent_meanflow.py"
 DEFAULT_CONFIGS = {
     "fm": REPO_ROOT / "configs" / "latent_fm_mask2image_unet.yaml",
     "meanflow": REPO_ROOT / "configs" / "latent_meanflow_mask2image_unet.yaml",
-    "alphaflow": REPO_ROOT / "configs" / "latent_alphaflow_mask2image_unet.yaml",
+    "alphaflow": REPO_ROOT / "configs" / "ablations" / "latent_alphaflow_mask2image_unet_fullres_pyramid_boundary_encoder.yaml",
 }
 
 
