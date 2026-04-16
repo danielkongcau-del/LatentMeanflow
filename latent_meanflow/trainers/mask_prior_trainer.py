@@ -1,4 +1,5 @@
 import math
+from collections.abc import Sequence
 from copy import deepcopy
 from pathlib import Path
 
@@ -23,13 +24,19 @@ def _normalize_spatial_shape(mask_spatial_shape):
     if isinstance(mask_spatial_shape, int):
         edge = int(mask_spatial_shape)
         return (edge, edge)
-    if not isinstance(mask_spatial_shape, (list, tuple)) or len(mask_spatial_shape) != 2:
+    if isinstance(mask_spatial_shape, (str, bytes)) or not isinstance(mask_spatial_shape, Sequence):
         raise ValueError(
             "mask_spatial_shape must be an int or a 2-item sequence, "
             f"got {mask_spatial_shape!r}"
         )
-    height = int(mask_spatial_shape[0])
-    width = int(mask_spatial_shape[1])
+    values = tuple(mask_spatial_shape)
+    if len(values) != 2:
+        raise ValueError(
+            "mask_spatial_shape must be an int or a 2-item sequence, "
+            f"got {mask_spatial_shape!r}"
+        )
+    height = int(values[0])
+    width = int(values[1])
     if height <= 0 or width <= 0:
         raise ValueError(f"mask_spatial_shape must be positive, got {(height, width)}")
     return (height, width)
