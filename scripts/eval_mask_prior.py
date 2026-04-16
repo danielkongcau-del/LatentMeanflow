@@ -786,6 +786,7 @@ def main():
                 "outdir",
                 "generated_mask_count",
                 "reference_mask_count",
+                "mask_stem_example",
                 "nearest_real_miou_mean",
                 "nearest_real_miou_std",
                 "pairwise_fake_miou_mean",
