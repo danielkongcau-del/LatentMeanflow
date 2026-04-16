@@ -145,7 +145,7 @@ def find_best_checkpoint(run_dir, monitor=None):
         if resolved_candidate in seen:
             continue
         seen.add(resolved_candidate)
-        checkpoint_state = torch.load(candidate, map_location="cpu")
+        checkpoint_state = torch.load(candidate, map_location="cpu", weights_only=False)
         best_path = _extract_best_model_path(checkpoint_state, run_dir=run_dir, monitor=monitor)
         if best_path is not None:
             return best_path.resolve()

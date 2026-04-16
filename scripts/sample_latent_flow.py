@@ -107,7 +107,7 @@ def validate_ckpt_matches_config(config_path, ckpt_path):
 
 def load_model(config, ckpt_path, device):
     model = instantiate_from_config(config.model)
-    state = torch.load(ckpt_path, map_location="cpu")
+    state = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     state_dict = state["state_dict"] if "state_dict" in state else state
     model.load_state_dict(state_dict, strict=False)
     model = model.to(device)

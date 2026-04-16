@@ -23,7 +23,7 @@ from ldm.util import instantiate_from_config
 def load_model(config_path, ckpt_path, device):
     config = OmegaConf.load(config_path)
     model = instantiate_from_config(config.model)
-    state = torch.load(ckpt_path, map_location="cpu")
+    state = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     if "state_dict" in state:
         state = state["state_dict"]
     model.load_state_dict(state, strict=False)

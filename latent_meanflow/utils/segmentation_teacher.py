@@ -279,7 +279,7 @@ def load_teacher_model(*, run_dir, device, checkpoint_path=None):
     width = int(train_args["width"])
     img_size = height if height == width else height
     model = choose_net(net_name, out_channels=out_channels, img_size=img_size)
-    state_dict = torch.load(checkpoint_path, map_location="cpu")
+    state_dict = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     if isinstance(state_dict, dict) and "state_dict" in state_dict:
         state_dict = state_dict["state_dict"]
     if isinstance(state_dict, dict) and "model" in state_dict:

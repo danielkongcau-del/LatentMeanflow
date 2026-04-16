@@ -200,7 +200,7 @@ class SemanticPairAutoencoder(pl.LightningModule):
 
     def init_from_ckpt(self, path, ignore_keys=None):
         ignore_keys = [] if ignore_keys is None else list(ignore_keys)
-        state = torch.load(path, map_location="cpu")
+        state = torch.load(path, map_location="cpu", weights_only=False)
         state_dict = state["state_dict"] if "state_dict" in state else state
         keys = list(state_dict.keys())
         for key in keys:

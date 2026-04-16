@@ -31,7 +31,7 @@ class SemanticTokenizerAdapter(torch.nn.Module):
 
         config = OmegaConf.load(config_path)
         tokenizer = instantiate_from_config(config.model)
-        state = torch.load(ckpt_path, map_location="cpu")
+        state = torch.load(ckpt_path, map_location="cpu", weights_only=False)
         state_dict = state["state_dict"] if "state_dict" in state else state
         tokenizer.load_state_dict(state_dict, strict=False)
 
