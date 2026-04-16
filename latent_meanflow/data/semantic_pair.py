@@ -92,14 +92,17 @@ class SemanticImageMaskPairDataset(Dataset):
             mask_image = mask_image.resize((self.size, self.size), resample=Image.NEAREST)
 
         mask_raw = np.array(mask_image, dtype=np.uint8)
-        mask_index = self._lookup[mask_raw]
-
-        undefined_mask = mask_index == self._undefined_class_id
-        if np.any(undefined_mask):
-            unknown_gray_values = sorted(int(value) for value in np.unique(mask_raw[undefined_mask]).tolist())
-            raise ValueError(
-                f"Mask {mask_path} contains gray values missing from gray_to_class_id: {unknown_gray_values}"
-            )
+        if int(mask_raw.min()) >= 0 and int(mask_raw.max()) <= int(self.num_classes) - 1:
+            # Accept already-indexed masks produced by the teacher-data remap pipeline.
+            mask_index = mask_raw.astype(np.int64, copy=False)
+        else:
+            mask_index = self._lookup[mask_raw]
+            undefined_mask = mask_index == self._undefined_class_id
+            if np.any(undefined_mask):
+                unknown_gray_values = sorted(int(value) for value in np.unique(mask_raw[undefined_mask]).tolist())
+                raise ValueError(
+                    f"Mask {mask_path} contains gray values missing from gray_to_class_id: {unknown_gray_values}"
+                )
 
         mask_index = mask_index.astype(np.int64, copy=False)
         onehot = np.zeros(mask_index.shape + (self.num_classes,), dtype=np.float32)
