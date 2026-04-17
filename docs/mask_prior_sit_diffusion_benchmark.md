@@ -1,5 +1,23 @@
 # SiT Mask Prior Benchmark
 
+## Stage Conclusion
+
+The checked-in direct pixel-space routes remain useful benchmark artifacts, but
+they are not the promoted mainline anymore.
+
+Current conclusion:
+
+- direct pixel-space discrete routing passed `memorize_1`
+- the same route collapsed on `memorize_4` toward a small number of prototypes
+- that makes it a negative but informative baseline rather than the preferred
+  mainline for unconditional multimodal `p(semantic_mask)`
+
+Next mainline:
+
+- `mask-only semantic tokenizer -> latent/token prior`
+- the current patch implements the tokenizer half only
+- the latent/token prior is still `not implemented yet`
+
 This document defines the next apples-to-apples benchmark for the project-layer
 upstream route:
 
@@ -439,3 +457,19 @@ consider are:
 - a same-backbone SiT + AlphaFlow comparison
 
 Do not introduce those extra variables in this benchmark step.
+
+The tokenizer follow-up now exists as a checked-in parallel route:
+
+- train entrypoint: `scripts/train_semantic_mask_tokenizer.py`
+- eval entrypoint: `scripts/eval_semantic_mask_tokenizer.py`
+- configs:
+  - `configs/semantic_mask_tokenizer_tiny_256.yaml`
+  - `configs/semantic_mask_tokenizer_mid_256.yaml`
+  - `configs/semantic_mask_tokenizer_mid_plus_256.yaml`
+  - `configs/diagnostics/semantic_mask_tokenizer_memorize_1_256.yaml`
+  - `configs/diagnostics/semantic_mask_tokenizer_memorize_4_256.yaml`
+
+Use it to answer the prerequisite question:
+
+- can a mask-only tokenizer reconstruct 4 fixed semantic masks cleanly enough
+  to justify a later latent/token prior?

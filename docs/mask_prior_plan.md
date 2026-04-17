@@ -1,5 +1,26 @@
 # Mask Prior Plan
 
+## Stage Update
+
+The direct pixel-space mask-prior routes remain checked in, but they are no
+longer the promoted upstream mainline for multimodal `p(semantic_mask)` work.
+
+Current conclusion:
+
+- the checked-in direct discrete route is still a useful negative but
+  informative baseline
+- `memorize_1` showed that a direct pixel-space route can memorize one fixed
+  layout
+- `memorize_4` collapsed toward a small number of low-quality prototypes
+- therefore the direct pixel-space route is not being promoted as the mainline
+  for unconditional multimodal `p(semantic_mask)`
+
+Next mainline:
+
+- `mask-only semantic tokenizer -> latent/token prior`
+- the current patch implements the tokenizer half only
+- the latent/token prior is still `not implemented yet`
+
 ## Route Definition
 
 This document defines a new project-layer baseline for unconditional semantic-mask generation:
@@ -219,6 +240,18 @@ Project-layer files for the direct discrete semantic-variable follow-up:
 - `tests/test_discrete_mask_prior_smoke.py`
 - `tests/test_fixed_subset_dataset.py`
 
+Project-layer files for the new mask-only semantic tokenizer mainline:
+
+- `latent_meanflow/models/semantic_mask_autoencoder.py`
+- `scripts/train_semantic_mask_tokenizer.py`
+- `scripts/eval_semantic_mask_tokenizer.py`
+- `configs/semantic_mask_tokenizer_tiny_256.yaml`
+- `configs/semantic_mask_tokenizer_mid_256.yaml`
+- `configs/semantic_mask_tokenizer_mid_plus_256.yaml`
+- `configs/diagnostics/semantic_mask_tokenizer_memorize_1_256.yaml`
+- `configs/diagnostics/semantic_mask_tokenizer_memorize_4_256.yaml`
+- `tests/test_semantic_mask_tokenizer_smoke.py`
+
 ## Success Criteria
 
 Tiny overfit target:
@@ -240,6 +273,102 @@ Discrete-route Phase A target:
   fragmentation
 - if this still fails, the next variables should be structure-aware losses or a
   tokenizer, not a silent return to the old continuous objective
+
+## Mask-Only Semantic Tokenizer Route
+
+The new mainline starts by compressing `semantic_mask` into a more tractable
+latent space before reopening the upstream `p(semantic_mask)` prior question.
+
+Route definition:
+
+- task: reconstruct `semantic_mask` only
+- model: `latent_meanflow.models.semantic_mask_autoencoder.SemanticMaskAutoencoder`
+- dataset: `latent_meanflow.data.semantic_mask.MultiSemanticMaskDataset`
+- input fields:
+  - `mask_index`
+  - `mask_onehot`
+- output fields:
+  - `mask_logits`
+  - `mask_index`
+  - `mask_onehot`
+- no image branch
+- no direct unconditional prior in this patch
+
+Purpose:
+
+- validate that `semantic_mask` can be reconstructed cleanly in a mask-only
+  latent space before implementing any latent/token prior
+- stop spending mainline time on direct pixel-space multimodal collapse
+
+Checked-in configs:
+
+- `configs/semantic_mask_tokenizer_tiny_256.yaml`
+- `configs/semantic_mask_tokenizer_mid_256.yaml`
+- `configs/semantic_mask_tokenizer_mid_plus_256.yaml`
+- `configs/diagnostics/semantic_mask_tokenizer_memorize_1_256.yaml`
+- `configs/diagnostics/semantic_mask_tokenizer_memorize_4_256.yaml`
+
+Checked-in entry points:
+
+- `scripts/train_semantic_mask_tokenizer.py`
+- `scripts/eval_semantic_mask_tokenizer.py`
+
+Commands:
+
+Tiny tokenizer:
+
+```bash
+python scripts/train_semantic_mask_tokenizer.py \
+  --config configs/semantic_mask_tokenizer_tiny_256.yaml \
+  --scale-lr true \
+  --gpus 0
+```
+
+Main tokenizer candidate:
+
+```bash
+python scripts/train_semantic_mask_tokenizer.py \
+  --config configs/semantic_mask_tokenizer_mid_plus_256.yaml \
+  --scale-lr true \
+  --gpus 0
+```
+
+Memorize-4 diagnostic:
+
+```bash
+python scripts/train_semantic_mask_tokenizer.py \
+  --config configs/diagnostics/semantic_mask_tokenizer_memorize_4_256.yaml \
+  --scale-lr false \
+  --gpus 0
+```
+
+Reconstruction evaluation:
+
+```bash
+python scripts/eval_semantic_mask_tokenizer.py \
+  --config configs/semantic_mask_tokenizer_mid_plus_256.yaml \
+  --ckpt <best-semantic-mask-tokenizer-ckpt> \
+  --outdir outputs/semantic_mask_tokenizer_eval/mid_plus \
+  --split validation \
+  --n-samples 32 \
+  --batch-size 4 \
+  --seed 23 \
+  --overwrite
+```
+
+Memorize-4 reconstruction evaluation:
+
+```bash
+python scripts/eval_semantic_mask_tokenizer.py \
+  --config configs/diagnostics/semantic_mask_tokenizer_memorize_4_256.yaml \
+  --ckpt <best-semantic-mask-tokenizer-memorize-4-ckpt> \
+  --outdir outputs/semantic_mask_tokenizer_eval/memorize_4 \
+  --split validation \
+  --n-samples 4 \
+  --batch-size 4 \
+  --seed 23 \
+  --overwrite
+```
 
 ## Recommended Workflow
 

@@ -120,6 +120,59 @@ These commands target the legacy binary / 4-channel baseline only. They do not i
 
 ### Semantic Tokenizer Path
 
+#### Mask-Only Semantic Tokenizer Path
+
+This is the new mainline for upstream `p(semantic_mask)` work:
+
+- it reconstructs `semantic_mask` only
+- it does not read RGB image
+- it is preparing the repo for a later latent/token prior
+- the latent/token prior is `not implemented yet`
+
+This route exists because the checked-in direct pixel-space discrete mask-prior
+route can memorize one fixed layout but collapses on `memorize_4`, so it is
+being kept as a negative but informative baseline rather than the promoted
+mainline.
+
+Checked-in mask-only tokenizer configs:
+
+- `configs/semantic_mask_tokenizer_tiny_256.yaml`
+- `configs/semantic_mask_tokenizer_mid_256.yaml`
+- `configs/semantic_mask_tokenizer_mid_plus_256.yaml`
+- `configs/diagnostics/semantic_mask_tokenizer_memorize_1_256.yaml`
+- `configs/diagnostics/semantic_mask_tokenizer_memorize_4_256.yaml`
+
+Train the tiny tokenizer sanity route:
+
+```bash
+python scripts/train_semantic_mask_tokenizer.py --config configs/semantic_mask_tokenizer_tiny_256.yaml --scale-lr true --gpus 0
+```
+
+Train the main mask-only tokenizer candidate:
+
+```bash
+python scripts/train_semantic_mask_tokenizer.py --config configs/semantic_mask_tokenizer_mid_plus_256.yaml --scale-lr true --gpus 0
+```
+
+Train the deliberate overfit `memorize_4` tokenizer diagnostic:
+
+```bash
+python scripts/train_semantic_mask_tokenizer.py --config configs/diagnostics/semantic_mask_tokenizer_memorize_4_256.yaml --scale-lr false --gpus 0
+```
+
+Evaluate tokenizer reconstruction and export `input_mask_raw/`,
+`input_mask_color/`, `recon_mask_raw/`, `recon_mask_color/`, and `panel/`:
+
+```bash
+python scripts/eval_semantic_mask_tokenizer.py --config configs/semantic_mask_tokenizer_mid_plus_256.yaml --ckpt /path/to/semantic_mask_tokenizer.ckpt --outdir outputs/semantic_mask_tokenizer_eval/mid_plus --split validation --n-samples 32 --batch-size 4 --seed 23 --overwrite
+```
+
+This script reports reconstruction metrics such as per-pixel accuracy, mIoU,
+boundary-length gap, and small-region frequency gap. It is tokenizer
+reconstruction evaluation, not unconditional generation evaluation.
+
+#### Paired Semantic Tokenizer Path
+
 Train the project-layer semantic tokenizer / autoencoder:
 
 ```bash
@@ -447,6 +500,15 @@ task:
 - it models `p(semantic_mask)`
 - it is evaluated separately from the renderer
 - it composes into the frozen downstream route `p(image | semantic_mask)`
+
+Current stage note:
+
+- the direct pixel-space discrete mask-prior route remains checked in as a
+  negative but informative baseline
+- `memorize_1` passed while `memorize_4` collapsed toward a small number of
+  prototypes
+- the promoted mainline for upstream work is now the checked-in
+  mask-only semantic tokenizer route above
 
 Use:
 
