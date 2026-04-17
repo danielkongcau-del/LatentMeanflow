@@ -24,7 +24,7 @@ DEFAULT_CONFIG = REPO_ROOT / "configs" / "latent_diffusion_mask_prior_sit.yaml"
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
-            "Train the project-layer unconditional semantic-mask diffusion baseline "
+            "Train the project-layer unconditional semantic-mask diffusion-style baseline "
             "with a SiT-style transformer backbone."
         )
     )

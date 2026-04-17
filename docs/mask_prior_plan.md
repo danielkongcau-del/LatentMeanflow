@@ -77,7 +77,36 @@ This route still does **not** use:
 - the upstream `third_party/SiT/train.py` or `sample.py` entrypoints
 
 Use [docs/mask_prior_sit_diffusion_benchmark.md](docs/mask_prior_sit_diffusion_benchmark.md)
-for the fixed U-Net AlphaFlow vs SiT diffusion comparison.
+for the fixed U-Net AlphaFlow vs SiT benchmark comparisons.
+
+## Direct Discrete Follow-Up
+
+The continuous one-hot SiT diffusion route remains checked in as a control, but
+the current parallel upgrade path changes the modeled state itself:
+
+- trainer: `latent_meanflow.trainers.discrete_mask_prior_trainer.DiscreteMaskPriorTrainer`
+- backbone: project-layer `LatentIntervalSiT`
+- objective: absorbing-mask discrete diffusion over `mask_index`
+- sampler: seeded stochastic few-step progressive reveal
+- configs:
+  - `configs/discrete_mask_prior_sit_tiny.yaml`
+  - `configs/discrete_mask_prior_sit.yaml`
+
+Phase A / MVP rules for this route:
+
+- task is still `p(semantic_mask)` only
+- state object is discrete `mask_index`, not a continuous one-hot field
+- an absorbing `MASK` token is added during training and sampling
+- there is still no mask tokenizer
+- there is still no image branch
+- there are still no boundary / area / adjacency / topology auxiliary losses
+- frozen renderer and frozen teacher evaluation stay unchanged
+
+This route exists in parallel. It does **not** delete or redefine:
+
+- the legacy U-Net + AlphaFlow mask-prior baseline
+- the continuous one-hot SiT diffusion control baseline
+- the frozen `p(image | semantic_mask)` renderer workflow
 
 ## Deliverables
 
@@ -103,6 +132,15 @@ Project-layer files for the stronger benchmark route:
 - `configs/latent_diffusion_mask_prior_sit.yaml`
 - `docs/mask_prior_sit_diffusion_benchmark.md`
 
+Project-layer files for the direct discrete semantic-variable follow-up:
+
+- `latent_meanflow/trainers/discrete_mask_prior_trainer.py`
+- `latent_meanflow/objectives/discrete_mask_diffusion.py`
+- `latent_meanflow/samplers/discrete_mask_diffusion.py`
+- `configs/discrete_mask_prior_sit_tiny.yaml`
+- `configs/discrete_mask_prior_sit.yaml`
+- `tests/test_discrete_mask_prior_smoke.py`
+
 ## Success Criteria
 
 Tiny overfit target:
@@ -115,6 +153,15 @@ Base target:
 
 - `NFE=8/4` should not collapse into random local fragments or pure noise-like blocks
 - if `NFE=8` still lacks global layout coherence, the next upgrade should be backbone capacity, not a premature one-step blame cycle
+
+Discrete-route Phase A target:
+
+- keep the same `NFE=8/4/2/1` evaluation sweep
+- confirm that moving from continuous one-hot fields to discrete semantic
+  variables improves large-region layout coherence and reduces speckle
+  fragmentation
+- if this still fails, the next variables should be structure-aware losses or a
+  tokenizer, not a silent return to the old continuous objective
 
 ## Recommended Workflow
 

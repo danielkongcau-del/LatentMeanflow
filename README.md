@@ -453,7 +453,8 @@ Use:
 - [docs/mask_prior_plan.md](docs/mask_prior_plan.md) for the conservative
   baseline definition
 - [docs/mask_prior_sit_diffusion_benchmark.md](docs/mask_prior_sit_diffusion_benchmark.md)
-  for the stronger SiT-style transformer + diffusion benchmark route
+  for the stronger SiT-style transformer benchmark routes, including the
+  current direct discrete semantic-variable baseline
 - [docs/mask_prior_eval_protocol.md](docs/mask_prior_eval_protocol.md) for the
   fixed mask-only and compose-to-image evaluation protocol
 
@@ -472,11 +473,15 @@ Checked-in baseline configs:
 - `configs/latent_alphaflow_mask_prior_unet.yaml`
 - `configs/latent_diffusion_mask_prior_sit_tiny.yaml`
 - `configs/latent_diffusion_mask_prior_sit.yaml`
+- `configs/discrete_mask_prior_sit_tiny.yaml`
+- `configs/discrete_mask_prior_sit.yaml`
 
 Operational rules for this route:
 
 - `scripts/train_mask_prior.py` and `scripts/train_mask_prior_diffusion.py` now expose `--scale-lr true|false` explicitly and keep `resume` in safe mode by default.
 - `scripts/sample_mask_prior.py`, `scripts/sample_mask_prior_diffusion.py`, and `scripts/eval_mask_prior.py` require explicit checkpoint paths and do not silently fall back to `last.ckpt`.
+- The current direct discrete mask-prior route still reuses the same checked-in
+  train/sample/eval scripts. Switch only the config/checkpoint pair.
 
 ### Latent FM Path
 

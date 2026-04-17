@@ -79,14 +79,29 @@ python scripts/eval_mask_prior.py \
   --overwrite
 ```
 
-To evaluate the SiT-style diffusion baseline, keep the same script and swap
-only the config/checkpoint pair:
+To evaluate the SiT-style continuous control baseline, keep the same script and
+swap only the config/checkpoint pair:
 
 ```bash
 python scripts/eval_mask_prior.py \
   --config configs/latent_diffusion_mask_prior_sit.yaml \
   --ckpt <best-mask-prior-ckpt> \
   --outdir outputs/mask_prior_eval/sit_diffusion \
+  --n-samples 32 \
+  --batch-size 8 \
+  --nfe-values 8 4 2 1 \
+  --seed 23 \
+  --overwrite
+```
+
+To evaluate the direct discrete semantic-variable baseline, keep the same
+script and swap only the config/checkpoint pair again:
+
+```bash
+python scripts/eval_mask_prior.py \
+  --config configs/discrete_mask_prior_sit.yaml \
+  --ckpt <best-mask-prior-ckpt> \
+  --outdir outputs/mask_prior_eval/discrete_sit \
   --n-samples 32 \
   --batch-size 8 \
   --nfe-values 8 4 2 1 \
@@ -145,8 +160,8 @@ python scripts/eval_mask_prior_composed_renderer.py \
   --overwrite
 ```
 
-The same compose evaluator also applies to the SiT-style diffusion baseline by
-swapping only `--mask-config` and `--mask-ckpt`:
+The same compose evaluator also applies to the SiT-style continuous control
+baseline by swapping only `--mask-config` and `--mask-ckpt`:
 
 ```bash
 python scripts/eval_mask_prior_composed_renderer.py \
@@ -159,6 +174,27 @@ python scripts/eval_mask_prior_composed_renderer.py \
   --teacher-run-dir logs/segmentation_teacher/<winner_run> \
   --label-spec configs/label_specs/remote_semantic.yaml \
   --outdir outputs/mask_prior_compose_eval/sit_diffusion \
+  --n-samples 32 \
+  --mask-nfe-values 8 4 2 1 \
+  --renderer-nfe-values 8 4 2 1 \
+  --seed 23 \
+  --overwrite
+```
+
+The direct discrete semantic-variable baseline uses the same compose evaluator
+with the same frozen renderer and teacher:
+
+```bash
+python scripts/eval_mask_prior_composed_renderer.py \
+  --mask-config configs/discrete_mask_prior_sit.yaml \
+  --mask-ckpt <best-mask-prior-ckpt> \
+  --renderer-config configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid_boundary_encoder.yaml \
+  --renderer-ckpt <best-renderer-ckpt> \
+  --renderer-tokenizer-config configs/autoencoder_image_lpips_adv_256.yaml \
+  --renderer-tokenizer-ckpt <best-image-tokenizer-ckpt> \
+  --teacher-run-dir logs/segmentation_teacher/<winner_run> \
+  --label-spec configs/label_specs/remote_semantic.yaml \
+  --outdir outputs/mask_prior_compose_eval/discrete_sit \
   --n-samples 32 \
   --mask-nfe-values 8 4 2 1 \
   --renderer-nfe-values 8 4 2 1 \

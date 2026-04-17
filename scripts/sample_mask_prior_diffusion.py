@@ -33,7 +33,7 @@ DEFAULT_NFE_VALUES = [8, 4, 2, 1]
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
-            "Sample unconditional semantic masks from the project-layer SiT-style diffusion baseline. "
+            "Sample unconditional semantic masks from the project-layer SiT-style mask-prior baseline. "
             "Outputs raw class-id masks, colorized masks, and simple diagnostic panels."
         )
     )
