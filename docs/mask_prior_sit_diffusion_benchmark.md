@@ -68,6 +68,25 @@ Current collapse-mitigation ablation:
 - train entrypoint: `scripts/train_mask_prior_diffusion.py`
 - sample entrypoint: `scripts/sample_mask_prior_diffusion.py`
 
+Decisive memorization diagnostic:
+
+- route: the same improved discrete high-mask / refine ablation
+- configs:
+  - `configs/diagnostics/discrete_mask_prior_sit_highmask_refine_memorize_1.yaml`
+  - `configs/diagnostics/discrete_mask_prior_sit_highmask_refine_memorize_4.yaml`
+- data rule:
+  - both train and validation point to the same fixed 1-mask or 4-mask bank
+  - the bank is drawn from the training split on purpose
+- purpose:
+  - determine whether the current route can memorize coherent layout geometry at all
+
+Interpretation:
+
+- if these diagnostics still produce majority-class collapse or speckle on 1-4 masks,
+  the current objective / sampler semantics are still insufficient
+- if these diagnostics memorize coherent connected regions, then the full-data
+  failure is more likely a scaling / generalization problem
+
 All three routes still model `p(semantic_mask)` only.
 
 ## Fixed Comparison Matrix
@@ -159,6 +178,24 @@ python scripts/train_mask_prior_diffusion.py \
   --gpus 0
 ```
 
+Decisive memorization diagnostics:
+
+```bash
+python scripts/train_mask_prior_diffusion.py \
+  --config configs/diagnostics/discrete_mask_prior_sit_highmask_refine_memorize_1.yaml \
+  --scale-lr false \
+  --gpus 0
+
+python scripts/train_mask_prior_diffusion.py \
+  --config configs/diagnostics/discrete_mask_prior_sit_highmask_refine_memorize_4.yaml \
+  --scale-lr false \
+  --gpus 0
+```
+
+For `memorize_4`, the checked-in config uses `batch_size=4` so each optimizer
+step sees the whole 4-mask bank. That makes the diagnostic sharper: failure is
+less likely to be explained away by minibatch subsampling noise.
+
 Sample a fixed few-step sweep:
 
 ```bash
@@ -202,6 +239,55 @@ python scripts/eval_mask_prior.py \
   --seed 23 \
   --overwrite
 ```
+
+Diagnostic sampling and evaluation reuse the same checked-in scripts:
+
+```bash
+python scripts/sample_mask_prior_diffusion.py \
+  --config configs/diagnostics/discrete_mask_prior_sit_highmask_refine_memorize_1.yaml \
+  --ckpt <best-memorize-1-ckpt> \
+  --outdir outputs/mask_prior_diagnostics/memorize_1_samples \
+  --n-samples 16 \
+  --batch-size 4 \
+  --nfe-values 8 4 2 1 \
+  --seed 23 \
+  --overwrite
+
+python scripts/sample_mask_prior_diffusion.py \
+  --config configs/diagnostics/discrete_mask_prior_sit_highmask_refine_memorize_4.yaml \
+  --ckpt <best-memorize-4-ckpt> \
+  --outdir outputs/mask_prior_diagnostics/memorize_4_samples \
+  --n-samples 16 \
+  --batch-size 4 \
+  --nfe-values 8 4 2 1 \
+  --seed 23 \
+  --overwrite
+
+python scripts/eval_mask_prior.py \
+  --config configs/diagnostics/discrete_mask_prior_sit_highmask_refine_memorize_1.yaml \
+  --ckpt <best-memorize-1-ckpt> \
+  --outdir outputs/mask_prior_diagnostics/memorize_1_eval \
+  --n-samples 16 \
+  --batch-size 4 \
+  --nfe-values 8 4 2 1 \
+  --seed 23 \
+  --overwrite
+
+python scripts/eval_mask_prior.py \
+  --config configs/diagnostics/discrete_mask_prior_sit_highmask_refine_memorize_4.yaml \
+  --ckpt <best-memorize-4-ckpt> \
+  --outdir outputs/mask_prior_diagnostics/memorize_4_eval \
+  --n-samples 16 \
+  --batch-size 4 \
+  --nfe-values 8 4 2 1 \
+  --seed 23 \
+  --overwrite
+```
+
+These diagnostic evaluations are deliberate overfit checks, not normal
+generalization benchmarks. Because the reference bank is the same fixed tiny
+bank used for training, `nearest_real_miou_mean` is intentionally being used as
+an overfit readout.
 
 Compose-to-image evaluation:
 

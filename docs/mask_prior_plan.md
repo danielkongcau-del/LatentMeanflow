@@ -118,6 +118,29 @@ Current parallel split inside this route:
   - class-balanced masked cross entropy
   - remask-low-confidence iterative refinement sampler
 
+## Decisive Memorization Diagnostic
+
+The current improved discrete route also has two deliberate overfit diagnostics:
+
+- `configs/diagnostics/discrete_mask_prior_sit_highmask_refine_memorize_1.yaml`
+- `configs/diagnostics/discrete_mask_prior_sit_highmask_refine_memorize_4.yaml`
+
+Purpose:
+
+- keep the current improved discrete high-mask / class-balanced / refinement route unchanged
+- shrink both train and validation to the same fixed bank from the training split
+- answer whether this route can memorize coherent layout geometry on 1 mask or 4 masks
+
+Interpretation:
+
+- if the route still collapses into majority-class speckle on these fixed banks,
+  then the current objective / sampler semantics are still insufficient even for
+  basic layout memory
+- if the route does memorize coherent connected regions on these fixed banks,
+  then the full-data failure is more likely a scaling / generalization / target-alignment problem
+
+These configs are deliberate overfit diagnostics, not normal generalization benchmarks.
+
 This route exists in parallel. It does **not** delete or redefine:
 
 - the legacy U-Net + AlphaFlow mask-prior baseline
@@ -157,7 +180,11 @@ Project-layer files for the direct discrete semantic-variable follow-up:
 - `configs/discrete_mask_prior_sit.yaml`
 - `configs/ablations/discrete_mask_prior_sit_highmask_refine_tiny.yaml`
 - `configs/ablations/discrete_mask_prior_sit_highmask_refine.yaml`
+- `configs/diagnostics/discrete_mask_prior_sit_highmask_refine_memorize_1.yaml`
+- `configs/diagnostics/discrete_mask_prior_sit_highmask_refine_memorize_4.yaml`
+- `latent_meanflow/data/subset.py`
 - `tests/test_discrete_mask_prior_smoke.py`
+- `tests/test_fixed_subset_dataset.py`
 
 ## Success Criteria
 
@@ -240,3 +267,69 @@ Notes:
 
 - `scripts/sample_mask_prior.py` and `scripts/eval_mask_prior.py` now require an explicit `--ckpt`; they no longer fall back to `last.ckpt`.
 - `scripts/train_mask_prior.py` now exposes `--scale-lr true|false` explicitly and keeps `resume` in safe mode by default.
+
+Decisive memorization diagnostic:
+
+```bash
+python scripts/train_mask_prior_diffusion.py \
+  --config configs/diagnostics/discrete_mask_prior_sit_highmask_refine_memorize_1.yaml \
+  --scale-lr false \
+  --gpus 0
+
+python scripts/train_mask_prior_diffusion.py \
+  --config configs/diagnostics/discrete_mask_prior_sit_highmask_refine_memorize_4.yaml \
+  --scale-lr false \
+  --gpus 0
+```
+
+Diagnostic sampling sweep:
+
+```bash
+python scripts/sample_mask_prior_diffusion.py \
+  --config configs/diagnostics/discrete_mask_prior_sit_highmask_refine_memorize_1.yaml \
+  --ckpt <best-memorize-1-ckpt> \
+  --outdir outputs/mask_prior_diagnostics/memorize_1_samples \
+  --n-samples 16 \
+  --batch-size 4 \
+  --nfe-values 8 4 2 1 \
+  --seed 23 \
+  --overwrite
+
+python scripts/sample_mask_prior_diffusion.py \
+  --config configs/diagnostics/discrete_mask_prior_sit_highmask_refine_memorize_4.yaml \
+  --ckpt <best-memorize-4-ckpt> \
+  --outdir outputs/mask_prior_diagnostics/memorize_4_samples \
+  --n-samples 16 \
+  --batch-size 4 \
+  --nfe-values 8 4 2 1 \
+  --seed 23 \
+  --overwrite
+```
+
+Diagnostic evaluation:
+
+```bash
+python scripts/eval_mask_prior.py \
+  --config configs/diagnostics/discrete_mask_prior_sit_highmask_refine_memorize_1.yaml \
+  --ckpt <best-memorize-1-ckpt> \
+  --outdir outputs/mask_prior_diagnostics/memorize_1_eval \
+  --n-samples 16 \
+  --batch-size 4 \
+  --nfe-values 8 4 2 1 \
+  --seed 23 \
+  --overwrite
+
+python scripts/eval_mask_prior.py \
+  --config configs/diagnostics/discrete_mask_prior_sit_highmask_refine_memorize_4.yaml \
+  --ckpt <best-memorize-4-ckpt> \
+  --outdir outputs/mask_prior_diagnostics/memorize_4_eval \
+  --n-samples 16 \
+  --batch-size 4 \
+  --nfe-values 8 4 2 1 \
+  --seed 23 \
+  --overwrite
+```
+
+These evaluation runs are intentionally using the same fixed tiny bank for
+train and validation. In this diagnostic setting, `nearest_real_miou_mean` is
+useful as an overfit readout rather than a generalization benchmark.

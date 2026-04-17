@@ -477,6 +477,8 @@ Checked-in baseline configs:
 - `configs/discrete_mask_prior_sit.yaml`
 - `configs/ablations/discrete_mask_prior_sit_highmask_refine_tiny.yaml`
 - `configs/ablations/discrete_mask_prior_sit_highmask_refine.yaml`
+- `configs/diagnostics/discrete_mask_prior_sit_highmask_refine_memorize_1.yaml`
+- `configs/diagnostics/discrete_mask_prior_sit_highmask_refine_memorize_4.yaml`
 
 Operational rules for this route:
 
@@ -487,6 +489,9 @@ Operational rules for this route:
 - The checked-in discrete route now has both:
   - control configs under `configs/discrete_mask_prior_sit*.yaml`
   - high-mask / iterative-refinement ablations under `configs/ablations/discrete_mask_prior_sit_highmask_refine*.yaml`
+- The checked-in diagnostics under `configs/diagnostics/discrete_mask_prior_sit_highmask_refine_memorize_*.yaml`
+  deliberately overfit the improved discrete route on a fixed 1-mask or 4-mask
+  bank to answer whether the route can memorize coherent layout geometry at all.
 
 ### Latent FM Path
 

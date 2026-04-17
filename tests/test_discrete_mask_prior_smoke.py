@@ -1,8 +1,11 @@
 import unittest
 from types import SimpleNamespace
+from pathlib import Path
 
 import torch
 import torch.nn.functional as F
+from ldm.util import instantiate_from_config
+from omegaconf import OmegaConf
 
 from latent_meanflow.objectives.discrete_mask_diffusion import DiscreteMaskDiffusionObjective
 from latent_meanflow.samplers.discrete_mask_diffusion import SeededDiscreteMaskDiffusionSampler
@@ -120,6 +123,9 @@ class _ToyMaskDataset:
     def __getitem__(self, idx):
         mask_index = _make_batch()["mask_index"][idx]
         return {"mask_index": mask_index}
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class DiscreteMaskPriorSmokeTest(unittest.TestCase):
@@ -317,6 +323,35 @@ class DiscreteMaskPriorSmokeTest(unittest.TestCase):
                 unlocked_changed = True
                 break
         self.assertTrue(unlocked_changed)
+
+    def test_memorization_diagnostic_configs_instantiate_and_keep_interfaces(self):
+        config_paths = [
+            REPO_ROOT / "configs" / "diagnostics" / "discrete_mask_prior_sit_highmask_refine_memorize_1.yaml",
+            REPO_ROOT / "configs" / "diagnostics" / "discrete_mask_prior_sit_highmask_refine_memorize_4.yaml",
+        ]
+        for config_path in config_paths:
+            config = OmegaConf.load(config_path)
+            trainer = instantiate_from_config(config.model)
+            batch = {
+                "mask_index": torch.randint(
+                    low=0,
+                    high=trainer.num_classes,
+                    size=(1, *trainer.mask_spatial_shape),
+                    dtype=torch.long,
+                )
+            }
+            with torch.no_grad():
+                outputs = trainer(batch)
+                self.assertEqual(outputs["loss"].ndim, 0)
+                sampled = trainer.sample_latents(
+                    batch_size=1,
+                    nfe=1,
+                    noise=torch.randn((1, trainer.latent_channels, *trainer.latent_spatial_shape)),
+                )
+                decoded = trainer.decode_latents(sampled)
+            self.assertEqual(tuple(sampled.shape), (1, *trainer.mask_spatial_shape))
+            self.assertEqual(decoded["mask_index"].dtype, torch.long)
+            self.assertEqual(tuple(decoded["mask_onehot"].shape), (1, trainer.num_classes, *trainer.mask_spatial_shape))
 
     def test_missing_mask_index_should_fail(self):
         trainer = _make_trainer()
