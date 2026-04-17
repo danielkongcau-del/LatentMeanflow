@@ -3,6 +3,17 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+def _validate_full_range_absorbing_schedule(*, min_mask_ratio, max_mask_ratio, owner_name):
+    min_mask_ratio = float(min_mask_ratio)
+    max_mask_ratio = float(max_mask_ratio)
+    if min_mask_ratio != 0.0 or max_mask_ratio != 1.0:
+        raise ValueError(
+            f"{owner_name} currently supports only full-range absorbing schedule "
+            f"(min_mask_ratio=0.0, max_mask_ratio=1.0). "
+            "This MVP discrete route assumes all-MASK start and final full reveal."
+        )
+
+
 def discrete_mask_ratio_schedule(
     t,
     *,
@@ -46,6 +57,11 @@ class DiscreteMaskDiffusionObjective(nn.Module):
         self.min_mask_ratio = float(min_mask_ratio)
         self.max_mask_ratio = float(max_mask_ratio)
         self.ignore_index = None if ignore_index is None else int(ignore_index)
+        _validate_full_range_absorbing_schedule(
+            min_mask_ratio=self.min_mask_ratio,
+            max_mask_ratio=self.max_mask_ratio,
+            owner_name="DiscreteMaskDiffusionObjective",
+        )
 
         if not 0.0 <= self.time_eps < 1.0:
             raise ValueError(f"time_eps must be in [0, 1), got {self.time_eps}")

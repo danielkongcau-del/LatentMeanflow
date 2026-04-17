@@ -85,6 +85,7 @@ class DiscreteMaskPriorTrainer(pl.LightningModule):
         self.model_input_channels = int(self.num_classes + 1)
         self.model_output_channels = int(self.num_classes)
         # Keep the legacy latent_* names only for script compatibility. This route does not use compressed latents.
+        # The modeled state is discrete mask_index. mask_onehot is only an auxiliary view.
         self.latent_channels = 1
         self.latent_spatial_shape = tuple(self.mask_spatial_shape)
 
@@ -116,13 +117,12 @@ class DiscreteMaskPriorTrainer(pl.LightningModule):
                 )
 
     def _get_log_batch_size(self, batch):
-        if self.mask_index_key in batch:
-            return int(batch[self.mask_index_key].shape[0])
-        if self.mask_key in batch:
-            return int(batch[self.mask_key].shape[0])
-        raise KeyError(
-            f"DiscreteMaskPriorTrainer requires '{self.mask_index_key}' or '{self.mask_key}' in the batch."
-        )
+        if self.mask_index_key not in batch:
+            raise KeyError(
+                f"DiscreteMaskPriorTrainer discrete route requires '{self.mask_index_key}' in the batch. "
+                f"'{self.mask_key}' is auxiliary only and cannot recover the discrete state."
+            )
+        return int(batch[self.mask_index_key].shape[0])
 
     def _should_sync_dist(self):
         trainer = getattr(self, "trainer", None)
@@ -180,20 +180,23 @@ class DiscreteMaskPriorTrainer(pl.LightningModule):
         return mask_index.long().contiguous()
 
     def encode_batch(self, batch):
-        if self.mask_index_key in batch:
-            mask_index = self._prepare_mask_index(batch[self.mask_index_key])
-        elif self.mask_key in batch:
-            mask_onehot = self._prepare_mask_onehot(batch[self.mask_key])
-            mask_index = torch.argmax(mask_onehot, dim=1)
-        else:
+        if self.mask_index_key not in batch:
             raise KeyError(
-                f"DiscreteMaskPriorTrainer requires '{self.mask_index_key}' or '{self.mask_key}' in the batch."
+                f"DiscreteMaskPriorTrainer discrete route requires '{self.mask_index_key}' in the batch. "
+                f"'{self.mask_key}' is auxiliary only and must not be used to recover mask_index."
             )
+        mask_index = self._prepare_mask_index(batch[self.mask_index_key])
 
         if self.mask_key in batch:
             mask_onehot = self._prepare_mask_onehot(batch[self.mask_key])
         else:
-            safe_mask_index = mask_index.masked_fill(mask_index < 0, 0)
+            safe_mask_index = mask_index.clone()
+            safe_mask_index = safe_mask_index.masked_fill(safe_mask_index < 0, 0)
+            if self.ignore_index is not None:
+                safe_mask_index = safe_mask_index.masked_fill(
+                    mask_index == int(self.ignore_index),
+                    0,
+                )
             mask_onehot = F.one_hot(safe_mask_index, num_classes=self.num_classes).permute(0, 3, 1, 2).float()
             if self.ignore_index is not None:
                 valid_mask = (mask_index != int(self.ignore_index)).unsqueeze(1)

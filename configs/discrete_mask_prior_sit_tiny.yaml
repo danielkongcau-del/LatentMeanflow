@@ -11,6 +11,10 @@ model:
     # - no image branch
     # - no external spatial condition
     # - direct discrete semantic variable route, not continuous one-hot field diffusion
+    # - Phase A / MVP uses full-range absorbing mask schedule only:
+    #   min_mask_ratio=0.0, max_mask_ratio=1.0
+    # - if a future route needs partial-range schedules, objective and sampler
+    #   semantics must be redesigned together instead of loosening this MVP config
     objective_name: discrete_mask_diffusion
     monitor: val/base_error_mean
     semantic_mask_label_spec_path: configs/label_specs/remote_semantic.yaml
@@ -33,6 +37,7 @@ model:
         time_eps: 1.0e-3
         loss_type: cross_entropy
         mask_schedule: linear
+        # Phase A / MVP discrete route uses full-range absorbing schedule only.
         min_mask_ratio: 0.0
         max_mask_ratio: 1.0
     sampler_config:
@@ -40,6 +45,7 @@ model:
       params:
         default_nfe: 8
         mask_schedule: linear
+        # Phase A / MVP discrete route uses full-range absorbing schedule only.
         min_mask_ratio: 0.0
         max_mask_ratio: 1.0
         reveal_noise_scale: 0.15

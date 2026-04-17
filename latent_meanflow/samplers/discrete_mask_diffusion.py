@@ -3,7 +3,10 @@ import math
 import torch
 import torch.nn as nn
 
-from latent_meanflow.objectives.discrete_mask_diffusion import discrete_mask_ratio_schedule
+from latent_meanflow.objectives.discrete_mask_diffusion import (
+    _validate_full_range_absorbing_schedule,
+    discrete_mask_ratio_schedule,
+)
 
 
 def _gaussian_to_uniform(noise):
@@ -29,6 +32,11 @@ class SeededDiscreteMaskDiffusionSampler(nn.Module):
         self.max_mask_ratio = float(max_mask_ratio)
         self.reveal_noise_scale = float(reveal_noise_scale)
         self.sample_temperature = float(sample_temperature)
+        _validate_full_range_absorbing_schedule(
+            min_mask_ratio=self.min_mask_ratio,
+            max_mask_ratio=self.max_mask_ratio,
+            owner_name="SeededDiscreteMaskDiffusionSampler",
+        )
 
         self.num_classes = None
         self.mask_token_id = None
