@@ -134,6 +134,13 @@ class DiscreteMaskDiffusionObjective(nn.Module):
         self.register_buffer("class_weights", torch.empty(0, dtype=torch.float32), persistent=False)
         self.register_buffer("active_class_mask", torch.empty(0, dtype=torch.bool), persistent=False)
 
+    def _buffer_device(self):
+        for name in ("class_weights", "class_counts", "active_class_mask"):
+            tensor = getattr(self, name, None)
+            if isinstance(tensor, torch.Tensor):
+                return tensor.device
+        return torch.device("cpu")
+
     def configure_discrete_state(self, *, num_classes, mask_token_id, ignore_index=None):
         self.num_classes = int(num_classes)
         self.mask_token_id = int(mask_token_id)
@@ -143,18 +150,20 @@ class DiscreteMaskDiffusionObjective(nn.Module):
                 f"Expected absorbing MASK token id to equal num_classes, got {self.mask_token_id} vs {self.num_classes}"
             )
 
-        default_weights = torch.ones(self.num_classes, dtype=torch.float32)
-        active_mask = torch.ones(self.num_classes, dtype=torch.bool)
+        buffer_device = self._buffer_device()
+        default_weights = torch.ones(self.num_classes, dtype=torch.float32, device=buffer_device)
+        active_mask = torch.ones(self.num_classes, dtype=torch.bool, device=buffer_device)
         self.class_weights = default_weights
         self.active_class_mask = active_mask
         if self.class_balance_mode == "none":
-            self.class_counts = torch.zeros(self.num_classes, dtype=torch.float32)
+            self.class_counts = torch.zeros(self.num_classes, dtype=torch.float32, device=buffer_device)
         elif self._pending_class_counts is not None:
             self.configure_class_balance(self._pending_class_counts)
 
     def configure_class_balance(self, class_counts):
         self._require_state()
-        class_counts = _as_float_tensor(class_counts, name="class_counts")
+        buffer_device = self._buffer_device()
+        class_counts = _as_float_tensor(class_counts, name="class_counts").to(device=buffer_device)
         if class_counts.numel() != self.num_classes:
             raise ValueError(
                 f"class_counts length must equal num_classes={self.num_classes}, got {class_counts.numel()}"
@@ -162,11 +171,11 @@ class DiscreteMaskDiffusionObjective(nn.Module):
         if torch.any(class_counts < 0):
             raise ValueError("class_counts must be non-negative")
 
-        self.class_counts = class_counts.to(dtype=torch.float32)
+        self.class_counts = class_counts.to(dtype=torch.float32, device=buffer_device)
         active_mask = self.class_counts > 0
         self.active_class_mask = active_mask
 
-        weights = torch.ones(self.num_classes, dtype=torch.float32)
+        weights = torch.ones(self.num_classes, dtype=torch.float32, device=buffer_device)
         if self.class_balance_mode == "none":
             self.class_weights = weights
             return

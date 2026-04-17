@@ -229,6 +229,17 @@ class DiscreteMaskPriorSmokeTest(unittest.TestCase):
         self.assertIn("class_weight_max", outputs["loss_dict"])
         self.assertIn("class_weight_mean", outputs["loss_dict"])
 
+    def test_class_balance_configuration_preserves_buffer_device(self):
+        objective = DiscreteMaskDiffusionObjective(
+            class_balance_mode="inverse_sqrt_frequency",
+        )
+        objective.configure_discrete_state(num_classes=4, mask_token_id=4)
+        buffer_device = objective.class_weights.device
+        objective.configure_class_balance([128, 64, 32, 16])
+        self.assertEqual(objective.class_counts.device, buffer_device)
+        self.assertEqual(objective.class_weights.device, buffer_device)
+        self.assertEqual(objective.active_class_mask.device, buffer_device)
+
     def test_trainer_scans_class_counts_when_not_configured(self):
         trainer = _make_trainer(
             objective_params={
