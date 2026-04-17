@@ -61,3 +61,32 @@ training artifacts from polluting the main repository status:
 - `logs/`, `outputs/`, `runs/`, `wandb/`, `checkpoints/`
 - cached Python bytecode and editor metadata
 - downloaded model weights such as `*.pth`, `*.pt`, `*.ckpt`
+
+## `third_party/SiT`
+
+This directory is a vendored copy of the official SiT repository:
+
+- upstream: `https://github.com/willisma/SiT`
+- paper: `Exploring Flow and Diffusion-based Generative Models with Scalable Interpolant Transformers`
+- license: `MIT`
+
+Its current role in this repository is reference-only:
+
+- study DiT-style transformer backbones under an interpolant / transport objective
+- borrow implementation ideas for future project-layer `mask prior` backbone experiments
+- keep that reference code isolated from the active LatentMeanflow training path
+
+It is not currently wired into any checked-in project-layer training, sampling, or
+evaluation script.
+
+Local ignore rules live in:
+
+- `third_party/SiT/.gitignore`
+
+Those rules keep the vendored source tree trackable while preventing routine
+SiT-side runtime artifacts from polluting the main repository status:
+
+- `wandb/`, `samples/`, `results/`
+- downloaded weights under `pretrained_models/`
+- local experiment state such as `logs/`, `outputs/`, `runs/`, `checkpoints/`
+- cached Python bytecode and notebook checkpoint files

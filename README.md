@@ -20,6 +20,7 @@ See [docs/latentmeanflow_migration_plan.md](docs/latentmeanflow_migration_plan.m
 - `docs/`: project documentation, including migration planning and label contracts.
 - `third_party/latent-diffusion/`: vendored upstream fork with local compatibility patches.
 - `third_party/flow_matching/`: vendored upstream reference code. It is the future reference base for latent FM / MeanFlow / AlphaFlow, but it is not on the current training path.
+- `third_party/SiT/`: vendored official SiT reference code for future transformer / DiT-style backbone experiments. It is not on the current training path.
 - `docs/third_party.md`: provenance and patch summary for vendored code.
 
 ## Terminology
