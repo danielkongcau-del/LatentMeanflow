@@ -87,10 +87,14 @@ the current parallel upgrade path changes the modeled state itself:
 - trainer: `latent_meanflow.trainers.discrete_mask_prior_trainer.DiscreteMaskPriorTrainer`
 - backbone: project-layer `LatentIntervalSiT`
 - objective: absorbing-mask discrete diffusion over `mask_index`
-- sampler: seeded stochastic few-step progressive reveal
+- sampler:
+  - control configs: seeded stochastic few-step progressive reveal
+  - high-mask ablation configs: remask-low-confidence iterative refinement
 - configs:
   - `configs/discrete_mask_prior_sit_tiny.yaml`
   - `configs/discrete_mask_prior_sit.yaml`
+  - `configs/ablations/discrete_mask_prior_sit_highmask_refine_tiny.yaml`
+  - `configs/ablations/discrete_mask_prior_sit_highmask_refine.yaml`
 
 Phase A / MVP rules for this route:
 
@@ -101,6 +105,18 @@ Phase A / MVP rules for this route:
 - there is still no image branch
 - there are still no boundary / area / adjacency / topology auxiliary losses
 - frozen renderer and frozen teacher evaluation stay unchanged
+
+Current parallel split inside this route:
+
+- `configs/discrete_mask_prior_sit*.yaml`
+  - control discrete baseline
+  - Bernoulli masking
+  - seeded progressive reveal sampler
+- `configs/ablations/discrete_mask_prior_sit_highmask_refine*.yaml`
+  - exact-count corruption
+  - full-mask / high-mask sample mixing inside each minibatch
+  - class-balanced masked cross entropy
+  - remask-low-confidence iterative refinement sampler
 
 This route exists in parallel. It does **not** delete or redefine:
 
@@ -139,6 +155,8 @@ Project-layer files for the direct discrete semantic-variable follow-up:
 - `latent_meanflow/samplers/discrete_mask_diffusion.py`
 - `configs/discrete_mask_prior_sit_tiny.yaml`
 - `configs/discrete_mask_prior_sit.yaml`
+- `configs/ablations/discrete_mask_prior_sit_highmask_refine_tiny.yaml`
+- `configs/ablations/discrete_mask_prior_sit_highmask_refine.yaml`
 - `tests/test_discrete_mask_prior_smoke.py`
 
 ## Success Criteria

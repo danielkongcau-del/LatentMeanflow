@@ -54,6 +54,20 @@ Current benchmark candidate:
 - train entrypoint: `scripts/train_mask_prior_diffusion.py`
 - sample entrypoint: `scripts/sample_mask_prior_diffusion.py`
 
+Current collapse-mitigation ablation:
+
+- backbone: project-layer `LatentIntervalSiT`
+- objective:
+  - exact-count corruption
+  - full-mask / high-mask sample mixing inside each minibatch
+  - class-balanced masked cross entropy
+- sampler: remask-low-confidence iterative refinement
+- configs:
+  - `configs/ablations/discrete_mask_prior_sit_highmask_refine_tiny.yaml`
+  - `configs/ablations/discrete_mask_prior_sit_highmask_refine.yaml`
+- train entrypoint: `scripts/train_mask_prior_diffusion.py`
+- sample entrypoint: `scripts/sample_mask_prior_diffusion.py`
+
 All three routes still model `p(semantic_mask)` only.
 
 ## Fixed Comparison Matrix
@@ -112,6 +126,15 @@ python scripts/train_mask_prior_diffusion.py \
   --gpus 0
 ```
 
+Direct discrete high-mask / refine ablation:
+
+```bash
+python scripts/train_mask_prior_diffusion.py \
+  --config configs/ablations/discrete_mask_prior_sit_highmask_refine_tiny.yaml \
+  --scale-lr true \
+  --gpus 0
+```
+
 Success criteria for the tiny pilot:
 
 - clearly memorize the dominant large-region layout
@@ -123,6 +146,15 @@ Success criteria for the tiny pilot:
 ```bash
 python scripts/train_mask_prior_diffusion.py \
   --config configs/discrete_mask_prior_sit.yaml \
+  --scale-lr true \
+  --gpus 0
+```
+
+Improved ablation:
+
+```bash
+python scripts/train_mask_prior_diffusion.py \
+  --config configs/ablations/discrete_mask_prior_sit_highmask_refine.yaml \
   --scale-lr true \
   --gpus 0
 ```

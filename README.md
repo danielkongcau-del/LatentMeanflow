@@ -475,6 +475,8 @@ Checked-in baseline configs:
 - `configs/latent_diffusion_mask_prior_sit.yaml`
 - `configs/discrete_mask_prior_sit_tiny.yaml`
 - `configs/discrete_mask_prior_sit.yaml`
+- `configs/ablations/discrete_mask_prior_sit_highmask_refine_tiny.yaml`
+- `configs/ablations/discrete_mask_prior_sit_highmask_refine.yaml`
 
 Operational rules for this route:
 
@@ -482,6 +484,9 @@ Operational rules for this route:
 - `scripts/sample_mask_prior.py`, `scripts/sample_mask_prior_diffusion.py`, and `scripts/eval_mask_prior.py` require explicit checkpoint paths and do not silently fall back to `last.ckpt`.
 - The current direct discrete mask-prior route still reuses the same checked-in
   train/sample/eval scripts. Switch only the config/checkpoint pair.
+- The checked-in discrete route now has both:
+  - control configs under `configs/discrete_mask_prior_sit*.yaml`
+  - high-mask / iterative-refinement ablations under `configs/ablations/discrete_mask_prior_sit_highmask_refine*.yaml`
 
 ### Latent FM Path
 

@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytorch_lightning as pl
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 from ldm.util import instantiate_from_config
 
@@ -128,9 +129,101 @@ class DiscreteMaskPriorTrainer(pl.LightningModule):
         trainer = getattr(self, "trainer", None)
         return trainer is not None and int(getattr(trainer, "world_size", 1)) > 1
 
+    def _is_global_zero(self):
+        trainer = getattr(self, "trainer", None)
+        if trainer is None:
+            return True
+        is_global_zero = getattr(trainer, "is_global_zero", None)
+        if is_global_zero is not None:
+            return bool(is_global_zero)
+        global_rank = getattr(trainer, "global_rank", None)
+        if global_rank is None:
+            return True
+        return int(global_rank) == 0
+
+    def _log_info(self, message):
+        if self._is_global_zero():
+            print(message)
+
+    def _get_train_dataset(self):
+        trainer = getattr(self, "trainer", None)
+        if trainer is None:
+            raise RuntimeError("DiscreteMaskPriorTrainer requires an attached trainer to inspect the train dataset.")
+        datamodule = getattr(trainer, "datamodule", None)
+        if datamodule is None:
+            raise RuntimeError("DiscreteMaskPriorTrainer expected trainer.datamodule to exist at on_fit_start().")
+        datasets = getattr(datamodule, "datasets", None)
+        if not isinstance(datasets, dict) or "train" not in datasets:
+            raise RuntimeError(
+                "DiscreteMaskPriorTrainer expected trainer.datamodule.datasets['train'] "
+                "to be available at on_fit_start()."
+            )
+        dataset = datasets["train"]
+        if hasattr(dataset, "data") and hasattr(dataset.data, "__len__") and hasattr(dataset.data, "__getitem__"):
+            return dataset.data
+        return dataset
+
+    def _scan_train_class_counts(self):
+        dataset = self._get_train_dataset()
+        counts = torch.zeros(self.num_classes, dtype=torch.float64)
+        for sample_idx in range(len(dataset)):
+            sample = dataset[sample_idx]
+            if self.mask_index_key not in sample:
+                raise KeyError(
+                    "DiscreteMaskPriorTrainer class-count scan requires train dataset samples to include "
+                    f"'{self.mask_index_key}'."
+                )
+            mask_index = sample[self.mask_index_key]
+            if not isinstance(mask_index, torch.Tensor):
+                mask_index = torch.as_tensor(mask_index)
+            if mask_index.ndim == 2:
+                mask_index = mask_index.unsqueeze(0)
+            elif mask_index.ndim == 3 and mask_index.shape[0] == 1:
+                mask_index = mask_index
+            elif mask_index.ndim == 3 and tuple(mask_index.shape[-2:]) == self.mask_spatial_shape:
+                mask_index = mask_index.unsqueeze(0)
+            mask_index = self._prepare_mask_index(mask_index).view(-1)
+            if self.ignore_index is not None:
+                mask_index = mask_index[mask_index != int(self.ignore_index)]
+            if mask_index.numel() <= 0:
+                continue
+            bincount = torch.bincount(mask_index.clamp(min=0), minlength=self.num_classes)
+            counts += bincount[: self.num_classes].to(dtype=counts.dtype)
+        return counts
+
+    def _broadcast_class_counts(self, class_counts):
+        device = self.device if isinstance(self.device, torch.device) else torch.device("cpu")
+        if device.type not in {"cpu", "cuda"}:
+            device = torch.device("cpu")
+        counts_tensor = torch.zeros(self.num_classes, dtype=torch.float64, device=device)
+        if class_counts is not None:
+            counts_tensor.copy_(class_counts.to(device=device, dtype=torch.float64))
+        if dist.is_available() and dist.is_initialized():
+            dist.broadcast(counts_tensor, src=0)
+        return counts_tensor.cpu().to(dtype=torch.float32)
+
+    def _maybe_configure_objective_class_balance(self):
+        configure_class_balance = getattr(self.objective, "configure_class_balance", None)
+        needs_class_count_scan = getattr(self.objective, "needs_class_count_scan", None)
+        if not callable(configure_class_balance) or not callable(needs_class_count_scan):
+            return
+        if not bool(needs_class_count_scan()):
+            return
+
+        class_counts = None
+        if self._is_global_zero():
+            class_counts = self._scan_train_class_counts()
+        class_counts = self._broadcast_class_counts(class_counts)
+        configure_class_balance(class_counts)
+        self._log_info(
+            "[DiscreteMaskPriorTrainer] "
+            f"class_balance_counts={class_counts.tolist()}"
+        )
+
     def on_fit_start(self):
         super().on_fit_start()
-        self.print(
+        self._maybe_configure_objective_class_balance()
+        self._log_info(
             "[DiscreteMaskPriorTrainer] "
             f"num_classes={self.num_classes}, mask_token_id={self.mask_token_id}, "
             f"mask_spatial_shape={self.mask_spatial_shape}, objective={self.objective_name}"
