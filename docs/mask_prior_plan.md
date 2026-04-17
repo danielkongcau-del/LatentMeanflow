@@ -41,7 +41,7 @@ Reasons:
 2. The project already has a validated `p(image | mask)` route, so the more natural next step is to solve the missing upstream factor by itself.
 3. The project goal is now operationally decomposed, not fused.
 
-## Baseline Design
+## Legacy Baseline Design
 
 The first main baseline is:
 
@@ -58,6 +58,27 @@ Interpretation:
 - there is no mask tokenizer
 - there is no latent downsampling beyond the native mask resolution configured for training
 
+## Stronger Benchmark Follow-Up
+
+The next benchmark route keeps the same `p(semantic_mask)` task and the same
+evaluation protocol, but changes backbone and objective:
+
+- backbone: project-layer `LatentIntervalSiT`
+- objective: standard diffusion
+- sampler: DDIM-style few-step sampler
+- configs:
+  - `configs/latent_diffusion_mask_prior_sit_tiny.yaml`
+  - `configs/latent_diffusion_mask_prior_sit.yaml`
+
+This route still does **not** use:
+
+- a mask tokenizer
+- an image branch
+- the upstream `third_party/SiT/train.py` or `sample.py` entrypoints
+
+Use [docs/mask_prior_sit_diffusion_benchmark.md](docs/mask_prior_sit_diffusion_benchmark.md)
+for the fixed U-Net AlphaFlow vs SiT diffusion comparison.
+
 ## Deliverables
 
 Project-layer files for this route:
@@ -70,6 +91,17 @@ Project-layer files for this route:
 - `scripts/eval_mask_prior_composed_renderer.py`
 - `configs/latent_alphaflow_mask_prior_unet_tiny.yaml`
 - `configs/latent_alphaflow_mask_prior_unet.yaml`
+
+Project-layer files for the stronger benchmark route:
+
+- `latent_meanflow/models/backbones/latent_interval_sit.py`
+- `latent_meanflow/objectives/diffusion.py`
+- `latent_meanflow/samplers/diffusion.py`
+- `scripts/train_mask_prior_diffusion.py`
+- `scripts/sample_mask_prior_diffusion.py`
+- `configs/latent_diffusion_mask_prior_sit_tiny.yaml`
+- `configs/latent_diffusion_mask_prior_sit.yaml`
+- `docs/mask_prior_sit_diffusion_benchmark.md`
 
 ## Success Criteria
 

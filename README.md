@@ -20,7 +20,7 @@ See [docs/latentmeanflow_migration_plan.md](docs/latentmeanflow_migration_plan.m
 - `docs/`: project documentation, including migration planning and label contracts.
 - `third_party/latent-diffusion/`: vendored upstream fork with local compatibility patches.
 - `third_party/flow_matching/`: vendored upstream reference code. It is the future reference base for latent FM / MeanFlow / AlphaFlow, but it is not on the current training path.
-- `third_party/SiT/`: vendored official SiT reference code for future transformer / DiT-style backbone experiments. It is not on the current training path.
+- `third_party/SiT/`: vendored official SiT reference code kept as a donor / reference repo. The project-layer training path does not call upstream `third_party/SiT/train.py` or `sample.py`.
 - `docs/third_party.md`: provenance and patch summary for vendored code.
 
 ## Terminology
@@ -452,15 +452,26 @@ Use:
 
 - [docs/mask_prior_plan.md](docs/mask_prior_plan.md) for the conservative
   baseline definition
+- [docs/mask_prior_sit_diffusion_benchmark.md](docs/mask_prior_sit_diffusion_benchmark.md)
+  for the stronger SiT-style transformer + diffusion benchmark route
 - [docs/mask_prior_eval_protocol.md](docs/mask_prior_eval_protocol.md) for the
   fixed mask-only and compose-to-image evaluation protocol
 
 Checked-in entry points:
 
 - `scripts/train_mask_prior.py`
+- `scripts/train_mask_prior_diffusion.py`
 - `scripts/sample_mask_prior.py`
+- `scripts/sample_mask_prior_diffusion.py`
 - `scripts/eval_mask_prior.py`
 - `scripts/eval_mask_prior_composed_renderer.py`
+
+Checked-in baseline configs:
+
+- `configs/latent_alphaflow_mask_prior_unet_tiny.yaml`
+- `configs/latent_alphaflow_mask_prior_unet.yaml`
+- `configs/latent_diffusion_mask_prior_sit_tiny.yaml`
+- `configs/latent_diffusion_mask_prior_sit.yaml`
 
 ### Latent FM Path
 
@@ -814,6 +825,10 @@ This pinned route does not yet include an unconditional `p(mask)` prior.
 The upstream `p(mask)` route is evaluated separately with the fixed protocol in
 [docs/mask_prior_eval_protocol.md](docs/mask_prior_eval_protocol.md), then
 composed into this frozen downstream chain.
+
+The new project-layer SiT-style diffusion baseline keeps that same frozen
+renderer and teacher protocol. It only changes the upstream `p(mask)`
+backbone/objective pair.
 
 Use the following project-layer defaults:
 

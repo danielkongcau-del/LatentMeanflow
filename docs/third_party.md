@@ -76,8 +76,16 @@ Its current role in this repository is reference-only:
 - borrow implementation ideas for future project-layer `mask prior` backbone experiments
 - keep that reference code isolated from the active LatentMeanflow training path
 
-It is not currently wired into any checked-in project-layer training, sampling, or
-evaluation script.
+The upstream SiT scripts are still not wired into any checked-in project-layer
+training, sampling, or evaluation script.
+
+The current project-layer integration point is instead:
+
+- `latent_meanflow/models/backbones/latent_interval_sit.py`
+
+That file is a project-owned SiT-style backbone donor integration. It borrows
+patchify / transformer / timestep-conditioning ideas while keeping training,
+sampling, and evaluation inside the repository's own `mask prior` pipeline.
 
 Local ignore rules live in:
 

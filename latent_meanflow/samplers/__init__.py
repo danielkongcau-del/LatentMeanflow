@@ -1,4 +1,5 @@
+from .diffusion import DDIMDiffusionSampler
 from .interval import IntervalFlowSampler
 from .ode import EulerFlowSampler
 
-__all__ = ["EulerFlowSampler", "IntervalFlowSampler"]
+__all__ = ["DDIMDiffusionSampler", "EulerFlowSampler", "IntervalFlowSampler"]
