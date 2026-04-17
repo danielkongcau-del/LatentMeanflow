@@ -1,0 +1,101 @@
+model:
+  base_learning_rate: 1.0e-4
+  target: latent_meanflow.trainers.discrete_mask_prior_trainer.DiscreteMaskPriorTrainer
+  params:
+    # Tiny project-layer ablation for direct discrete p(semantic_mask).
+    #
+    # This keeps the same improved discrete objective as the high-mask/refine
+    # route, but changes sampler semantics from sparse locked-only context to a
+    # full proposal-visible refinement loop.
+    objective_name: discrete_mask_diffusion
+    monitor: val/base_error_mean
+    semantic_mask_label_spec_path: configs/label_specs/remote_semantic.yaml
+    mask_spatial_shape: [256, 256]
+    log_sample_nfe: 8
+    backbone_config:
+      target: latent_meanflow.models.backbones.latent_interval_sit.LatentIntervalSiT
+      params:
+        input_size: [256, 256]
+        patch_size: 4
+        hidden_size: 256
+        depth: 8
+        num_heads: 4
+        mlp_ratio: 4.0
+        time_conditioning: t
+        time_embed_dim: 256
+    objective_config:
+      target: latent_meanflow.objectives.discrete_mask_diffusion.DiscreteMaskDiffusionObjective
+      params:
+        time_eps: 1.0e-3
+        loss_type: cross_entropy
+        mask_schedule: linear
+        corruption_mode: exact_count
+        full_mask_batch_fraction: 0.25
+        high_mask_batch_fraction: 0.50
+        high_mask_min_ratio: 0.85
+        class_balance_mode: inverse_sqrt_frequency
+        # Phase A / MVP discrete route still uses full-range absorbing schedule only.
+        min_mask_ratio: 0.0
+        max_mask_ratio: 1.0
+    sampler_config:
+      target: latent_meanflow.samplers.discrete_mask_diffusion.SeededDiscreteMaskDiffusionSampler
+      params:
+        default_nfe: 8
+        mask_schedule: linear
+        refinement_mode: proposal_visible_refine
+        final_full_reveal: true
+        min_keep_fraction: 0.15
+        reveal_noise_scale: 0.15
+        lock_noise_scale: 0.10
+        sample_temperature: 1.0
+        # Phase A / MVP discrete route still uses full-range absorbing schedule only.
+        min_mask_ratio: 0.0
+        max_mask_ratio: 1.0
+
+data:
+  target: main.DataModuleFromConfig
+  params:
+    batch_size: 2
+    num_workers: 0
+    wrap: false
+    train:
+      target: latent_meanflow.data.semantic_mask.MultiSemanticMaskDataset
+      params:
+        roots:
+          - outputs/segmentation_teacher_data/remote_semantic_indexed
+        split: train
+        size: 256
+        mask_dir: masks
+        gray_to_class_id: configs/label_specs/remote_semantic.yaml
+        ignore_index: -1
+    validation:
+      target: latent_meanflow.data.semantic_mask.MultiSemanticMaskDataset
+      params:
+        roots:
+          - outputs/segmentation_teacher_data/remote_semantic_indexed
+        split: val
+        size: 256
+        mask_dir: masks
+        gray_to_class_id: configs/label_specs/remote_semantic.yaml
+        ignore_index: -1
+
+lightning:
+  callbacks:
+    image_logger:
+      target: latent_meanflow.callbacks.semantic_logger.SemanticPairImageLogger
+      params:
+        disabled: false
+        batch_frequency: 10
+        increase_log_steps: false
+        max_images: 4
+        latest_only: true
+        ignore_index: -1
+  trainer:
+    benchmark: false
+    max_epochs: 200
+    limit_train_batches: 32
+    limit_val_batches: 4
+    num_sanity_val_steps: 0
+    log_every_n_steps: 1
+    accumulate_grad_batches: 1
+    strategy: ddp_find_unused_parameters_false

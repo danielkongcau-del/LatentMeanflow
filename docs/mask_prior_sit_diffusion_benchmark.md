@@ -68,6 +68,20 @@ Current collapse-mitigation ablation:
 - train entrypoint: `scripts/train_mask_prior_diffusion.py`
 - sample entrypoint: `scripts/sample_mask_prior_diffusion.py`
 
+Proposal-visible refinement ablation:
+
+- backbone: project-layer `LatentIntervalSiT`
+- objective:
+  - exact-count corruption
+  - full-mask / high-mask sample mixing inside each minibatch
+  - class-balanced masked cross entropy
+- sampler: proposal-visible iterative refinement
+- configs:
+  - `configs/ablations/discrete_mask_prior_sit_proposal_visible_refine_tiny.yaml`
+  - `configs/ablations/discrete_mask_prior_sit_proposal_visible_refine.yaml`
+- train entrypoint: `scripts/train_mask_prior_diffusion.py`
+- sample entrypoint: `scripts/sample_mask_prior_diffusion.py`
+
 Decisive memorization diagnostic:
 
 - route: the same improved discrete high-mask / refine ablation
@@ -86,6 +100,27 @@ Interpretation:
   the current objective / sampler semantics are still insufficient
 - if these diagnostics memorize coherent connected regions, then the full-data
   failure is more likely a scaling / generalization problem
+
+Proposal-visible memorization diagnostic:
+
+- route: the same improved discrete objective with proposal-visible refinement
+- configs:
+  - `configs/diagnostics/discrete_mask_prior_sit_proposal_visible_refine_memorize_1.yaml`
+  - `configs/diagnostics/discrete_mask_prior_sit_proposal_visible_refine_memorize_4.yaml`
+- data rule:
+  - both train and validation point to the same fixed 1-mask or 4-mask bank
+  - the bank is drawn from the training split on purpose
+- purpose:
+  - test whether `memorize_4` failure is primarily caused by sparse locked-only
+    sampler context instead of a complete route-level failure
+
+Interpretation:
+
+- if proposal-visible refinement makes `memorize_4` cover multiple coherent
+  layouts instead of collapsing to one low-quality prototype, then the previous
+  failure was primarily a sampler-context problem
+- if it still collapses badly, then the direct pixel-space discrete route is
+  likely missing a more basic multimodal layout mechanism
 
 All three routes still model `p(semantic_mask)` only.
 
@@ -154,6 +189,15 @@ python scripts/train_mask_prior_diffusion.py \
   --gpus 0
 ```
 
+Proposal-visible refinement ablation:
+
+```bash
+python scripts/train_mask_prior_diffusion.py \
+  --config configs/ablations/discrete_mask_prior_sit_proposal_visible_refine_tiny.yaml \
+  --scale-lr true \
+  --gpus 0
+```
+
 Success criteria for the tiny pilot:
 
 - clearly memorize the dominant large-region layout
@@ -178,6 +222,15 @@ python scripts/train_mask_prior_diffusion.py \
   --gpus 0
 ```
 
+Proposal-visible base ablation:
+
+```bash
+python scripts/train_mask_prior_diffusion.py \
+  --config configs/ablations/discrete_mask_prior_sit_proposal_visible_refine.yaml \
+  --scale-lr true \
+  --gpus 0
+```
+
 Decisive memorization diagnostics:
 
 ```bash
@@ -188,6 +241,20 @@ python scripts/train_mask_prior_diffusion.py \
 
 python scripts/train_mask_prior_diffusion.py \
   --config configs/diagnostics/discrete_mask_prior_sit_highmask_refine_memorize_4.yaml \
+  --scale-lr false \
+  --gpus 0
+```
+
+Proposal-visible memorization diagnostics:
+
+```bash
+python scripts/train_mask_prior_diffusion.py \
+  --config configs/diagnostics/discrete_mask_prior_sit_proposal_visible_refine_memorize_1.yaml \
+  --scale-lr false \
+  --gpus 0
+
+python scripts/train_mask_prior_diffusion.py \
+  --config configs/diagnostics/discrete_mask_prior_sit_proposal_visible_refine_memorize_4.yaml \
   --scale-lr false \
   --gpus 0
 ```
@@ -277,6 +344,50 @@ python scripts/eval_mask_prior.py \
   --config configs/diagnostics/discrete_mask_prior_sit_highmask_refine_memorize_4.yaml \
   --ckpt <best-memorize-4-ckpt> \
   --outdir outputs/mask_prior_diagnostics/memorize_4_eval \
+  --n-samples 16 \
+  --batch-size 4 \
+  --nfe-values 8 4 2 1 \
+  --seed 23 \
+  --overwrite
+```
+
+Proposal-visible diagnostic sampling and evaluation reuse the same checked-in scripts:
+
+```bash
+python scripts/sample_mask_prior_diffusion.py \
+  --config configs/diagnostics/discrete_mask_prior_sit_proposal_visible_refine_memorize_1.yaml \
+  --ckpt <best-proposal-visible-memorize-1-ckpt> \
+  --outdir outputs/mask_prior_diagnostics/proposal_visible_memorize_1_samples \
+  --n-samples 16 \
+  --batch-size 4 \
+  --nfe-values 8 4 2 1 \
+  --seed 23 \
+  --overwrite
+
+python scripts/sample_mask_prior_diffusion.py \
+  --config configs/diagnostics/discrete_mask_prior_sit_proposal_visible_refine_memorize_4.yaml \
+  --ckpt <best-proposal-visible-memorize-4-ckpt> \
+  --outdir outputs/mask_prior_diagnostics/proposal_visible_memorize_4_samples \
+  --n-samples 16 \
+  --batch-size 4 \
+  --nfe-values 8 4 2 1 \
+  --seed 23 \
+  --overwrite
+
+python scripts/eval_mask_prior.py \
+  --config configs/diagnostics/discrete_mask_prior_sit_proposal_visible_refine_memorize_1.yaml \
+  --ckpt <best-proposal-visible-memorize-1-ckpt> \
+  --outdir outputs/mask_prior_diagnostics/proposal_visible_memorize_1_eval \
+  --n-samples 16 \
+  --batch-size 4 \
+  --nfe-values 8 4 2 1 \
+  --seed 23 \
+  --overwrite
+
+python scripts/eval_mask_prior.py \
+  --config configs/diagnostics/discrete_mask_prior_sit_proposal_visible_refine_memorize_4.yaml \
+  --ckpt <best-proposal-visible-memorize-4-ckpt> \
+  --outdir outputs/mask_prior_diagnostics/proposal_visible_memorize_4_eval \
   --n-samples 16 \
   --batch-size 4 \
   --nfe-values 8 4 2 1 \

@@ -59,18 +59,19 @@ def _make_trainer(objective_params=None, sampler_params=None):
 
 
 def _make_sampler(**overrides):
-    sampler = SeededDiscreteMaskDiffusionSampler(
-        default_nfe=4,
-        mask_schedule="linear",
-        min_mask_ratio=0.0,
-        max_mask_ratio=1.0,
-        reveal_noise_scale=0.2,
-        sample_temperature=1.0,
-        refinement_mode="remask_low_confidence",
-        min_keep_fraction=0.15,
-        lock_noise_scale=0.1,
-        **overrides,
-    )
+    sampler_params = {
+        "default_nfe": 4,
+        "mask_schedule": "linear",
+        "min_mask_ratio": 0.0,
+        "max_mask_ratio": 1.0,
+        "reveal_noise_scale": 0.2,
+        "sample_temperature": 1.0,
+        "refinement_mode": "remask_low_confidence",
+        "min_keep_fraction": 0.15,
+        "lock_noise_scale": 0.1,
+    }
+    sampler_params.update(overrides)
+    sampler = SeededDiscreteMaskDiffusionSampler(**sampler_params)
     sampler.configure_discrete_state(num_classes=4, mask_token_id=4)
     return sampler
 
@@ -324,10 +325,79 @@ class DiscreteMaskPriorSmokeTest(unittest.TestCase):
                 break
         self.assertTrue(unlocked_changed)
 
+    def test_proposal_visible_refine_sampler_uses_full_proposals_as_next_state(self):
+        sampler = _make_sampler(refinement_mode="proposal_visible_refine")
+        model_fn = _make_contextual_model_fn(num_classes=4, mask_token_id=4)
+        noise = torch.randn((1, 1, 16, 16))
+
+        sample_a = sampler.sample(
+            model_fn=model_fn,
+            batch_size=1,
+            latent_shape=(1, 16, 16),
+            device=torch.device("cpu"),
+            noise=noise,
+            nfe=4,
+        )
+        sample_b = sampler.sample(
+            model_fn=model_fn,
+            batch_size=1,
+            latent_shape=(1, 16, 16),
+            device=torch.device("cpu"),
+            noise=noise.clone(),
+            nfe=4,
+        )
+        sample_c = sampler.sample(
+            model_fn=model_fn,
+            batch_size=1,
+            latent_shape=(1, 16, 16),
+            device=torch.device("cpu"),
+            noise=torch.randn_like(noise),
+            nfe=4,
+        )
+        self.assertEqual(tuple(sample_a.shape), (1, 16, 16))
+        self.assertEqual(sample_a.dtype, torch.long)
+        self.assertTrue(torch.equal(sample_a, sample_b))
+        self.assertFalse(torch.equal(sample_a, sample_c))
+
+        history = sampler.sample_with_history(
+            model_fn=model_fn,
+            batch_size=1,
+            latent_shape=(1, 16, 16),
+            device=torch.device("cpu"),
+            noise=noise,
+            nfe=4,
+        )
+        state_history = history["state_history"]
+        proposal_history = history["proposal_history"]
+        locked_mask_history = history["locked_mask_history"]
+
+        self.assertEqual(len(state_history), 5)
+        self.assertEqual(len(locked_mask_history), 5)
+        self.assertEqual(len(proposal_history), 4)
+        self.assertTrue(torch.all(state_history[0] == sampler.mask_token_id))
+
+        for step_idx in range(len(proposal_history)):
+            self.assertTrue(torch.equal(state_history[step_idx + 1], proposal_history[step_idx]))
+
+        for step_idx in range(len(locked_mask_history) - 1):
+            locked_now = locked_mask_history[step_idx]
+            for later_idx in range(step_idx + 1, len(state_history)):
+                self.assertTrue(torch.equal(state_history[later_idx][locked_now], state_history[step_idx][locked_now]))
+
+        unlocked_changed = False
+        for step_idx in range(1, len(state_history) - 1):
+            still_unlocked = (~locked_mask_history[step_idx]) & (~locked_mask_history[step_idx + 1])
+            if torch.any(still_unlocked & (state_history[step_idx] != state_history[step_idx + 1])):
+                unlocked_changed = True
+                break
+        self.assertTrue(unlocked_changed)
+
     def test_memorization_diagnostic_configs_instantiate_and_keep_interfaces(self):
         config_paths = [
             REPO_ROOT / "configs" / "diagnostics" / "discrete_mask_prior_sit_highmask_refine_memorize_1.yaml",
             REPO_ROOT / "configs" / "diagnostics" / "discrete_mask_prior_sit_highmask_refine_memorize_4.yaml",
+            REPO_ROOT / "configs" / "diagnostics" / "discrete_mask_prior_sit_proposal_visible_refine_memorize_1.yaml",
+            REPO_ROOT / "configs" / "diagnostics" / "discrete_mask_prior_sit_proposal_visible_refine_memorize_4.yaml",
         ]
         for config_path in config_paths:
             config = OmegaConf.load(config_path)

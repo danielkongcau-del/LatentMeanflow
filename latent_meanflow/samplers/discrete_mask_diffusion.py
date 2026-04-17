@@ -50,10 +50,15 @@ class SeededDiscreteMaskDiffusionSampler(nn.Module):
             owner_name="SeededDiscreteMaskDiffusionSampler",
         )
 
-        if self.refinement_mode not in {"progressive_reveal", "remask_low_confidence"}:
+        if self.refinement_mode not in {
+            "progressive_reveal",
+            "remask_low_confidence",
+            "proposal_visible_refine",
+        }:
             raise ValueError(
                 "SeededDiscreteMaskDiffusionSampler refinement_mode must be one of "
-                f"{{'progressive_reveal', 'remask_low_confidence'}}, got {self.refinement_mode!r}"
+                "{'progressive_reveal', 'remask_low_confidence', 'proposal_visible_refine'}, "
+                f"got {self.refinement_mode!r}"
             )
         if self.lock_schedule != "linear":
             raise ValueError(
@@ -162,18 +167,57 @@ class SeededDiscreteMaskDiffusionSampler(nn.Module):
         )
         return uniform.clamp_(1.0e-6, 1.0 - 1.0e-6)
 
-    def _predict_logits(self, *, model_fn, state, condition, height, width):
+    def _call_model(self, *, model_fn, state, t, condition, height, width):
         batch_size = int(state.shape[0])
-        remaining_mask = state == self.mask_token_id
-        remaining_counts = remaining_mask.view(batch_size, -1).sum(dim=1)
-        current_ratio = remaining_counts.to(dtype=torch.float32) / float(max(height * width, 1))
-        logits = model_fn(state, t=current_ratio, condition=condition)
+        logits = model_fn(state, t=t, condition=condition)
         expected_shape = (batch_size, self.num_classes, height, width)
         if tuple(logits.shape) != expected_shape:
             raise ValueError(
                 f"Discrete sampler expected logits shape {expected_shape}, got {tuple(logits.shape)}"
             )
+        return logits
+
+    def _predict_logits(self, *, model_fn, state, condition, height, width):
+        batch_size = int(state.shape[0])
+        remaining_mask = state == self.mask_token_id
+        remaining_counts = remaining_mask.view(batch_size, -1).sum(dim=1)
+        current_ratio = remaining_counts.to(dtype=torch.float32) / float(max(height * width, 1))
+        logits = self._call_model(
+            model_fn=model_fn,
+            state=state,
+            t=current_ratio,
+            condition=condition,
+            height=height,
+            width=width,
+        )
         return logits, remaining_mask
+
+    def _predict_logits_from_editable_fraction(
+        self,
+        *,
+        model_fn,
+        state,
+        locked_mask,
+        condition,
+        height,
+        width,
+    ):
+        batch_size = int(state.shape[0])
+        editable_mask = ~locked_mask
+        editable_counts = editable_mask.view(batch_size, -1).sum(dim=1)
+        # Proposal-visible refinement uses editable fraction as time. After step 0 the
+        # state is usually fully proposed, so literal MASK count is no longer a valid
+        # proxy for how much of the layout is still mutable.
+        editable_fraction = editable_counts.to(dtype=torch.float32) / float(max(height * width, 1))
+        logits = self._call_model(
+            model_fn=model_fn,
+            state=state,
+            t=editable_fraction,
+            condition=condition,
+            height=height,
+            width=width,
+        )
+        return logits, editable_mask, editable_fraction
 
     def _sample_classes(self, pixel_logits, *, pixel_uniform, step_idx, device):
         probs = torch.softmax(pixel_logits.to(dtype=torch.float32), dim=1)
@@ -186,6 +230,44 @@ class SeededDiscreteMaskDiffusionSampler(nn.Module):
         sampled_confidence = probs.gather(1, sampled_class.unsqueeze(1)).squeeze(1)
         max_confidence = probs.max(dim=1).values
         return sampled_class, sampled_confidence, max_confidence
+
+    def _select_lock_positions(
+        self,
+        *,
+        unlocked_positions,
+        sampled_confidence,
+        flat_locked_row,
+        flat_noise_row,
+        ratio_schedule,
+        step_idx,
+        nfe,
+        total_positions,
+    ):
+        unlocked_total = int(unlocked_positions.numel())
+        if unlocked_total <= 0:
+            return unlocked_positions
+        if step_idx == (nfe - 1):
+            return unlocked_positions
+
+        target_remaining = int(round(float(total_positions) * float(ratio_schedule[step_idx + 1].item())))
+        target_remaining = max(0, min(target_remaining, total_positions))
+        current_locked = int(flat_locked_row.sum().item())
+        target_locked = max(0, total_positions - target_remaining)
+        additional_lock = max(0, target_locked - current_locked)
+        min_lock = max(1, int(math.ceil(unlocked_total * self.min_keep_fraction)))
+        additional_lock = max(additional_lock, min_lock)
+        additional_lock = min(additional_lock, unlocked_total)
+
+        lock_uniform = self._step_uniform(
+            flat_noise_row[unlocked_positions],
+            step_idx=step_idx,
+            offset=2,
+        )
+        lock_score = sampled_confidence + self.lock_noise_scale * (lock_uniform - 0.5)
+        if additional_lock < unlocked_total:
+            chosen = torch.topk(lock_score, k=additional_lock, largest=True).indices
+            return unlocked_positions[chosen]
+        return unlocked_positions
 
     def _progressive_reveal(
         self,
@@ -361,29 +443,16 @@ class SeededDiscreteMaskDiffusionSampler(nn.Module):
                 )
                 proposal[batch_idx, unlocked_positions] = sampled_class.to(dtype=proposal.dtype)
 
-                if self.final_full_reveal and step_idx == (nfe - 1):
-                    lock_positions = unlocked_positions
-                else:
-                    target_remaining = int(round(float(total_positions) * float(ratio_schedule[step_idx + 1].item())))
-                    target_remaining = max(0, min(target_remaining, total_positions))
-                    current_locked = int(flat_locked[batch_idx].sum().item())
-                    target_locked = max(0, total_positions - target_remaining)
-                    additional_lock = max(0, target_locked - current_locked)
-                    min_lock = max(1, int(math.ceil(unlocked_total * self.min_keep_fraction)))
-                    additional_lock = max(additional_lock, min_lock)
-                    additional_lock = min(additional_lock, unlocked_total)
-
-                    lock_uniform = self._step_uniform(
-                        flat_noise[batch_idx, unlocked_positions],
-                        step_idx=step_idx,
-                        offset=2,
-                    )
-                    lock_score = sampled_confidence + self.lock_noise_scale * (lock_uniform - 0.5)
-                    if additional_lock < unlocked_total:
-                        chosen = torch.topk(lock_score, k=additional_lock, largest=True).indices
-                        lock_positions = unlocked_positions[chosen]
-                    else:
-                        lock_positions = unlocked_positions
+                lock_positions = self._select_lock_positions(
+                    unlocked_positions=unlocked_positions,
+                    sampled_confidence=sampled_confidence,
+                    flat_locked_row=flat_locked[batch_idx],
+                    flat_noise_row=flat_noise[batch_idx],
+                    ratio_schedule=ratio_schedule,
+                    step_idx=step_idx,
+                    nfe=nfe,
+                    total_positions=total_positions,
+                )
 
                 flat_locked[batch_idx, lock_positions] = True
                 flat_state[batch_idx, lock_positions] = proposal[batch_idx, lock_positions]
@@ -436,6 +505,102 @@ class SeededDiscreteMaskDiffusionSampler(nn.Module):
 
         return history if return_history else state
 
+    def _proposal_visible_refine(
+        self,
+        *,
+        model_fn,
+        batch_size,
+        height,
+        width,
+        device,
+        condition,
+        base_uniform,
+        ratio_schedule,
+        nfe,
+        return_history,
+    ):
+        total_positions = int(height * width)
+        state = torch.full(
+            (batch_size, height, width),
+            fill_value=self.mask_token_id,
+            device=device,
+            dtype=torch.long,
+        )
+        locked_mask = torch.zeros_like(state, dtype=torch.bool)
+        history = None
+        if return_history:
+            history = {
+                "state_history": [state.clone()],
+                "proposal_history": [],
+                "locked_mask_history": [locked_mask.clone()],
+            }
+
+        flat_noise = base_uniform.view(batch_size, -1)
+
+        for step_idx in range(nfe):
+            editable_mask = ~locked_mask
+            editable_counts = editable_mask.view(batch_size, -1).sum(dim=1)
+            if int(editable_counts.max().item()) <= 0:
+                if history is not None:
+                    history["proposal_history"].append(state.clone())
+                    history["state_history"].append(state.clone())
+                    history["locked_mask_history"].append(locked_mask.clone())
+                continue
+
+            logits, _, _ = self._predict_logits_from_editable_fraction(
+                model_fn=model_fn,
+                state=state,
+                locked_mask=locked_mask,
+                condition=condition,
+                height=height,
+                width=width,
+            )
+            flat_state = state.view(batch_size, -1)
+            flat_locked = locked_mask.view(batch_size, -1)
+            flat_logits = logits.permute(0, 2, 3, 1).reshape(batch_size, -1, self.num_classes)
+            proposal = flat_state.clone()
+
+            for batch_idx in range(batch_size):
+                unlocked_positions = torch.nonzero(~flat_locked[batch_idx], as_tuple=False).flatten()
+                if int(unlocked_positions.numel()) <= 0:
+                    continue
+
+                pixel_logits = flat_logits[batch_idx, unlocked_positions]
+                pixel_uniform = self._step_uniform(
+                    flat_noise[batch_idx, unlocked_positions],
+                    step_idx=step_idx,
+                    offset=1,
+                )
+                sampled_class, sampled_confidence, _ = self._sample_classes(
+                    pixel_logits,
+                    pixel_uniform=pixel_uniform,
+                    step_idx=step_idx,
+                    device=device,
+                )
+                proposal[batch_idx, unlocked_positions] = sampled_class.to(dtype=proposal.dtype)
+
+                lock_positions = self._select_lock_positions(
+                    unlocked_positions=unlocked_positions,
+                    sampled_confidence=sampled_confidence,
+                    flat_locked_row=flat_locked[batch_idx],
+                    flat_noise_row=flat_noise[batch_idx],
+                    ratio_schedule=ratio_schedule,
+                    step_idx=step_idx,
+                    nfe=nfe,
+                    total_positions=total_positions,
+                )
+                flat_locked[batch_idx, lock_positions] = True
+
+            proposal_state = proposal.view(batch_size, height, width)
+            state = proposal_state
+            locked_mask = flat_locked.view(batch_size, height, width)
+            if history is not None:
+                history["proposal_history"].append(proposal_state.clone())
+                history["state_history"].append(state.clone())
+                history["locked_mask_history"].append(locked_mask.clone())
+
+        return history if return_history else state
+
     def _sample_impl(
         self,
         *,
@@ -476,6 +641,19 @@ class SeededDiscreteMaskDiffusionSampler(nn.Module):
             )
         if self.refinement_mode == "remask_low_confidence":
             return self._remask_low_confidence(
+                model_fn=model_fn,
+                batch_size=batch_size,
+                height=height,
+                width=width,
+                device=device,
+                condition=condition,
+                base_uniform=base_uniform,
+                ratio_schedule=ratio_schedule,
+                nfe=nfe,
+                return_history=return_history,
+            )
+        if self.refinement_mode == "proposal_visible_refine":
+            return self._proposal_visible_refine(
                 model_fn=model_fn,
                 batch_size=batch_size,
                 height=height,
