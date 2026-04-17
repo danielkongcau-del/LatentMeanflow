@@ -179,6 +179,49 @@ class DiscreteMaskPriorTrainer(pl.LightningModule):
             )[:, 0]
         return mask_index.long().contiguous()
 
+    def _build_valid_mask(self, mask_index):
+        valid_mask = torch.ones_like(mask_index, dtype=torch.bool)
+        if self.ignore_index is not None:
+            valid_mask &= mask_index != int(self.ignore_index)
+        return valid_mask
+
+    def _validate_auxiliary_mask_onehot(self, mask_index, mask_onehot):
+        if mask_index.ndim != 3:
+            raise ValueError(
+                f"_validate_auxiliary_mask_onehot expects mask_index [B, H, W], got {tuple(mask_index.shape)}"
+            )
+        if mask_onehot.ndim != 4 or mask_onehot.shape[1] != self.num_classes:
+            raise ValueError(
+                "_validate_auxiliary_mask_onehot expects mask_onehot [B, K, H, W] with "
+                f"K={self.num_classes}, got {tuple(mask_onehot.shape)}"
+            )
+
+        valid_mask = self._build_valid_mask(mask_index)
+        if not torch.any(valid_mask):
+            return
+
+        derived_mask_index = torch.argmax(mask_onehot, dim=1)
+        channel_sum = mask_onehot.sum(dim=1)
+        expected_sum = torch.ones_like(channel_sum, dtype=mask_onehot.dtype)
+        valid_channel_mass = torch.isclose(
+            channel_sum[valid_mask],
+            expected_sum[valid_mask],
+            atol=1.0e-4,
+            rtol=0.0,
+        )
+        valid_class_match = derived_mask_index[valid_mask] == mask_index[valid_mask]
+
+        if torch.all(valid_channel_mass) and torch.all(valid_class_match):
+            return
+
+        invalid_mass_count = int((~valid_channel_mass).sum().item())
+        disagree_count = int((~valid_class_match).sum().item())
+        raise ValueError(
+            "DiscreteMaskPriorTrainer batch simultaneously provided mask_index and mask_onehot, "
+            "but they disagree on valid pixels. Discrete route requires them to be consistent. "
+            f"invalid_onehot_mass_pixels={invalid_mass_count}, disagree_pixels={disagree_count}"
+        )
+
     def encode_batch(self, batch):
         if self.mask_index_key not in batch:
             raise KeyError(
@@ -189,6 +232,7 @@ class DiscreteMaskPriorTrainer(pl.LightningModule):
 
         if self.mask_key in batch:
             mask_onehot = self._prepare_mask_onehot(batch[self.mask_key])
+            self._validate_auxiliary_mask_onehot(mask_index, mask_onehot)
         else:
             safe_mask_index = mask_index.clone()
             safe_mask_index = safe_mask_index.masked_fill(safe_mask_index < 0, 0)

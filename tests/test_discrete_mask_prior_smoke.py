@@ -1,6 +1,7 @@
 import unittest
 
 import torch
+import torch.nn.functional as F
 
 from latent_meanflow.objectives.discrete_mask_diffusion import DiscreteMaskDiffusionObjective
 from latent_meanflow.samplers.discrete_mask_diffusion import SeededDiscreteMaskDiffusionSampler
@@ -57,6 +58,10 @@ def _make_batch():
     return {"mask_index": mask_index}
 
 
+def _make_matching_onehot(mask_index, *, num_classes):
+    return F.one_hot(mask_index.clamp_min(0), num_classes=num_classes).permute(0, 3, 1, 2).float()
+
+
 class DiscreteMaskPriorSmokeTest(unittest.TestCase):
     def test_discrete_mask_prior_smoke(self):
         torch.manual_seed(7)
@@ -105,11 +110,52 @@ class DiscreteMaskPriorSmokeTest(unittest.TestCase):
         trainer = _make_trainer()
         batch = _make_batch()
         mask_index = batch["mask_index"]
-        mask_onehot = torch.nn.functional.one_hot(mask_index, num_classes=trainer.num_classes)
-        batch_without_index = {"mask_onehot": mask_onehot.float()}
+        mask_onehot = _make_matching_onehot(mask_index, num_classes=trainer.num_classes)
+        batch_without_index = {"mask_onehot": mask_onehot}
 
         with self.assertRaisesRegex(KeyError, "requires 'mask_index'"):
             trainer(batch_without_index)
+
+    def test_matching_mask_index_and_mask_onehot_should_pass(self):
+        trainer = _make_trainer()
+        batch = _make_batch()
+        mask_index = batch["mask_index"]
+        batch["mask_onehot"] = _make_matching_onehot(mask_index, num_classes=trainer.num_classes)
+
+        outputs = trainer(batch)
+        self.assertEqual(tuple(outputs["mask_onehot"].shape), (2, trainer.num_classes, 16, 16))
+        self.assertTrue(torch.equal(outputs["mask_index"], mask_index))
+
+    def test_inconsistent_mask_index_and_mask_onehot_should_fail(self):
+        trainer = _make_trainer()
+        batch = _make_batch()
+        mask_index = batch["mask_index"]
+        mask_onehot = _make_matching_onehot(mask_index, num_classes=trainer.num_classes)
+        mask_onehot[0, :, 0, 0] = 0.0
+        mask_onehot[0, 3, 0, 0] = 1.0
+        batch["mask_onehot"] = mask_onehot
+
+        with self.assertRaisesRegex(ValueError, "mask_index.*mask_onehot|mask_onehot.*mask_index"):
+            trainer(batch)
+
+    def test_ignore_index_zero_auxiliary_onehot_should_pass(self):
+        trainer = _make_trainer()
+        trainer.ignore_index = -1
+        trainer.objective.ignore_index = -1
+
+        batch = _make_batch()
+        mask_index = batch["mask_index"].clone()
+        mask_index[:, 0, 0] = -1
+        mask_onehot = _make_matching_onehot(mask_index, num_classes=trainer.num_classes)
+        mask_onehot[:, :, 0, 0] = 0.0
+        batch = {
+            "mask_index": mask_index,
+            "mask_onehot": mask_onehot,
+        }
+
+        outputs = trainer(batch)
+        self.assertEqual(int(outputs["mask_index"][0, 0, 0].item()), -1)
+        self.assertEqual(float(outputs["mask_onehot"][0, :, 0, 0].sum().item()), 0.0)
 
     def test_objective_non_full_range_schedule_should_fail(self):
         with self.assertRaisesRegex(ValueError, "full-range absorbing schedule"):
