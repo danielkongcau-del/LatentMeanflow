@@ -473,6 +473,11 @@ Checked-in baseline configs:
 - `configs/latent_diffusion_mask_prior_sit_tiny.yaml`
 - `configs/latent_diffusion_mask_prior_sit.yaml`
 
+Operational rules for this route:
+
+- `scripts/train_mask_prior.py` and `scripts/train_mask_prior_diffusion.py` now expose `--scale-lr true|false` explicitly and keep `resume` in safe mode by default.
+- `scripts/sample_mask_prior.py`, `scripts/sample_mask_prior_diffusion.py`, and `scripts/eval_mask_prior.py` require explicit checkpoint paths and do not silently fall back to `last.ckpt`.
+
 ### Latent FM Path
 
 Train the latent flow-matching prior on semantic tokenizer latents:

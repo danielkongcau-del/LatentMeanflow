@@ -40,6 +40,7 @@ the renderer.
 
 - Best checkpoint selection must use `val/base_error_mean`.
 - Do not choose checkpoints by latest timestamp or train visuals.
+- `scripts/sample_mask_prior.py` and `scripts/eval_mask_prior.py` require explicit checkpoint paths and do not fall back to `last.ckpt`.
 - Do not report only `NFE=1`.
 - The default `p(mask)` sweep is `NFE=8/4/2/1`.
 - The default frozen renderer sweep is also `NFE=8/4/2/1`.

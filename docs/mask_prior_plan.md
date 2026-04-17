@@ -132,6 +132,7 @@ Tiny pilot:
 ```bash
 python scripts/train_mask_prior.py \
   --config configs/latent_alphaflow_mask_prior_unet_tiny.yaml \
+  --scale-lr true \
   --gpus 0
 ```
 
@@ -140,6 +141,7 @@ Base AlphaFlow training:
 ```bash
 python scripts/train_mask_prior.py \
   --config configs/latent_alphaflow_mask_prior_unet.yaml \
+  --scale-lr true \
   --gpus 0
 ```
 
@@ -148,7 +150,7 @@ Sampling sweep:
 ```bash
 python scripts/sample_mask_prior.py \
   --config configs/latent_alphaflow_mask_prior_unet.yaml \
-  --ckpt <best_or_last_ckpt> \
+  --ckpt <best-mask-prior-ckpt> \
   --outdir outputs/mask_prior_samples/alphaflow_unet \
   --n-samples 32 \
   --batch-size 8 \
@@ -161,10 +163,15 @@ Evaluation:
 ```bash
 python scripts/eval_mask_prior.py \
   --config configs/latent_alphaflow_mask_prior_unet.yaml \
-  --ckpt <best_or_last_ckpt> \
+  --ckpt <best-mask-prior-ckpt> \
   --outdir outputs/mask_prior_eval/alphaflow_unet \
   --n-samples 32 \
   --batch-size 8 \
   --nfe-values 8 4 2 1 \
   --overwrite
 ```
+
+Notes:
+
+- `scripts/sample_mask_prior.py` and `scripts/eval_mask_prior.py` now require an explicit `--ckpt`; they no longer fall back to `last.ckpt`.
+- `scripts/train_mask_prior.py` now exposes `--scale-lr true|false` explicitly and keeps `resume` in safe mode by default.

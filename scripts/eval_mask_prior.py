@@ -27,7 +27,6 @@ from latent_meanflow.utils.palette import (
     resolve_gray_to_class_id,
 )
 from scripts.sample_latent_flow import (
-    find_latest_flow_ckpt,
     load_config,
     load_model,
     validate_ckpt_matches_config,
@@ -57,7 +56,15 @@ def parse_args():
         )
     )
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
-    parser.add_argument("--ckpt", type=Path, default=None)
+    parser.add_argument(
+        "--ckpt",
+        type=Path,
+        default=None,
+        help=(
+            "Required when --generated-root is not provided. "
+            "Pass the explicit checkpoint path; this script no longer falls back to last.ckpt."
+        ),
+    )
     parser.add_argument("--generated-root", type=Path, default=None)
     parser.add_argument("--outdir", type=Path, required=True)
     parser.add_argument("--split", type=str, default="validation")
@@ -571,9 +578,12 @@ def main():
 
     if generated_root is None:
         if ckpt_path is None:
-            ckpt_path = find_latest_flow_ckpt(args.config, config)
-        if ckpt_path is None or not ckpt_path.exists():
-            raise FileNotFoundError("Mask-prior checkpoint not found. Pass --ckpt explicitly.")
+            raise ValueError(
+                "Pass --ckpt explicitly when --generated-root is not provided. "
+                "This script no longer falls back to last.ckpt."
+            )
+        if not ckpt_path.exists():
+            raise FileNotFoundError(f"Mask-prior checkpoint not found: {ckpt_path}")
         validate_ckpt_matches_config(args.config, ckpt_path)
         model = load_model(config, ckpt_path, device=device)
         if args.two_step_time is not None and hasattr(model, "sampler") and hasattr(model.sampler, "two_step_time"):

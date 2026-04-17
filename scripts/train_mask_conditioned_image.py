@@ -3,7 +3,7 @@ import os
 import sys
 from pathlib import Path
 
-from _launch_utils import run_managed_subprocess
+from _launch_utils import parse_bool_arg, run_managed_subprocess
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -30,6 +30,17 @@ def parse_args():
     parser.add_argument("--max-epochs", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--resume", type=Path, default=None)
+    parser.add_argument(
+        "--scale-lr",
+        type=parse_bool_arg,
+        nargs="?",
+        const=True,
+        default=True,
+        help=(
+            "Pass an explicit scale_lr value through to train_latent_meanflow.py. "
+            "true reproduces the legacy effective-lr scaling by accumulate_grad_batches * ngpu * batch_size."
+        ),
+    )
     parser.add_argument("--run-test", action="store_true")
     parser.add_argument("--enable-image-logger", action="store_true")
     parser.add_argument("--image-log-frequency", type=int, default=None)
@@ -74,6 +85,7 @@ def build_command(args, config_path):
         cmd.extend(["--batch-size", str(args.batch_size)])
     if args.resume is not None:
         cmd.extend(["--resume", str(args.resume.resolve())])
+    cmd.extend(["--scale-lr", str(bool(args.scale_lr)).lower()])
     if args.run_test:
         cmd.append("--run-test")
     if args.enable_image_logger:

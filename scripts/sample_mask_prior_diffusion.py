@@ -20,7 +20,6 @@ for path in (REPO_ROOT, LDM_ROOT, TAMING_ROOT):
 
 from latent_meanflow.utils import colorize_mask_index
 from scripts.sample_latent_flow import (
-    find_latest_flow_ckpt,
     load_config,
     load_model,
     validate_ckpt_matches_config,
@@ -39,7 +38,12 @@ def parse_args():
         )
     )
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
-    parser.add_argument("--ckpt", type=Path, default=None)
+    parser.add_argument(
+        "--ckpt",
+        type=Path,
+        default=None,
+        help="Required. Pass the explicit checkpoint path; this script no longer falls back to last.ckpt.",
+    )
     parser.add_argument("--outdir", type=Path, required=True)
     parser.add_argument("--n-samples", type=int, default=32)
     parser.add_argument("--batch-size", type=int, default=8)
@@ -179,9 +183,11 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(int(args.seed))
 
-    ckpt_path = args.ckpt or find_latest_flow_ckpt(args.config, config)
-    if ckpt_path is None or not ckpt_path.exists():
-        raise FileNotFoundError("Mask-prior checkpoint not found. Pass --ckpt explicitly.")
+    if args.ckpt is None:
+        raise ValueError("Pass --ckpt explicitly. This script no longer falls back to last.ckpt.")
+    ckpt_path = args.ckpt.resolve()
+    if not ckpt_path.exists():
+        raise FileNotFoundError(f"Mask-prior checkpoint not found: {ckpt_path}")
     validate_ckpt_matches_config(args.config, ckpt_path)
 
     outdir = args.outdir.resolve()

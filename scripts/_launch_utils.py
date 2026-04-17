@@ -1,10 +1,22 @@
 import os
 import signal
 import subprocess
+from pathlib import Path
 
 
 _GRACEFUL_TIMEOUT_SECONDS = 10
 _FORCE_TIMEOUT_SECONDS = 5
+
+
+def parse_bool_arg(value):
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "t", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "f", "no", "n", "off"}:
+        return False
+    raise ValueError(f"Expected a boolean value, got {value!r}")
 
 
 def normalize_gpus_arg(gpus):
@@ -26,6 +38,28 @@ def normalize_gpus_arg(gpus):
     if count == 1:
         return text
     return ",".join(str(i) for i in range(count))
+
+
+def count_devices_for_lr_scaling(gpus):
+    normalized = normalize_gpus_arg(gpus)
+    if normalized is None:
+        return 1
+    return len(str(normalized).strip(",").split(","))
+
+
+def resolve_resume_logdir(resume_path):
+    resume_path = Path(resume_path).resolve()
+    if not resume_path.exists():
+        raise FileNotFoundError(f"Resume path not found: {resume_path}")
+    if resume_path.is_dir():
+        return resume_path
+    return resume_path.parent.parent
+
+
+def resume_run_matches_config(resume_logdir, config_path):
+    run_dir_name = Path(resume_logdir).name.lower()
+    config_stem = Path(config_path).stem.lower()
+    return run_dir_name == config_stem or run_dir_name.endswith(f"_{config_stem}")
 
 
 def _terminate_process(process, signum):

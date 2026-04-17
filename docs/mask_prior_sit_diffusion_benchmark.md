@@ -82,6 +82,7 @@ Use the tiny config for shape checks and deliberate overfit:
 ```bash
 python scripts/train_mask_prior_diffusion.py \
   --config configs/latent_diffusion_mask_prior_sit_tiny.yaml \
+  --scale-lr true \
   --gpus 0
 ```
 
@@ -96,6 +97,7 @@ Success criteria for the tiny pilot:
 ```bash
 python scripts/train_mask_prior_diffusion.py \
   --config configs/latent_diffusion_mask_prior_sit.yaml \
+  --scale-lr true \
   --gpus 0
 ```
 
@@ -112,6 +114,9 @@ python scripts/sample_mask_prior_diffusion.py \
   --seed 23 \
   --overwrite
 ```
+
+The sampling and evaluation scripts in this benchmark require explicit
+checkpoint paths. They do not fall back to `last.ckpt`.
 
 ## Shared Evaluation Protocol
 

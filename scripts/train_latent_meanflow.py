@@ -5,7 +5,14 @@ from pathlib import Path
 
 from omegaconf import OmegaConf
 
-from _launch_utils import normalize_gpus_arg, run_managed_subprocess
+from _launch_utils import (
+    count_devices_for_lr_scaling,
+    normalize_gpus_arg,
+    parse_bool_arg,
+    resolve_resume_logdir,
+    resume_run_matches_config,
+    run_managed_subprocess,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_ROOT = Path(__file__).resolve().parent
@@ -38,6 +45,17 @@ def parse_args():
     parser.add_argument("--max-epochs", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--resume", type=Path, default=None)
+    parser.add_argument(
+        "--scale-lr",
+        type=parse_bool_arg,
+        nargs="?",
+        const=True,
+        default=True,
+        help=(
+            "Pass an explicit scale_lr value to the vendored launcher. "
+            "true reproduces the legacy effective-lr scaling by accumulate_grad_batches * ngpu * batch_size."
+        ),
+    )
     parser.add_argument(
         "--run-test",
         action="store_true",
@@ -211,21 +229,6 @@ def has_any_dotlist_style_override(args):
     return bool(args.overrides) or has_wrapper_dotlist_flags(args)
 
 
-def resolve_resume_logdir(resume_path):
-    resume_path = Path(resume_path).resolve()
-    if not resume_path.exists():
-        raise FileNotFoundError(f"Resume path not found: {resume_path}")
-    if resume_path.is_dir():
-        return resume_path
-    return resume_path.parent.parent
-
-
-def resume_run_matches_config(resume_logdir, config_path):
-    run_dir_name = Path(resume_logdir).name.lower()
-    config_stem = Path(config_path).stem.lower()
-    return run_dir_name == config_stem or run_dir_name.endswith(f"_{config_stem}")
-
-
 def validate_resume_request(args, config_path=None, resume_logdir=None):
     if not is_resume_mode(args):
         return
@@ -274,6 +277,7 @@ def build_command(args, config_path, tokenizer_config_path, tokenizer_ckpt):
         cmd[3:3] = ["--name", resolve_run_name(args, config_path)]
     if args.resume:
         cmd.extend(["--resume", str(args.resume.resolve())])
+    cmd.extend(["--scale_lr", str(bool(args.scale_lr)).lower()])
     if args.gpus:
         cmd.extend(["--gpus", normalize_gpus_arg(args.gpus)])
     if args.max_epochs is not None:
@@ -294,6 +298,32 @@ def build_command(args, config_path, tokenizer_config_path, tokenizer_ckpt):
     if should_pass_dotlist_overrides(args):
         cmd.extend(args.overrides)
     return cmd
+
+
+def print_learning_rate_summary(*, config, config_path, args, note_prefix="[train_latent_meanflow]"):
+    if config is None or config_path is None:
+        print(
+            f"{note_prefix} scale_lr={bool(args.scale_lr)}. "
+            "Safe resume is reusing the saved run config, so effective_lr is determined from that saved config."
+        )
+        return
+
+    batch_size = int(args.batch_size) if args.batch_size is not None else int(config.data.params.batch_size)
+    accumulate_grad_batches = int(
+        OmegaConf.select(config, "lightning.trainer.accumulate_grad_batches", default=1)
+    )
+    ngpu = count_devices_for_lr_scaling(args.gpus)
+    base_lr = float(config.model.base_learning_rate)
+    effective_lr = (
+        float(base_lr)
+        if not bool(args.scale_lr)
+        else float(base_lr) * float(batch_size) * float(accumulate_grad_batches) * float(ngpu)
+    )
+    print(
+        f"{note_prefix} base_lr={base_lr:.2e}, scale_lr={bool(args.scale_lr)}, "
+        f"batch_size={batch_size}, accumulate_grad_batches={accumulate_grad_batches}, "
+        f"num_devices={ngpu}, effective_lr={effective_lr:.2e}, config={config_path.resolve()}"
+    )
 
 
 def main():
@@ -328,6 +358,7 @@ def main():
             f"Tokenizer checkpoint not found: {tokenizer_ckpt}. "
             "Pass --tokenizer-ckpt explicitly or train the referenced tokenizer first."
         )
+    print_learning_rate_summary(config=config, config_path=config_path, args=args)
     cmd = build_command(args, config_path, tokenizer_config_path, tokenizer_ckpt)
     print("Running:", " ".join(cmd))
     run_managed_subprocess(cmd, cwd=REPO_ROOT, env=build_env())
