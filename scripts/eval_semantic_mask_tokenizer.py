@@ -227,6 +227,16 @@ def _build_sample_stem(global_index, mask_path):
     return f"{int(global_index):06}_{stem}"
 
 
+def _move_batch_tensors_to_device(batch, device):
+    moved = {}
+    for key, value in batch.items():
+        if isinstance(value, torch.Tensor):
+            moved[key] = value.to(device=device, non_blocking=True)
+        else:
+            moved[key] = value
+    return moved
+
+
 @torch.no_grad()
 def main():
     args = parse_args()
@@ -271,7 +281,8 @@ def main():
 
     global_index = 0
     for batch in dataloader:
-        outputs = model(batch, sample_posterior=False)
+        batch_on_device = _move_batch_tensors_to_device(batch, device=model.device)
+        outputs = model(batch_on_device, sample_posterior=False)
         target_masks = outputs["mask_index"].detach().cpu().numpy()
         recon_masks = outputs["recon_mask_index"].detach().cpu().numpy()
         mask_paths = _normalize_paths(batch.get("mask_path"), batch_size=target_masks.shape[0])
