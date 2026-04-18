@@ -1,4 +1,5 @@
 from copy import deepcopy
+import traceback
 
 import pytorch_lightning as pl
 import torch
@@ -563,6 +564,17 @@ class SemanticMaskVQAutoencoder(pl.LightningModule):
             raise ValueError(f"Expected mask_index tensor with shape [B, H, W], got {tuple(mask_index.shape)}")
         return mask_index.long()
 
+    def _normalize_scan_mask_index(self, mask_index):
+        mask_index = torch.as_tensor(mask_index)
+        if mask_index.ndim == 2:
+            mask_index = mask_index.unsqueeze(0)
+        elif mask_index.ndim != 3:
+            raise ValueError(
+                "Expected dataset mask_index sample with shape [H, W] or [B, H, W], "
+                f"got {tuple(mask_index.shape)}"
+            )
+        return mask_index.long()
+
     def _normalize_mask_onehot(self, mask_onehot):
         mask_onehot = torch.as_tensor(mask_onehot)
         if mask_onehot.ndim != 4:
@@ -698,7 +710,7 @@ class SemanticMaskVQAutoencoder(pl.LightningModule):
                     "SemanticMaskVQAutoencoder class-count scan requires train dataset samples to include "
                     f"'{self.mask_index_key}'."
                 )
-            mask_index = self._normalize_mask_index(sample[self.mask_index_key]).view(-1)
+            mask_index = self._normalize_scan_mask_index(sample[self.mask_index_key]).view(-1)
             if self.loss.ignore_index is not None:
                 mask_index = mask_index[mask_index != int(self.loss.ignore_index)]
             if int(mask_index.numel()) <= 0:
@@ -712,15 +724,26 @@ class SemanticMaskVQAutoencoder(pl.LightningModule):
                 )
         return counts
 
-    def _broadcast_class_counts(self, class_counts):
+    def _broadcast_class_counts(self, class_counts, *, scan_failed=False):
         device = self.device if isinstance(self.device, torch.device) else torch.device("cpu")
         if device.type not in {"cpu", "cuda"}:
             device = torch.device("cpu")
+        status_tensor = torch.ones(1, dtype=torch.int64, device=device)
         counts_tensor = torch.zeros(self.num_classes, dtype=torch.float64, device=device)
-        if class_counts is not None:
+        if scan_failed:
+            status_tensor.zero_()
+        elif class_counts is not None:
             counts_tensor.copy_(class_counts.to(device=device, dtype=torch.float64))
         if _dist_is_initialized():
+            dist.broadcast(status_tensor, src=0)
+            if int(status_tensor.item()) == 0:
+                raise RuntimeError(
+                    "SemanticMaskVQAutoencoder class-count scan failed on global rank 0. "
+                    "See the rank-0 traceback above."
+                )
             dist.broadcast(counts_tensor, src=0)
+        elif int(status_tensor.item()) == 0:
+            raise RuntimeError("SemanticMaskVQAutoencoder class-count scan failed.")
         return counts_tensor.cpu().to(dtype=torch.float32)
 
     def _maybe_configure_loss_class_balance(self):
@@ -732,9 +755,18 @@ class SemanticMaskVQAutoencoder(pl.LightningModule):
             return
 
         class_counts = None
+        scan_failed = False
         if self._is_global_zero():
-            class_counts = self._scan_train_class_counts()
-        class_counts = self._broadcast_class_counts(class_counts)
+            try:
+                class_counts = self._scan_train_class_counts()
+            except Exception:
+                scan_failed = True
+                print(
+                    "[SemanticMaskVQAutoencoder] class-balance scan failed on global rank 0.",
+                    flush=True,
+                )
+                traceback.print_exc()
+        class_counts = self._broadcast_class_counts(class_counts, scan_failed=scan_failed)
         configure_class_balance(class_counts)
         class_weight_summary = getattr(self.loss, "class_weight_summary", None)
         weight_summary = class_weight_summary() if callable(class_weight_summary) else None

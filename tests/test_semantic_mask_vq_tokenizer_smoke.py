@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import torch
 import torch.nn.functional as F
@@ -160,6 +161,23 @@ class SemanticMaskVQTokenizerSmokeTest(unittest.TestCase):
         self.assertIn("class_weight_min", outputs["loss_dict"])
         self.assertIn("class_weight_max", outputs["loss_dict"])
         self.assertTrue(torch.isfinite(outputs["loss_dict"]["mask_ce_unweighted"]))
+
+    def test_class_count_scan_accepts_unbatched_dataset_samples(self):
+        model = _make_model(
+            loss_params={
+                "class_balance_mode": "inverse_sqrt_frequency",
+            }
+        )
+        dataset = _ToyTokenizerMaskDataset(length=4, num_classes=4)
+        model._trainer = SimpleNamespace(
+            datamodule=SimpleNamespace(datasets={"train": dataset}),
+            is_global_zero=True,
+            world_size=1,
+        )
+
+        class_counts = model._scan_train_class_counts()
+        expected = torch.full((4,), 64.0, dtype=torch.float64)
+        self.assertTrue(torch.equal(class_counts, expected))
 
     def test_strict_mask_index_mask_onehot_consistency(self):
         model = _make_model()
