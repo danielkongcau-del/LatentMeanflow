@@ -51,6 +51,13 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=23)
     parser.add_argument("--two-step-time", type=float, default=None)
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--set",
+        dest="overrides",
+        action="append",
+        default=[],
+        help="Extra OmegaConf dotlist override. Repeat as needed, without a leading --.",
+    )
     return parser.parse_args()
 
 
@@ -198,7 +205,7 @@ def generate_mask_prior_sweep(*, model, outdir, nfe_values, seed, n_samples, bat
 @torch.no_grad()
 def main():
     args = parse_args()
-    config = load_config(args.config)
+    config = load_config(args.config, overrides=args.overrides)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(int(args.seed))
 
@@ -229,13 +236,17 @@ def main():
         "task": "p(semantic_mask)",
         "config": str(args.config.resolve()),
         "checkpoint": str(ckpt_path.resolve()),
+        "config_overrides": list(args.overrides),
         "seed": int(args.seed),
         "n_samples": int(args.n_samples),
         "batch_size": int(args.batch_size),
         "nfe_values": [int(value) for value in args.nfe_values],
         "monitor": getattr(model, "monitor", None),
         "num_classes": int(model.num_classes),
-        "mask_spatial_shape": [int(model.latent_spatial_shape[0]), int(model.latent_spatial_shape[1])],
+        "mask_spatial_shape": [
+            int(v) for v in getattr(model, "mask_spatial_shape", model.latent_spatial_shape)
+        ],
+        "latent_spatial_shape": [int(v) for v in model.latent_spatial_shape],
         "results": summary_rows,
     }
 

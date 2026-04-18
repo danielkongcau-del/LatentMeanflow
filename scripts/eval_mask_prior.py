@@ -87,6 +87,13 @@ def parse_args():
     )
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--expected-monitor", type=str, default="val/base_error_mean")
+    parser.add_argument(
+        "--set",
+        dest="overrides",
+        action="append",
+        default=[],
+        help="Extra OmegaConf dotlist override. Repeat as needed, without a leading --.",
+    )
     return parser.parse_args()
 
 
@@ -565,7 +572,7 @@ def _write_markdown_report(path, summary):
 @torch.no_grad()
 def main():
     args = parse_args()
-    config = load_config(args.config)
+    config = load_config(args.config, overrides=args.overrides)
     monitor = _check_monitor(config, expected_monitor=args.expected_monitor)
     num_classes, ignore_index = _resolve_label_spec_metadata(args.label_spec)
     outdir = args.outdir.resolve()
@@ -752,6 +759,7 @@ def main():
     summary = {
         "task": "p(semantic_mask)",
         "config": str(args.config.resolve()),
+        "config_overrides": list(args.overrides),
         "checkpoint": None if ckpt_path is None else str(ckpt_path),
         "generated_root": str(generated_root),
         "monitor": monitor,

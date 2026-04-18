@@ -46,10 +46,14 @@ def parse_args():
     return parser.parse_args()
 
 
-def load_config(config_path):
+def load_config(config_path, overrides=None):
+    config_path = Path(config_path)
     if not config_path.exists():
         raise FileNotFoundError(f"Config file not found: {config_path}")
-    return OmegaConf.load(config_path)
+    config = OmegaConf.load(config_path)
+    if overrides:
+        config = OmegaConf.merge(config, OmegaConf.from_dotlist(list(overrides)))
+    return config
 
 
 def resolve_run_tag(config_path, config):

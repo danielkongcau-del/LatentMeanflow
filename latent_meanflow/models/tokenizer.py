@@ -13,6 +13,30 @@ class SemanticTokenizerAdapter(torch.nn.Module):
         self.tokenizer = tokenizer
 
     @classmethod
+    def from_config(
+        cls,
+        config_path,
+        *,
+        device=None,
+        eval_mode=True,
+        freeze=True,
+    ):
+        config_path = Path(config_path)
+        if not config_path.exists():
+            raise FileNotFoundError(f"Tokenizer config not found: {config_path}")
+
+        config = OmegaConf.load(config_path)
+        tokenizer = instantiate_from_config(config.model)
+
+        if freeze:
+            tokenizer.requires_grad_(False)
+        if eval_mode:
+            tokenizer.eval()
+        if device is not None:
+            tokenizer = tokenizer.to(device)
+        return cls(tokenizer)
+
+    @classmethod
     def from_pretrained(
         cls,
         config_path,

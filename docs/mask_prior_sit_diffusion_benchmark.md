@@ -15,8 +15,37 @@ Current conclusion:
 Next mainline:
 
 - `mask-only semantic tokenizer -> latent/token prior`
-- the current patch implements the tokenizer half only
-- the latent/token prior is still `not implemented yet`
+- the tokenizer has passed reconstruction review and is now treated as fixed
+- the current patch implements a frozen-tokenizer continuous latent diffusion
+  prior v1
+- codebook / VQ token priors are still `not implemented yet`
+
+## Frozen-Tokenizer Latent Prior v1
+
+The new upstream control baseline after tokenizer validation is:
+
+- frozen mask-only semantic tokenizer
+- deterministic latent target from
+  `encode_batch(..., sample_posterior=False)`
+- continuous latent diffusion prior over `z`
+- decode path:
+  `sample latent z -> tokenizer.decode_latents(z) -> semantic_mask`
+
+Why this route exists:
+
+- it isolates the representation-layer change first
+- it avoids mixing in a codebook / token prior at the same time
+- it provides a clean control baseline against the checked-in direct
+  pixel-space routes
+
+This patch does **not** implement:
+
+- codebook / VQ tokenizer
+- token autoregressive prior
+- latent discrete diffusion
+- latent flow / AlphaFlow prior
+- image branch coupling
+- structural auxiliary losses
 
 This document defines the next apples-to-apples benchmark for the project-layer
 upstream route:
@@ -141,6 +170,29 @@ Interpretation:
   likely missing a more basic multimodal layout mechanism
 
 All three routes still model `p(semantic_mask)` only.
+
+Frozen-tokenizer latent prior control baseline:
+
+- trainer: `latent_meanflow.trainers.semantic_mask_latent_prior_trainer.SemanticMaskLatentPriorTrainer`
+- tokenizer:
+  - `configs/semantic_mask_tokenizer_mid_plus_256.yaml`
+  - checkpoint passed explicitly at runtime via `--set`
+- backbone: project-layer `LatentIntervalSiT`
+- objective: standard Gaussian diffusion training
+- sampler: DDIM-style deterministic few-step sampler
+- configs:
+  - `configs/latent_semantic_mask_prior_diffusion_sit_tiny.yaml`
+  - `configs/latent_semantic_mask_prior_diffusion_sit.yaml`
+- decisive diagnostics:
+  - `configs/diagnostics/latent_semantic_mask_prior_diffusion_memorize_1.yaml`
+  - `configs/diagnostics/latent_semantic_mask_prior_diffusion_memorize_4.yaml`
+
+Interpretation:
+
+- if frozen-tokenizer latent prior passes `memorize_4`, then the direct
+  pixel-space bottleneck was the main failure source
+- if it still collapses badly, the next mainline should move toward a true
+  token / codebook prior rather than more direct pixel-space patching
 
 ## Fixed Comparison Matrix
 
@@ -306,6 +358,49 @@ Phase A notes:
 - this patch does not add boundary / area / adjacency / topology auxiliary
   losses yet
 
+Frozen-tokenizer latent prior control commands:
+
+```bash
+python scripts/train_mask_prior_diffusion.py \
+  --config configs/latent_semantic_mask_prior_diffusion_sit_tiny.yaml \
+  --set model.params.tokenizer_ckpt_path=/path/to/semantic_mask_tokenizer.ckpt \
+  --scale-lr true \
+  --gpus 0
+
+python scripts/train_mask_prior_diffusion.py \
+  --config configs/latent_semantic_mask_prior_diffusion_sit.yaml \
+  --set model.params.tokenizer_ckpt_path=/path/to/semantic_mask_tokenizer.ckpt \
+  --scale-lr true \
+  --gpus 0
+
+python scripts/train_mask_prior_diffusion.py \
+  --config configs/diagnostics/latent_semantic_mask_prior_diffusion_memorize_1.yaml \
+  --set model.params.tokenizer_ckpt_path=/path/to/semantic_mask_tokenizer.ckpt \
+  --scale-lr false \
+  --gpus 0
+
+python scripts/train_mask_prior_diffusion.py \
+  --config configs/diagnostics/latent_semantic_mask_prior_diffusion_memorize_4.yaml \
+  --set model.params.tokenizer_ckpt_path=/path/to/semantic_mask_tokenizer.ckpt \
+  --scale-lr false \
+  --gpus 0
+```
+
+Frozen-tokenizer latent prior sampling:
+
+```bash
+python scripts/sample_mask_prior_diffusion.py \
+  --config configs/latent_semantic_mask_prior_diffusion_sit.yaml \
+  --set model.params.tokenizer_ckpt_path=/path/to/semantic_mask_tokenizer.ckpt \
+  --ckpt <best-latent-prior-ckpt> \
+  --outdir outputs/mask_prior_samples/latent_semantic_sit \
+  --n-samples 32 \
+  --batch-size 8 \
+  --nfe-values 8 4 2 1 \
+  --seed 23 \
+  --overwrite
+```
+
 ## Shared Evaluation Protocol
 
 The benchmark intentionally reuses the checked-in evaluation scripts without
@@ -324,6 +419,24 @@ python scripts/eval_mask_prior.py \
   --seed 23 \
   --overwrite
 ```
+
+Frozen-tokenizer latent prior evaluation:
+
+```bash
+python scripts/eval_mask_prior.py \
+  --config configs/latent_semantic_mask_prior_diffusion_sit.yaml \
+  --set model.params.tokenizer_ckpt_path=/path/to/semantic_mask_tokenizer.ckpt \
+  --ckpt <best-latent-prior-ckpt> \
+  --outdir outputs/mask_prior_eval/latent_semantic_sit \
+  --n-samples 32 \
+  --batch-size 8 \
+  --nfe-values 8 4 2 1 \
+  --seed 23 \
+  --overwrite
+```
+
+`memorize_1` and `memorize_4` remain deliberate overfit diagnostics, not
+generalization benchmarks.
 
 Diagnostic sampling and evaluation reuse the same checked-in scripts:
 
