@@ -684,8 +684,14 @@ class SemanticMaskVQAutoencoder(pl.LightningModule):
 
     def _scan_train_class_counts(self):
         dataset = self._get_train_dataset()
+        dataset_length = int(len(dataset))
         counts = torch.zeros(self.num_classes, dtype=torch.float64)
-        for sample_idx in range(len(dataset)):
+        self._log_info(
+            "[SemanticMaskVQAutoencoder] "
+            f"scanning train class counts for class-balanced CE over {dataset_length} samples"
+        )
+        progress_stride = max(min(dataset_length // 4, 500), 100)
+        for sample_idx in range(dataset_length):
             sample = dataset[sample_idx]
             if self.mask_index_key not in sample:
                 raise KeyError(
@@ -699,6 +705,11 @@ class SemanticMaskVQAutoencoder(pl.LightningModule):
                 continue
             bincount = torch.bincount(mask_index.clamp(min=0), minlength=self.num_classes)
             counts += bincount[: self.num_classes].to(dtype=counts.dtype)
+            if (sample_idx + 1) % progress_stride == 0 or (sample_idx + 1) == dataset_length:
+                self._log_info(
+                    "[SemanticMaskVQAutoencoder] "
+                    f"class-count scan progress {sample_idx + 1}/{dataset_length}"
+                )
         return counts
 
     def _broadcast_class_counts(self, class_counts):

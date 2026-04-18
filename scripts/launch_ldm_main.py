@@ -1,5 +1,6 @@
 import os
 import runpy
+import signal
 import sys
 from pathlib import Path
 
@@ -27,11 +28,49 @@ def configure_runtime_warnings():
     setter(False)
 
 
+def configure_safe_signal_handlers():
+    disable_flag = os.environ.get("LMF_DISABLE_LDM_SIGNAL_HANDLERS", "1").strip().lower()
+    if disable_flag in {"0", "false", "no"}:
+        return
+
+    ignored_signals = []
+    for name in ("SIGUSR1", "SIGUSR2"):
+        signum = getattr(signal, name, None)
+        if signum is not None:
+            ignored_signals.append(signum)
+    if not ignored_signals:
+        return
+
+    def _ignore_usr_signal(signum, frame):
+        del frame
+        try:
+            signal_name = signal.Signals(signum).name
+        except Exception:
+            signal_name = str(signum)
+        print(
+            f"[launch_ldm_main] Ignoring {signal_name} to avoid vendored checkpoint/debug "
+            "signal handlers deadlocking DDP startup.",
+            flush=True,
+        )
+
+    original_signal = signal.signal
+
+    def _patched_signal(signum, handler):
+        if signum in ignored_signals:
+            return original_signal(signum, _ignore_usr_signal)
+        return original_signal(signum, handler)
+
+    for signum in ignored_signals:
+        original_signal(signum, _ignore_usr_signal)
+    signal.signal = _patched_signal
+
+
 def main():
     if not LDM_MAIN.exists():
         raise FileNotFoundError(f"latent-diffusion entrypoint not found: {LDM_MAIN}")
 
     configure_runtime_warnings()
+    configure_safe_signal_handlers()
     sys.argv[0] = str(LDM_MAIN)
     runpy.run_path(str(LDM_MAIN), run_name="__main__")
 
