@@ -86,7 +86,13 @@ def _write_tokenizer_artifacts(tmpdir):
     return config_path, ckpt_path, tokenizer.latent_spatial_shape, tokenizer.latent_channels
 
 
-def _make_prior_trainer(*, tokenizer_config_path, tokenizer_ckpt_path, latent_spatial_shape):
+def _make_prior_trainer(
+    *,
+    tokenizer_config_path,
+    tokenizer_ckpt_path,
+    latent_spatial_shape,
+    latent_normalization_config=None,
+):
     return SemanticMaskLatentPriorTrainer(
         tokenizer_config_path=str(tokenizer_config_path),
         tokenizer_ckpt_path=None if tokenizer_ckpt_path is None else str(tokenizer_ckpt_path),
@@ -124,6 +130,7 @@ def _make_prior_trainer(*, tokenizer_config_path, tokenizer_ckpt_path, latent_sp
         tokenizer_sample_posterior=False,
         freeze_tokenizer=True,
         log_sample_nfe=2,
+        latent_normalization_config=latent_normalization_config,
     )
 
 
@@ -232,6 +239,31 @@ class SemanticMaskLatentPriorSmokeTest(unittest.TestCase):
             encoded_b = trainer.encode_batch(batch)
             self.assertTrue(torch.allclose(encoded_a["z"], encoded_b["z"]))
             self.assertTrue(torch.equal(encoded_a["mask_index"], encoded_b["mask_index"]))
+
+    def test_latent_normalization_bridge_round_trip(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path, ckpt_path, latent_spatial_shape, latent_channels = _write_tokenizer_artifacts(tmpdir)
+            trainer = _make_prior_trainer(
+                tokenizer_config_path=config_path,
+                tokenizer_ckpt_path=ckpt_path,
+                latent_spatial_shape=latent_spatial_shape,
+                latent_normalization_config={
+                    "mode": "per_channel_affine",
+                    "per_channel_mean": [0.25] * latent_channels,
+                    "per_channel_std": [2.0] * latent_channels,
+                    "std_floor": 1.0e-6,
+                },
+            )
+            batch = _make_batch()
+
+            encoded = trainer.encode_batch(batch)
+            self.assertFalse(torch.allclose(encoded["z"], encoded["z_tokenizer"]))
+            restored = trainer.denormalize_latents(encoded["z"])
+            self.assertTrue(torch.allclose(restored, encoded["z_tokenizer"], atol=1.0e-6, rtol=1.0e-6))
+
+            decoded_from_normalized = trainer.decode_latents(encoded["z"])
+            decoded_from_raw = trainer.tokenizer.decode_latents(encoded["z_tokenizer"])
+            self.assertTrue(torch.equal(decoded_from_normalized["mask_index"], decoded_from_raw["mask_index"]))
 
 
 if __name__ == "__main__":

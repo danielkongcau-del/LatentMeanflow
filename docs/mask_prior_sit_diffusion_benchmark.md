@@ -361,27 +361,44 @@ Phase A notes:
 Frozen-tokenizer latent prior control commands:
 
 ```bash
+python scripts/eval_semantic_mask_tokenizer.py \
+  --config configs/semantic_mask_tokenizer_mid_plus_256.yaml \
+  --ckpt /path/to/semantic_mask_tokenizer.ckpt \
+  --outdir outputs/semantic_mask_tokenizer_eval/mid_plus_validation \
+  --split validation \
+  --n-samples 256 \
+  --batch-size 8 \
+  --overwrite
+
 python scripts/train_mask_prior_diffusion.py \
   --config configs/latent_semantic_mask_prior_diffusion_sit_tiny.yaml \
   --set model.params.tokenizer_ckpt_path=/path/to/semantic_mask_tokenizer.ckpt \
+  --set model.params.latent_normalization_config.mode=per_channel_affine \
+  --set model.params.latent_normalization_config.stats_path=outputs/semantic_mask_tokenizer_eval/mid_plus_validation/latent_stats.json \
   --scale-lr true \
   --gpus 0
 
 python scripts/train_mask_prior_diffusion.py \
   --config configs/latent_semantic_mask_prior_diffusion_sit.yaml \
   --set model.params.tokenizer_ckpt_path=/path/to/semantic_mask_tokenizer.ckpt \
+  --set model.params.latent_normalization_config.mode=per_channel_affine \
+  --set model.params.latent_normalization_config.stats_path=outputs/semantic_mask_tokenizer_eval/mid_plus_validation/latent_stats.json \
   --scale-lr true \
   --gpus 0
 
 python scripts/train_mask_prior_diffusion.py \
   --config configs/diagnostics/latent_semantic_mask_prior_diffusion_memorize_1.yaml \
   --set model.params.tokenizer_ckpt_path=/path/to/semantic_mask_tokenizer.ckpt \
+  --set model.params.latent_normalization_config.mode=per_channel_affine \
+  --set model.params.latent_normalization_config.stats_path=outputs/semantic_mask_tokenizer_eval/mid_plus_validation/latent_stats.json \
   --scale-lr false \
   --gpus 0
 
 python scripts/train_mask_prior_diffusion.py \
   --config configs/diagnostics/latent_semantic_mask_prior_diffusion_memorize_4.yaml \
   --set model.params.tokenizer_ckpt_path=/path/to/semantic_mask_tokenizer.ckpt \
+  --set model.params.latent_normalization_config.mode=per_channel_affine \
+  --set model.params.latent_normalization_config.stats_path=outputs/semantic_mask_tokenizer_eval/mid_plus_validation/latent_stats.json \
   --scale-lr false \
   --gpus 0
 ```
@@ -392,6 +409,8 @@ Frozen-tokenizer latent prior sampling:
 python scripts/sample_mask_prior_diffusion.py \
   --config configs/latent_semantic_mask_prior_diffusion_sit.yaml \
   --set model.params.tokenizer_ckpt_path=/path/to/semantic_mask_tokenizer.ckpt \
+  --set model.params.latent_normalization_config.mode=per_channel_affine \
+  --set model.params.latent_normalization_config.stats_path=outputs/semantic_mask_tokenizer_eval/mid_plus_validation/latent_stats.json \
   --ckpt <best-latent-prior-ckpt> \
   --outdir outputs/mask_prior_samples/latent_semantic_sit \
   --n-samples 32 \
@@ -426,6 +445,8 @@ Frozen-tokenizer latent prior evaluation:
 python scripts/eval_mask_prior.py \
   --config configs/latent_semantic_mask_prior_diffusion_sit.yaml \
   --set model.params.tokenizer_ckpt_path=/path/to/semantic_mask_tokenizer.ckpt \
+  --set model.params.latent_normalization_config.mode=per_channel_affine \
+  --set model.params.latent_normalization_config.stats_path=outputs/semantic_mask_tokenizer_eval/mid_plus_validation/latent_stats.json \
   --ckpt <best-latent-prior-ckpt> \
   --outdir outputs/mask_prior_eval/latent_semantic_sit \
   --n-samples 32 \

@@ -4,8 +4,10 @@ from copy import deepcopy
 import pytorch_lightning as pl
 import torch
 from ldm.util import instantiate_from_config
+from omegaconf import OmegaConf
 
 from latent_meanflow.models.tokenizer import SemanticTokenizerAdapter
+from latent_meanflow.utils.latent_normalization import build_latent_normalizer
 
 
 class SemanticMaskLatentPriorTrainer(pl.LightningModule):
@@ -20,12 +22,15 @@ class SemanticMaskLatentPriorTrainer(pl.LightningModule):
         tokenizer_sample_posterior=False,
         freeze_tokenizer=True,
         log_sample_nfe=8,
+        latent_normalization_config=None,
         monitor="val/base_error_mean",
         mask_key="mask_onehot",
         mask_index_key="mask_index",
     ):
         super().__init__()
-        self.save_hyperparameters(ignore=["backbone_config", "objective_config", "sampler_config"])
+        self.save_hyperparameters(
+            ignore=["backbone_config", "objective_config", "sampler_config", "latent_normalization_config"]
+        )
 
         if backbone_config is None or objective_config is None or sampler_config is None:
             raise ValueError(
@@ -49,6 +54,15 @@ class SemanticMaskLatentPriorTrainer(pl.LightningModule):
         self.mask_key = str(mask_key)
         self.mask_index_key = str(mask_index_key)
         self.learning_rate = 1.0e-4
+        if latent_normalization_config is None:
+            self.latent_normalization_config = None
+        elif OmegaConf.is_config(latent_normalization_config):
+            self.latent_normalization_config = OmegaConf.to_container(
+                latent_normalization_config,
+                resolve=True,
+            )
+        else:
+            self.latent_normalization_config = deepcopy(latent_normalization_config)
         self.tokenizer_config_path = str(tokenizer_config_path)
         self.tokenizer_ckpt_path = None if tokenizer_ckpt_path in {None, ""} else str(tokenizer_ckpt_path)
 
@@ -60,6 +74,10 @@ class SemanticMaskLatentPriorTrainer(pl.LightningModule):
         self.latent_spatial_shape = self.tokenizer.latent_spatial_shape
         self.num_classes = self.tokenizer.num_classes
         self.mask_spatial_shape = self._infer_mask_spatial_shape()
+        self.latent_normalizer = build_latent_normalizer(
+            self.latent_normalization_config,
+            latent_channels=self.latent_channels,
+        )
 
         backbone_cfg = deepcopy(backbone_config)
         backbone_cfg.setdefault("params", {})
@@ -165,19 +183,34 @@ class SemanticMaskLatentPriorTrainer(pl.LightningModule):
     def on_fit_start(self):
         super().on_fit_start()
         self._configure_objective_training_budget()
+        normalization_info = self.latent_normalizer.describe()
         self.print(
             "[SemanticMaskLatentPriorTrainer] "
             f"objective={self.objective_name}, tokenizer_has_ckpt={self.tokenizer_has_ckpt}, "
-            f"latent_spatial_shape={self.latent_spatial_shape}, mask_spatial_shape={self.mask_spatial_shape}"
+            f"latent_spatial_shape={self.latent_spatial_shape}, mask_spatial_shape={self.mask_spatial_shape}, "
+            "latent_normalization="
+            f"mode={normalization_info['mode']}, enabled={normalization_info['enabled']}, "
+            f"stats_path={normalization_info['stats_path']}, std_floor={normalization_info['std_floor']}, "
+            f"clamped_channel_count={normalization_info['clamped_channel_count']}"
         )
+
+    def normalize_latents(self, z):
+        return self.latent_normalizer.normalize(z)
+
+    def denormalize_latents(self, z):
+        return self.latent_normalizer.denormalize(z)
 
     def encode_batch(self, batch):
         self._require_tokenizer_ckpt()
-        return self.tokenizer.encode_batch(batch, sample_posterior=False)
+        encoded = self.tokenizer.encode_batch(batch, sample_posterior=False)
+        raw_z = encoded["z"]
+        encoded["z_tokenizer"] = raw_z
+        encoded["z"] = self.normalize_latents(raw_z)
+        return encoded
 
     def decode_latents(self, z):
         self._require_tokenizer_ckpt()
-        return self.tokenizer.decode_latents(z)
+        return self.tokenizer.decode_latents(self.denormalize_latents(z))
 
     def predict_field(self, z_t, t=None, condition=None, r=None, delta_t=None):
         if condition is not None:
@@ -221,14 +254,20 @@ class SemanticMaskLatentPriorTrainer(pl.LightningModule):
             unbiased=False,
         )
         latent_target_stats = {
-            "latent_target_mean": x_lat.detach().mean(),
-            "latent_target_std": x_lat.detach().std(unbiased=False),
-            "latent_target_abs_mean": x_lat.detach().abs().mean(),
-            "latent_target_channel_std_min": channel_std.min(),
-            "latent_target_channel_std_max": channel_std.max(),
+            "latent_input_mean": x_lat.detach().mean(),
+            "latent_input_std": x_lat.detach().std(unbiased=False),
+            "latent_input_abs_mean": x_lat.detach().abs().mean(),
+            "latent_input_channel_std_min": channel_std.min(),
+            "latent_input_channel_std_max": channel_std.max(),
+            "latent_normalization_enabled": torch.tensor(
+                1.0 if self.latent_normalizer.enabled else 0.0,
+                device=x_lat.device,
+                dtype=x_lat.dtype,
+            ),
         }
         return {
             "x_lat": x_lat,
+            "z_tokenizer": encoded["z_tokenizer"],
             "posterior": encoded["posterior"],
             "mask_index": encoded["mask_index"],
             "mask_onehot": encoded["mask_onehot"],

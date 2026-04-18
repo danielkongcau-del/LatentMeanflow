@@ -11,6 +11,9 @@ model:
     tokenizer_sample_posterior: false
     freeze_tokenizer: true
     log_sample_nfe: 8
+    latent_normalization_config:
+      mode: none
+      std_floor: 1.0e-6
     backbone_config:
       target: latent_meanflow.models.backbones.latent_interval_sit.LatentIntervalSiT
       params:

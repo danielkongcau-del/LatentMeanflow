@@ -457,7 +457,31 @@ Interpretation of the decisive diagnostics:
 - if it still collapses badly, the next mainline should move toward a true
   token / codebook prior rather than more direct pixel-space patching
 
+Recommended latent bridge:
+
+- use per-channel affine latent normalization for the frozen-tokenizer latent
+  prior
+- the checked-in configs keep `latent_normalization_config.mode=none` for
+  portability, but the intended runtime path is:
+  - export tokenizer latent stats with `scripts/eval_semantic_mask_tokenizer.py`
+  - pass `latent_normalization_config.mode=per_channel_affine`
+  - pass `latent_normalization_config.stats_path=<latent_stats.json>` via
+    `--set`
+
 Commands:
+
+Export tokenizer latent stats:
+
+```bash
+python scripts/eval_semantic_mask_tokenizer.py \
+  --config configs/semantic_mask_tokenizer_mid_plus_256.yaml \
+  --ckpt /path/to/semantic_mask_tokenizer.ckpt \
+  --outdir outputs/semantic_mask_tokenizer_eval/mid_plus_validation \
+  --split validation \
+  --n-samples 256 \
+  --batch-size 8 \
+  --overwrite
+```
 
 Tiny latent prior:
 
@@ -465,6 +489,8 @@ Tiny latent prior:
 python scripts/train_mask_prior_diffusion.py \
   --config configs/latent_semantic_mask_prior_diffusion_sit_tiny.yaml \
   --set model.params.tokenizer_ckpt_path=/path/to/semantic_mask_tokenizer.ckpt \
+  --set model.params.latent_normalization_config.mode=per_channel_affine \
+  --set model.params.latent_normalization_config.stats_path=outputs/semantic_mask_tokenizer_eval/mid_plus_validation/latent_stats.json \
   --scale-lr true \
   --gpus 0
 ```
@@ -475,6 +501,8 @@ Base latent prior:
 python scripts/train_mask_prior_diffusion.py \
   --config configs/latent_semantic_mask_prior_diffusion_sit.yaml \
   --set model.params.tokenizer_ckpt_path=/path/to/semantic_mask_tokenizer.ckpt \
+  --set model.params.latent_normalization_config.mode=per_channel_affine \
+  --set model.params.latent_normalization_config.stats_path=outputs/semantic_mask_tokenizer_eval/mid_plus_validation/latent_stats.json \
   --scale-lr true \
   --gpus 0
 ```
@@ -485,6 +513,8 @@ Memorize-1 diagnostic:
 python scripts/train_mask_prior_diffusion.py \
   --config configs/diagnostics/latent_semantic_mask_prior_diffusion_memorize_1.yaml \
   --set model.params.tokenizer_ckpt_path=/path/to/semantic_mask_tokenizer.ckpt \
+  --set model.params.latent_normalization_config.mode=per_channel_affine \
+  --set model.params.latent_normalization_config.stats_path=outputs/semantic_mask_tokenizer_eval/mid_plus_validation/latent_stats.json \
   --scale-lr false \
   --gpus 0
 ```
@@ -495,6 +525,8 @@ Memorize-4 diagnostic:
 python scripts/train_mask_prior_diffusion.py \
   --config configs/diagnostics/latent_semantic_mask_prior_diffusion_memorize_4.yaml \
   --set model.params.tokenizer_ckpt_path=/path/to/semantic_mask_tokenizer.ckpt \
+  --set model.params.latent_normalization_config.mode=per_channel_affine \
+  --set model.params.latent_normalization_config.stats_path=outputs/semantic_mask_tokenizer_eval/mid_plus_validation/latent_stats.json \
   --scale-lr false \
   --gpus 0
 ```
@@ -505,6 +537,8 @@ Sampling sweep:
 python scripts/sample_mask_prior_diffusion.py \
   --config configs/latent_semantic_mask_prior_diffusion_sit.yaml \
   --set model.params.tokenizer_ckpt_path=/path/to/semantic_mask_tokenizer.ckpt \
+  --set model.params.latent_normalization_config.mode=per_channel_affine \
+  --set model.params.latent_normalization_config.stats_path=outputs/semantic_mask_tokenizer_eval/mid_plus_validation/latent_stats.json \
   --ckpt <best-latent-prior-ckpt> \
   --outdir outputs/latent_semantic_mask_prior_samples/base \
   --n-samples 32 \
@@ -520,6 +554,8 @@ Distributional evaluation:
 python scripts/eval_mask_prior.py \
   --config configs/latent_semantic_mask_prior_diffusion_sit.yaml \
   --set model.params.tokenizer_ckpt_path=/path/to/semantic_mask_tokenizer.ckpt \
+  --set model.params.latent_normalization_config.mode=per_channel_affine \
+  --set model.params.latent_normalization_config.stats_path=outputs/semantic_mask_tokenizer_eval/mid_plus_validation/latent_stats.json \
   --ckpt <best-latent-prior-ckpt> \
   --outdir outputs/latent_semantic_mask_prior_eval/base \
   --split validation \

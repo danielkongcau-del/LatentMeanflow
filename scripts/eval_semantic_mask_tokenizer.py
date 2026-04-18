@@ -22,6 +22,7 @@ for path in (REPO_ROOT, LDM_ROOT, TAMING_ROOT):
 
 from ldm.util import instantiate_from_config
 from latent_meanflow.utils import colorize_mask_index
+from latent_meanflow.utils.latent_normalization import write_latent_stats_json
 from scripts.sample_latent_flow import load_config, load_model, validate_ckpt_matches_config
 
 
@@ -278,6 +279,16 @@ def main():
     target_small_region_presence = []
     recon_small_region_presence = []
     sample_rows = []
+    latent_channels = int(model.latent_channels)
+    latent_sum = 0.0
+    latent_sq_sum = 0.0
+    latent_count = 0
+    latent_channel_sum = np.zeros((latent_channels,), dtype=np.float64)
+    latent_channel_sq_sum = np.zeros((latent_channels,), dtype=np.float64)
+    latent_channel_count = 0
+    latent_norm_sum = 0.0
+    latent_norm_sq_sum = 0.0
+    latent_norm_count = 0
 
     global_index = 0
     for batch in dataloader:
@@ -285,7 +296,20 @@ def main():
         outputs = model(batch_on_device, sample_posterior=False)
         target_masks = outputs["mask_index"].detach().cpu().numpy()
         recon_masks = outputs["recon_mask_index"].detach().cpu().numpy()
+        latents = outputs["z"].detach().cpu().numpy()
         mask_paths = _normalize_paths(batch.get("mask_path"), batch_size=target_masks.shape[0])
+
+        latent_sum += float(latents.sum())
+        latent_sq_sum += float(np.square(latents).sum())
+        latent_count += int(latents.size)
+        latent_channel_values = np.transpose(latents, (1, 0, 2, 3)).reshape(latent_channels, -1)
+        latent_channel_sum += latent_channel_values.sum(axis=1)
+        latent_channel_sq_sum += np.square(latent_channel_values).sum(axis=1)
+        latent_channel_count += int(latent_channel_values.shape[1])
+        latent_sample_norms = np.linalg.norm(latents.reshape(latents.shape[0], -1), axis=1)
+        latent_norm_sum += float(latent_sample_norms.sum())
+        latent_norm_sq_sum += float(np.square(latent_sample_norms).sum())
+        latent_norm_count += int(latent_sample_norms.size)
 
         for local_idx in range(target_masks.shape[0]):
             target_mask = np.asarray(target_masks[local_idx], dtype=np.int64)
@@ -375,8 +399,32 @@ def main():
     boundary_length_ratio_input_mean = 0.0 if not target_boundary_ratios else float(np.mean(target_boundary_ratios))
     boundary_length_ratio_recon_mean = 0.0 if not recon_boundary_ratios else float(np.mean(recon_boundary_ratios))
     boundary_length_ratio_gap = abs(boundary_length_ratio_recon_mean - boundary_length_ratio_input_mean)
+    latent_mean = 0.0 if latent_count <= 0 else float(latent_sum / latent_count)
+    latent_variance = 0.0 if latent_count <= 0 else max(float(latent_sq_sum / latent_count) - latent_mean * latent_mean, 0.0)
+    latent_std = float(np.sqrt(latent_variance))
+    latent_l2_norm_mean = 0.0 if latent_norm_count <= 0 else float(latent_norm_sum / latent_norm_count)
+    latent_l2_norm_variance = (
+        0.0
+        if latent_norm_count <= 0
+        else max(float(latent_norm_sq_sum / latent_norm_count) - latent_l2_norm_mean * latent_l2_norm_mean, 0.0)
+    )
+    latent_l2_norm_std = float(np.sqrt(latent_l2_norm_variance))
+    per_channel_stats = {}
+    for channel_index in range(latent_channels):
+        channel_mean = 0.0 if latent_channel_count <= 0 else float(latent_channel_sum[channel_index] / latent_channel_count)
+        channel_variance = (
+            0.0
+            if latent_channel_count <= 0
+            else max(float(latent_channel_sq_sum[channel_index] / latent_channel_count) - channel_mean * channel_mean, 0.0)
+        )
+        per_channel_stats[f"channel_{channel_index}"] = {
+            "mean": channel_mean,
+            "std": float(np.sqrt(channel_variance)),
+        }
+    summary_name = f"{args.config.stem}_{ckpt_path.stem.replace('=', '_')}"
 
     summary = {
+        "name": summary_name,
         "task": "semantic_mask_tokenizer_reconstruction",
         "evaluation_type": "reconstruction_only_not_unconditional_generation",
         "config": str(args.config.resolve()),
@@ -388,7 +436,13 @@ def main():
         "num_classes": int(num_classes),
         "ignore_index": None if ignore_index is None else int(ignore_index),
         "latent_channels": int(model.latent_channels),
+        "latent_shape": [int(model.latent_channels), *[int(v) for v in model.latent_spatial_shape]],
         "latent_spatial_shape": [int(v) for v in model.latent_spatial_shape],
+        "latent_mean": float(latent_mean),
+        "latent_std": float(latent_std),
+        "latent_l2_norm_mean": float(latent_l2_norm_mean),
+        "latent_l2_norm_std": float(latent_l2_norm_std),
+        "per_channel_stats": per_channel_stats,
         "posterior_mode_decode": True,
         "small_region_threshold_ratio": float(args.small_region_threshold_ratio),
         "metrics": {
@@ -424,7 +478,11 @@ def main():
 
     summary_json_path = outdir / "summary.json"
     summary_csv_path = outdir / "summary.csv"
+    latent_stats_path = outdir / "latent_stats.json"
+    named_latent_stats_path = outdir / "latent_stats" / f"{summary_name}.json"
     summary_json_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    write_latent_stats_json(latent_stats_path, summary)
+    write_latent_stats_json(named_latent_stats_path, summary)
     with summary_csv_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(
             handle,
@@ -445,6 +503,7 @@ def main():
     print(f"Saved semantic_mask tokenizer reconstructions to {outdir}")
     print(f"Summary JSON: {summary_json_path}")
     print(f"Summary CSV: {summary_csv_path}")
+    print(f"Latent stats JSON: {latent_stats_path}")
 
 
 if __name__ == "__main__":
