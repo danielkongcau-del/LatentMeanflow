@@ -62,6 +62,8 @@ Project-layer files for the discrete tokenizer baseline:
 - `configs/semantic_mask_vq_tokenizer_main_256.yaml`
 - `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_1_256.yaml`
 - `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_4_256.yaml`
+- `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_1_hifi_256.yaml`
+- `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_4_hifi_256.yaml`
 - `tests/test_semantic_mask_vq_tokenizer_smoke.py`
 
 This route deliberately stays tokenizer-only:
@@ -446,6 +448,8 @@ Checked-in configs:
 - `configs/semantic_mask_vq_tokenizer_main_256.yaml`
 - `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_1_256.yaml`
 - `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_4_256.yaml`
+- `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_1_hifi_256.yaml`
+- `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_4_hifi_256.yaml`
 
 Current tokenizer geometry:
 
@@ -454,6 +458,9 @@ Current tokenizer geometry:
 - future token sequence length at this stage: `4096`
 - tiny codebook size: `64`
 - main codebook size: `512`
+- high-fidelity overfit token grid: `128 x 128`
+- high-fidelity overfit sequence length: `16384`
+- high-fidelity overfit codebook size: `1024`
 
 Commands:
 
@@ -491,6 +498,16 @@ python scripts/train_semantic_mask_vq_tokenizer.py \
   --config configs/diagnostics/semantic_mask_vq_tokenizer_memorize_4_256.yaml \
   --scale-lr false \
   --gpus 0
+
+python scripts/train_semantic_mask_vq_tokenizer.py \
+  --config configs/diagnostics/semantic_mask_vq_tokenizer_memorize_1_hifi_256.yaml \
+  --scale-lr false \
+  --gpus 0
+
+python scripts/train_semantic_mask_vq_tokenizer.py \
+  --config configs/diagnostics/semantic_mask_vq_tokenizer_memorize_4_hifi_256.yaml \
+  --scale-lr false \
+  --gpus 0
 ```
 
 Main reconstruction evaluation:
@@ -514,6 +531,16 @@ python scripts/eval_semantic_mask_vq_tokenizer.py \
   --config configs/diagnostics/semantic_mask_vq_tokenizer_memorize_4_256.yaml \
   --ckpt /path/to/semantic_mask_vq_tokenizer_memorize_4.ckpt \
   --outdir outputs/semantic_mask_vq_tokenizer_eval/memorize_4 \
+  --split validation \
+  --n-samples 4 \
+  --batch-size 4 \
+  --seed 23 \
+  --overwrite
+
+python scripts/eval_semantic_mask_vq_tokenizer.py \
+  --config configs/diagnostics/semantic_mask_vq_tokenizer_memorize_4_hifi_256.yaml \
+  --ckpt /path/to/semantic_mask_vq_tokenizer_memorize_4_hifi.ckpt \
+  --outdir outputs/semantic_mask_vq_tokenizer_eval/memorize_4_hifi \
   --split validation \
   --n-samples 4 \
   --batch-size 4 \

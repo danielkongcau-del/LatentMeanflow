@@ -160,6 +160,20 @@ class SemanticMaskVQTokenizerSmokeTest(unittest.TestCase):
         model = instantiate_from_config(config.model)
         self.assertEqual(model.codebook_size, int(config.model.params.codebook_size))
 
+    def test_hifi_memorize_config_contract(self):
+        config = OmegaConf.load(REPO_ROOT / "configs" / "diagnostics" / "semantic_mask_vq_tokenizer_memorize_4_hifi_256.yaml")
+        self.assertEqual(
+            config.model.target,
+            "latent_meanflow.models.semantic_mask_vq_autoencoder.SemanticMaskVQAutoencoder",
+        )
+        self.assertEqual(config.data.params.train.target, "latent_meanflow.data.subset.FixedSubsetDataset")
+        self.assertEqual(int(config.model.params.codebook_size), 1024)
+        self.assertEqual(list(config.model.params.ddconfig.ch_mult), [1, 2])
+
+        model = instantiate_from_config(config.model)
+        self.assertEqual(model.codebook_size, 1024)
+        self.assertEqual(model.latent_spatial_shape, (128, 128))
+
     def test_codes_are_discrete_and_in_range(self):
         model = _make_model()
         encoded = model.encode_batch(_make_batch())

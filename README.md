@@ -152,6 +152,8 @@ Checked-in discrete tokenizer configs:
 - `configs/semantic_mask_vq_tokenizer_main_256.yaml`
 - `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_1_256.yaml`
 - `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_4_256.yaml`
+- `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_1_hifi_256.yaml`
+- `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_4_hifi_256.yaml`
 
 Current discrete tokenizer geometry:
 
@@ -160,6 +162,9 @@ Current discrete tokenizer geometry:
 - token sequence length: `4096`
 - tiny codebook size: `64`
 - main codebook size: `512`
+- high-fidelity overfit token grid: `128x128`
+- high-fidelity overfit sequence length: `16384`
+- high-fidelity overfit codebook size: `1024`
 
 Train the tiny discrete tokenizer sanity route:
 
@@ -185,6 +190,15 @@ Train the deliberate overfit `memorize_4` discrete tokenizer diagnostic:
 python scripts/train_semantic_mask_vq_tokenizer.py --config configs/diagnostics/semantic_mask_vq_tokenizer_memorize_4_256.yaml --scale-lr false --gpus 0
 ```
 
+Train the high-fidelity overfit diagnostics when the standard `memorize_1/4`
+configs still lose fine geometry:
+
+```bash
+python scripts/train_semantic_mask_vq_tokenizer.py --config configs/diagnostics/semantic_mask_vq_tokenizer_memorize_1_hifi_256.yaml --scale-lr false --gpus 0
+
+python scripts/train_semantic_mask_vq_tokenizer.py --config configs/diagnostics/semantic_mask_vq_tokenizer_memorize_4_hifi_256.yaml --scale-lr false --gpus 0
+```
+
 Evaluate discrete tokenizer reconstruction and export `input_mask_raw/`,
 `input_mask_color/`, `recon_mask_raw/`, `recon_mask_color/`, and `panel/`:
 
@@ -196,6 +210,12 @@ Evaluate the `memorize_4` discrete tokenizer diagnostic:
 
 ```bash
 python scripts/eval_semantic_mask_vq_tokenizer.py --config configs/diagnostics/semantic_mask_vq_tokenizer_memorize_4_256.yaml --ckpt /path/to/semantic_mask_vq_tokenizer_memorize_4.ckpt --outdir outputs/semantic_mask_vq_tokenizer_eval/memorize_4 --split validation --n-samples 4 --batch-size 4 --seed 23 --overwrite
+```
+
+Evaluate the high-fidelity `memorize_4` discrete tokenizer diagnostic:
+
+```bash
+python scripts/eval_semantic_mask_vq_tokenizer.py --config configs/diagnostics/semantic_mask_vq_tokenizer_memorize_4_hifi_256.yaml --ckpt /path/to/semantic_mask_vq_tokenizer_memorize_4_hifi.ckpt --outdir outputs/semantic_mask_vq_tokenizer_eval/memorize_4_hifi --split validation --n-samples 4 --batch-size 4 --seed 23 --overwrite
 ```
 
 This script reports reconstruction metrics such as per-pixel accuracy, mIoU,

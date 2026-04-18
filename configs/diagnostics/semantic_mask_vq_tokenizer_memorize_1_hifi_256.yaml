@@ -1,0 +1,89 @@
+model:
+  base_learning_rate: 2.0e-4
+  target: latent_meanflow.models.semantic_mask_vq_autoencoder.SemanticMaskVQAutoencoder
+  params:
+    # High-fidelity overfit diagnostic for mask-only discrete tokenizer reconstruction.
+    # This config weakens VQ regularization and keeps a 128x128 token grid to answer
+    # whether the tokenizer can preserve fine geometry on a single fixed mask at all.
+    monitor: "val/total_loss"
+    embed_dim: 64
+    codebook_size: 1024
+    num_classes: 7
+    lossconfig:
+      target: latent_meanflow.models.semantic_mask_vq_autoencoder.SemanticMaskVQLoss
+      params:
+        mask_ce_weight: 1.0
+        mask_dice_weight: 0.5
+        mask_focal_weight: 0.0
+        vq_codebook_weight: 0.25
+        vq_commit_weight: 0.05
+        ignore_index: -1
+        focal_gamma: 2.0
+        ce_label_smoothing: 0.0
+    ddconfig:
+      double_z: false
+      z_channels: 32
+      resolution: 256
+      in_channels: 7
+      out_ch: 7
+      ch: 192
+      ch_mult: [1, 2]
+      num_res_blocks: 2
+      attn_resolutions: []
+      dropout: 0.0
+
+data:
+  target: main.DataModuleFromConfig
+  params:
+    batch_size: 1
+    num_workers: 0
+    wrap: false
+    train:
+      target: latent_meanflow.data.subset.FixedSubsetDataset
+      params:
+        first_n: 1
+        dataset_config:
+          target: latent_meanflow.data.semantic_mask.MultiSemanticMaskDataset
+          params:
+            roots:
+              - outputs/segmentation_teacher_data/remote_semantic_indexed
+            split: train
+            size: 256
+            mask_dir: masks
+            gray_to_class_id: configs/label_specs/remote_semantic.yaml
+            ignore_index: -1
+    validation:
+      target: latent_meanflow.data.subset.FixedSubsetDataset
+      params:
+        first_n: 1
+        dataset_config:
+          target: latent_meanflow.data.semantic_mask.MultiSemanticMaskDataset
+          params:
+            roots:
+              - outputs/segmentation_teacher_data/remote_semantic_indexed
+            split: train
+            size: 256
+            mask_dir: masks
+            gray_to_class_id: configs/label_specs/remote_semantic.yaml
+            ignore_index: -1
+
+lightning:
+  callbacks:
+    image_logger:
+      target: latent_meanflow.callbacks.semantic_logger.SemanticPairImageLogger
+      params:
+        disabled: false
+        batch_frequency: 10
+        increase_log_steps: false
+        max_images: 4
+        latest_only: true
+        ignore_index: -1
+  trainer:
+    benchmark: false
+    max_steps: 5000
+    limit_val_batches: 1
+    check_val_every_n_epoch: 10
+    num_sanity_val_steps: 0
+    log_every_n_steps: 1
+    accumulate_grad_batches: 1
+    strategy: ddp_find_unused_parameters_false
