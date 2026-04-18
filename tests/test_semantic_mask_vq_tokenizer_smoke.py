@@ -14,8 +14,9 @@ from latent_meanflow.models.semantic_mask_vq_autoencoder import SemanticMaskVQAu
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _make_model(loss_params=None):
+def _make_model(loss_params=None, quantizer_params=None):
     loss_params = dict(loss_params or {})
+    quantizer_params = dict(quantizer_params or {})
     return SemanticMaskVQAutoencoder(
         ddconfig={
             "double_z": False,
@@ -44,6 +45,7 @@ def _make_model(loss_params=None):
         embed_dim=8,
         codebook_size=32,
         num_classes=4,
+        quantizer_config=quantizer_params,
     )
 
 
@@ -125,6 +127,21 @@ class SemanticMaskVQTokenizerSmokeTest(unittest.TestCase):
         self.assertTrue(torch.isfinite(outputs["loss_dict"]["vq_codebook"]))
         self.assertTrue(torch.isfinite(outputs["loss_dict"]["vq_commit"]))
 
+    def test_stable_quantizer_forward_smoke(self):
+        model = _make_model(
+            quantizer_params={
+                "distance_metric": "cosine",
+                "use_ema_update": True,
+                "ema_decay": 0.99,
+                "ema_eps": 1.0e-5,
+                "dead_code_threshold": 1.0,
+            }
+        )
+        outputs = model(_make_batch())
+        self.assertTrue(torch.isfinite(outputs["total_loss"]))
+        self.assertEqual(float(outputs["loss_dict"]["vq_codebook"].item()), 0.0)
+        self.assertGreaterEqual(int(outputs["quantizer_stats"]["used_code_count"].item()), 1)
+
     def test_strict_mask_index_mask_onehot_consistency(self):
         model = _make_model()
         batch = _make_batch()
@@ -167,13 +184,17 @@ class SemanticMaskVQTokenizerSmokeTest(unittest.TestCase):
             "latent_meanflow.models.semantic_mask_vq_autoencoder.SemanticMaskVQAutoencoder",
         )
         self.assertEqual(config.data.params.train.target, "latent_meanflow.data.subset.FixedSubsetDataset")
+        self.assertEqual(str(config.model.params.monitor), "val/mask_ce")
         self.assertEqual(int(config.model.params.codebook_size), 512)
         self.assertEqual(list(config.model.params.ddconfig.ch_mult), [1, 2])
+        self.assertEqual(str(config.model.params.quantizer_config.distance_metric), "cosine")
+        self.assertTrue(bool(config.model.params.quantizer_config.use_ema_update))
         self.assertEqual(float(config.lightning.trainer.gradient_clip_val), 1.0)
 
         model = instantiate_from_config(config.model)
         self.assertEqual(model.codebook_size, 512)
         self.assertEqual(model.latent_spatial_shape, (128, 128))
+        self.assertTrue(model.quantizer.use_ema_update)
 
     def test_codes_are_discrete_and_in_range(self):
         model = _make_model()

@@ -5,10 +5,16 @@ model:
     # High-fidelity overfit diagnostic for mask-only discrete tokenizer reconstruction.
     # This config weakens VQ regularization and keeps a 128x128 token grid to answer
     # whether the tokenizer can preserve fine geometry across a fixed 4-mask bank.
-    monitor: "val/total_loss"
+    monitor: "val/mask_ce"
     embed_dim: 64
     codebook_size: 512
     num_classes: 7
+    quantizer_config:
+      distance_metric: cosine
+      use_ema_update: true
+      ema_decay: 0.99
+      ema_eps: 1.0e-5
+      dead_code_threshold: 2.0
     lossconfig:
       target: latent_meanflow.models.semantic_mask_vq_autoencoder.SemanticMaskVQLoss
       params:

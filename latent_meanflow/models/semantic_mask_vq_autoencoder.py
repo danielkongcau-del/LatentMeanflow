@@ -2,6 +2,7 @@ from copy import deepcopy
 
 import pytorch_lightning as pl
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -16,8 +17,21 @@ def _resolve_group_norm_groups(num_channels, max_groups=32):
     return 1
 
 
+def _dist_is_initialized():
+    return dist.is_available() and dist.is_initialized()
+
+
 class SemanticMaskVectorQuantizer(nn.Module):
-    def __init__(self, codebook_size, embed_dim):
+    def __init__(
+        self,
+        codebook_size,
+        embed_dim,
+        distance_metric="euclidean",
+        use_ema_update=False,
+        ema_decay=0.99,
+        ema_eps=1.0e-5,
+        dead_code_threshold=0.0,
+    ):
         super().__init__()
         self.codebook_size = int(codebook_size)
         self.embed_dim = int(embed_dim)
@@ -25,9 +39,87 @@ class SemanticMaskVectorQuantizer(nn.Module):
             raise ValueError(f"codebook_size must be positive, got {self.codebook_size}")
         if self.embed_dim <= 0:
             raise ValueError(f"embed_dim must be positive, got {self.embed_dim}")
+        self.distance_metric = str(distance_metric).lower()
+        if self.distance_metric not in {"euclidean", "cosine"}:
+            raise ValueError(f"distance_metric must be 'euclidean' or 'cosine', got {distance_metric!r}")
+        self.use_ema_update = bool(use_ema_update)
+        self.ema_decay = float(ema_decay)
+        self.ema_eps = float(ema_eps)
+        self.dead_code_threshold = float(dead_code_threshold)
+        if not 0.0 <= self.ema_decay < 1.0:
+            raise ValueError(f"ema_decay must be in [0, 1), got {self.ema_decay}")
+        if self.ema_eps <= 0.0:
+            raise ValueError(f"ema_eps must be positive, got {self.ema_eps}")
+        if self.dead_code_threshold < 0.0:
+            raise ValueError(f"dead_code_threshold must be non-negative, got {self.dead_code_threshold}")
 
         self.embedding = nn.Embedding(self.codebook_size, self.embed_dim)
         nn.init.uniform_(self.embedding.weight, -1.0 / float(self.codebook_size), 1.0 / float(self.codebook_size))
+        if self.use_ema_update:
+            self.embedding.weight.requires_grad_(False)
+        self.register_buffer("ema_cluster_size", torch.zeros(self.codebook_size))
+        self.register_buffer("ema_embed_avg", self.embedding.weight.detach().clone())
+
+    def _project_embeddings(self, embeddings):
+        if self.distance_metric == "cosine":
+            return F.normalize(embeddings, dim=-1, eps=1.0e-6)
+        return embeddings
+
+    def _project_feature_map(self, z_e):
+        if self.distance_metric == "cosine":
+            return F.normalize(z_e, dim=1, eps=1.0e-6)
+        return z_e
+
+    def _lookup_latents(self, codes):
+        latents = F.embedding(codes, self.embedding.weight)
+        return self._project_embeddings(latents)
+
+    def _ema_all_reduce_(self, tensor):
+        if _dist_is_initialized():
+            dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
+        return tensor
+
+    def _refresh_dead_codes(self, z_flat, dead_mask):
+        if int(dead_mask.sum().item()) <= 0 or int(z_flat.shape[0]) <= 0:
+            return
+        if _dist_is_initialized():
+            rank = int(dist.get_rank())
+        else:
+            rank = 0
+        if rank == 0:
+            replacement_indices = torch.randint(0, z_flat.shape[0], (int(dead_mask.sum().item()),), device=z_flat.device)
+            replacement = z_flat[replacement_indices]
+            self.ema_embed_avg[dead_mask] = replacement
+            self.ema_cluster_size[dead_mask] = 1.0
+        if _dist_is_initialized():
+            dist.broadcast(self.ema_embed_avg, src=0)
+            dist.broadcast(self.ema_cluster_size, src=0)
+
+    @torch.no_grad()
+    def _ema_update(self, z_flat, codes_flat):
+        cluster_size = torch.bincount(codes_flat, minlength=self.codebook_size).to(device=z_flat.device, dtype=z_flat.dtype)
+        embed_sum = self.ema_embed_avg.new_zeros((self.codebook_size, self.embed_dim))
+        embed_sum.index_add_(0, codes_flat, z_flat)
+        self._ema_all_reduce_(cluster_size)
+        self._ema_all_reduce_(embed_sum)
+
+        self.ema_cluster_size.mul_(self.ema_decay).add_(cluster_size, alpha=(1.0 - self.ema_decay))
+        self.ema_embed_avg.mul_(self.ema_decay).add_(embed_sum, alpha=(1.0 - self.ema_decay))
+
+        if self.dead_code_threshold > 0.0:
+            dead_mask = self.ema_cluster_size < self.dead_code_threshold
+            self._refresh_dead_codes(z_flat, dead_mask)
+
+        total_count = self.ema_cluster_size.sum()
+        normalized_cluster_size = (
+            (self.ema_cluster_size + self.ema_eps)
+            / (total_count + float(self.codebook_size) * self.ema_eps)
+            * total_count
+        )
+        normalized_embeddings = self.ema_embed_avg / normalized_cluster_size.unsqueeze(1).clamp_min(self.ema_eps)
+        if self.distance_metric == "cosine":
+            normalized_embeddings = F.normalize(normalized_embeddings, dim=1, eps=1.0e-6)
+        self.embedding.weight.data.copy_(normalized_embeddings)
 
     def codes_to_latents(self, codes):
         codes = torch.as_tensor(codes)
@@ -46,7 +138,7 @@ class SemanticMaskVectorQuantizer(nn.Module):
                 raise ValueError(
                     f"Code indices out of range: min={min_code}, max={max_code}, codebook_size={self.codebook_size}"
                 )
-        latents = F.embedding(codes, self.embedding.weight)
+        latents = self._lookup_latents(codes)
         return latents.permute(0, 3, 1, 2).contiguous()
 
     def forward(self, z_e):
@@ -58,20 +150,25 @@ class SemanticMaskVectorQuantizer(nn.Module):
             )
 
         batch_size, _, height, width = z_e.shape
-        z_flat = z_e.permute(0, 2, 3, 1).reshape(-1, self.embed_dim)
-        codebook = self.embedding.weight
+        z_metric = self._project_feature_map(z_e)
+        z_flat = z_metric.permute(0, 2, 3, 1).reshape(-1, self.embed_dim)
+        codebook = self._project_embeddings(self.embedding.weight)
         distances = (
             z_flat.pow(2).sum(dim=1, keepdim=True)
             + codebook.pow(2).sum(dim=1).unsqueeze(0)
             - 2.0 * torch.matmul(z_flat, codebook.t())
         )
         codes_flat = torch.argmin(distances, dim=1)
-        z_q = F.embedding(codes_flat, codebook).view(batch_size, height, width, self.embed_dim)
+        z_q = self._lookup_latents(codes_flat).view(batch_size, height, width, self.embed_dim)
         z_q = z_q.permute(0, 3, 1, 2).contiguous()
-        z_q_st = z_e + (z_q - z_e).detach()
+        z_q_st = z_metric + (z_q - z_metric).detach()
 
-        codebook_loss = F.mse_loss(z_q, z_e.detach())
-        commitment_loss = F.mse_loss(z_e, z_q.detach())
+        if self.training and self.use_ema_update:
+            self._ema_update(z_flat.detach(), codes_flat.detach())
+            codebook_loss = z_e.new_tensor(0.0)
+        else:
+            codebook_loss = F.mse_loss(z_q, z_metric.detach())
+        commitment_loss = F.mse_loss(z_metric, z_q.detach())
 
         code_counts = torch.bincount(codes_flat, minlength=self.codebook_size).to(device=z_e.device, dtype=z_e.dtype)
         avg_probs = code_counts / code_counts.sum().clamp_min(1.0)
@@ -213,11 +310,13 @@ class SemanticMaskVQAutoencoder(pl.LightningModule):
         ckpt_path=None,
         ignore_keys=None,
         monitor=None,
+        quantizer_config=None,
         mask_index_key="mask_index",
         mask_onehot_key="mask_onehot",
     ):
         super().__init__()
         ignore_keys = [] if ignore_keys is None else list(ignore_keys)
+        quantizer_config = {} if quantizer_config is None else dict(quantizer_config)
 
         self.num_classes = int(num_classes)
         self.embed_dim = int(embed_dim)
@@ -238,7 +337,11 @@ class SemanticMaskVQAutoencoder(pl.LightningModule):
         encoder_channels = int(encoder_config["z_channels"])
         self.pre_quant_conv = nn.Conv2d(encoder_channels, self.embed_dim, kernel_size=1)
         self.post_quant_conv = nn.Conv2d(self.embed_dim, encoder_channels, kernel_size=1)
-        self.quantizer = SemanticMaskVectorQuantizer(codebook_size=self.codebook_size, embed_dim=self.embed_dim)
+        self.quantizer = SemanticMaskVectorQuantizer(
+            codebook_size=self.codebook_size,
+            embed_dim=self.embed_dim,
+            **quantizer_config,
+        )
 
         if getattr(self.decoder, "give_pre_end", False):
             for module in (self.decoder.norm_out, self.decoder.conv_out):
