@@ -1,13 +1,20 @@
 # LatentMeanflow
 
-LatentMeanflow now contains two parallel project-layer routes:
+LatentMeanflow now contains three parallel project-layer routes:
 
 - a legacy binary-mask / 4-channel latent diffusion baseline
-- a semantic tokenizer + latent flow research path for paired `RGB image + multiclass semantic mask`
+- the current upstream mainline for `p(semantic_mask)`: a mask-only discrete tokenizer for future token priors
+- older semantic tokenizer + continuous latent / renderer experiments that remain checked in as controls and side routes
 
-The vendored runtime is still CompVis `latent-diffusion`, but the active project-layer research direction is:
+The vendored runtime is still CompVis `latent-diffusion`, but the active
+project-layer upstream direction is now:
 
-`semantic tokenizer -> latent FM -> latent MeanFlow / AlphaFlow`
+`mask-only discrete tokenizer -> token prior`
+
+The token prior half is still `not implemented yet`. The older continuous
+mask-only latent-prior route is kept as a negative but informative control
+because it repeated the same failure mode seen in direct continuous-field
+generation.
 
 See [docs/latentmeanflow_migration_plan.md](docs/latentmeanflow_migration_plan.md) for the migration roadmap and [docs/semantic_label_spec.md](docs/semantic_label_spec.md) for the semantic mask contract.
 
@@ -120,21 +127,86 @@ These commands target the legacy binary / 4-channel baseline only. They do not i
 
 ### Semantic Tokenizer Path
 
-#### Mask-Only Semantic Tokenizer Path
+#### Mask-Only Discrete Tokenizer Path
 
-This is the new mainline for upstream `p(semantic_mask)` work:
+This is the current upstream mainline for `p(semantic_mask)` work:
 
 - it reconstructs `semantic_mask` only
 - it does not read RGB image
-- it is preparing the repo for a later latent/token prior
-- the latent/token prior is `not implemented yet`
+- it uses a VQ / codebook tokenizer rather than a continuous VAE latent
+- it prepares the repo for a later token prior
+- the token prior is still `not implemented yet`
 
-This route exists because the checked-in direct pixel-space discrete mask-prior
-route can memorize one fixed layout but collapses on `memorize_4`, so it is
-being kept as a negative but informative baseline rather than the promoted
-mainline.
+This route exists because:
 
-Checked-in mask-only tokenizer configs:
+- the checked-in direct pixel-space discrete mask prior can memorize one fixed
+  layout but collapses on `memorize_4`
+- the frozen continuous mask tokenizer + continuous latent prior route also
+  failed on the same tiny-bank style diagnostics
+- the next variable to change is state semantics, not another continuous
+  objective
+
+Checked-in discrete tokenizer configs:
+
+- `configs/semantic_mask_vq_tokenizer_tiny_256.yaml`
+- `configs/semantic_mask_vq_tokenizer_main_256.yaml`
+- `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_1_256.yaml`
+- `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_4_256.yaml`
+
+Current discrete tokenizer geometry:
+
+- tiny token grid: `64x64`
+- main token grid: `64x64`
+- token sequence length: `4096`
+- tiny codebook size: `64`
+- main codebook size: `512`
+
+Train the tiny discrete tokenizer sanity route:
+
+```bash
+python scripts/train_semantic_mask_vq_tokenizer.py --config configs/semantic_mask_vq_tokenizer_tiny_256.yaml --scale-lr true --gpus 0
+```
+
+Train the main discrete tokenizer candidate:
+
+```bash
+python scripts/train_semantic_mask_vq_tokenizer.py --config configs/semantic_mask_vq_tokenizer_main_256.yaml --scale-lr true --gpus 0
+```
+
+Train the deliberate overfit `memorize_1` discrete tokenizer diagnostic:
+
+```bash
+python scripts/train_semantic_mask_vq_tokenizer.py --config configs/diagnostics/semantic_mask_vq_tokenizer_memorize_1_256.yaml --scale-lr false --gpus 0
+```
+
+Train the deliberate overfit `memorize_4` discrete tokenizer diagnostic:
+
+```bash
+python scripts/train_semantic_mask_vq_tokenizer.py --config configs/diagnostics/semantic_mask_vq_tokenizer_memorize_4_256.yaml --scale-lr false --gpus 0
+```
+
+Evaluate discrete tokenizer reconstruction and export `input_mask_raw/`,
+`input_mask_color/`, `recon_mask_raw/`, `recon_mask_color/`, and `panel/`:
+
+```bash
+python scripts/eval_semantic_mask_vq_tokenizer.py --config configs/semantic_mask_vq_tokenizer_main_256.yaml --ckpt /path/to/semantic_mask_vq_tokenizer.ckpt --outdir outputs/semantic_mask_vq_tokenizer_eval/main --split validation --n-samples 32 --batch-size 4 --seed 23 --overwrite
+```
+
+Evaluate the `memorize_4` discrete tokenizer diagnostic:
+
+```bash
+python scripts/eval_semantic_mask_vq_tokenizer.py --config configs/diagnostics/semantic_mask_vq_tokenizer_memorize_4_256.yaml --ckpt /path/to/semantic_mask_vq_tokenizer_memorize_4.ckpt --outdir outputs/semantic_mask_vq_tokenizer_eval/memorize_4 --split validation --n-samples 4 --batch-size 4 --seed 23 --overwrite
+```
+
+This script reports reconstruction metrics such as per-pixel accuracy, mIoU,
+boundary-length gap, and small-region frequency gap. It is tokenizer
+reconstruction evaluation, not unconditional generation evaluation.
+
+#### Continuous Mask-Only Semantic Tokenizer Control
+
+The older continuous mask-only tokenizer route remains checked in as a control.
+
+Checked-in continuous mask-only tokenizer configs:
 
 - `configs/semantic_mask_tokenizer_tiny_256.yaml`
 - `configs/semantic_mask_tokenizer_mid_256.yaml`
@@ -142,34 +214,33 @@ Checked-in mask-only tokenizer configs:
 - `configs/diagnostics/semantic_mask_tokenizer_memorize_1_256.yaml`
 - `configs/diagnostics/semantic_mask_tokenizer_memorize_4_256.yaml`
 
-Train the tiny tokenizer sanity route:
+Train the tiny continuous tokenizer sanity route:
 
 ```bash
 python scripts/train_semantic_mask_tokenizer.py --config configs/semantic_mask_tokenizer_tiny_256.yaml --scale-lr true --gpus 0
 ```
 
-Train the main mask-only tokenizer candidate:
+Train the main continuous mask-only tokenizer candidate:
 
 ```bash
 python scripts/train_semantic_mask_tokenizer.py --config configs/semantic_mask_tokenizer_mid_plus_256.yaml --scale-lr true --gpus 0
 ```
 
-Train the deliberate overfit `memorize_4` tokenizer diagnostic:
+Train the deliberate overfit `memorize_4` continuous tokenizer diagnostic:
 
 ```bash
 python scripts/train_semantic_mask_tokenizer.py --config configs/diagnostics/semantic_mask_tokenizer_memorize_4_256.yaml --scale-lr false --gpus 0
 ```
 
-Evaluate tokenizer reconstruction and export `input_mask_raw/`,
+Evaluate continuous tokenizer reconstruction and export `input_mask_raw/`,
 `input_mask_color/`, `recon_mask_raw/`, `recon_mask_color/`, and `panel/`:
 
 ```bash
 python scripts/eval_semantic_mask_tokenizer.py --config configs/semantic_mask_tokenizer_mid_plus_256.yaml --ckpt /path/to/semantic_mask_tokenizer.ckpt --outdir outputs/semantic_mask_tokenizer_eval/mid_plus --split validation --n-samples 32 --batch-size 4 --seed 23 --overwrite
 ```
 
-This script reports reconstruction metrics such as per-pixel accuracy, mIoU,
-boundary-length gap, and small-region frequency gap. It is tokenizer
-reconstruction evaluation, not unconditional generation evaluation.
+This older route also reports reconstruction metrics only. It is not the
+current promoted upstream mainline for `p(semantic_mask)`.
 
 #### Paired Semantic Tokenizer Path
 

@@ -9,46 +9,68 @@ Current conclusion:
 
 - direct pixel-space discrete routing passed `memorize_1`
 - the same route collapsed on `memorize_4` toward a small number of prototypes
-- that makes it a negative but informative baseline rather than the preferred
-  mainline for unconditional multimodal `p(semantic_mask)`
+- frozen tokenizer + continuous latent diffusion prior v1 also failed on the
+  same tiny-bank style diagnostics
+- that makes both continuous routes negative but informative baselines rather
+  than the preferred mainline for unconditional multimodal `p(semantic_mask)`
 
 Next mainline:
 
-- `mask-only semantic tokenizer -> latent/token prior`
-- the tokenizer has passed reconstruction review and is now treated as fixed
-- the current patch implements a frozen-tokenizer continuous latent diffusion
-  prior v1
-- codebook / VQ token priors are still `not implemented yet`
+- `mask-only discrete tokenizer -> token prior`
+- this patch implements the discrete tokenizer half only
+- token prior is still `not implemented yet`
 
-## Frozen-Tokenizer Latent Prior v1
+## Mask-Only Discrete Tokenizer
 
-The new upstream control baseline after tokenizer validation is:
+The new upstream mainline after the continuous-prior failures is:
 
-- frozen mask-only semantic tokenizer
-- deterministic latent target from
-  `encode_batch(..., sample_posterior=False)`
-- continuous latent diffusion prior over `z`
+- mask-only VQ / codebook tokenizer
+- encode path:
+  `semantic_mask -> encoder -> discrete code grid`
 - decode path:
-  `sample latent z -> tokenizer.decode_latents(z) -> semantic_mask`
+  `discrete code grid -> quantized embeddings -> decoder -> semantic_mask`
 
 Why this route exists:
 
-- it isolates the representation-layer change first
-- it avoids mixing in a codebook / token prior at the same time
-- it provides a clean control baseline against the checked-in direct
-  pixel-space routes
+- the continuous latent prior repeated the old continuous-field failure mode
+- the next variable to change is state semantics, not another continuous
+  objective
+- token prior comes after tokenizer reconstruction passes
 
 This patch does **not** implement:
 
-- codebook / VQ tokenizer
+- token prior
 - token autoregressive prior
-- latent discrete diffusion
-- latent flow / AlphaFlow prior
+- token-level discrete diffusion prior
+- any new continuous latent prior
 - image branch coupling
 - structural auxiliary losses
 
-This document defines the next apples-to-apples benchmark for the project-layer
-upstream route:
+The discrete-tokenizer half now has checked-in project-layer files:
+
+- `latent_meanflow/models/semantic_mask_vq_autoencoder.py`
+- `scripts/train_semantic_mask_vq_tokenizer.py`
+- `scripts/eval_semantic_mask_vq_tokenizer.py`
+- `configs/semantic_mask_vq_tokenizer_tiny_256.yaml`
+- `configs/semantic_mask_vq_tokenizer_main_256.yaml`
+- `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_1_256.yaml`
+- `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_4_256.yaml`
+
+Current tokenizer geometry:
+
+- tiny token grid: `64x64`
+- main token grid: `64x64`
+- token sequence length: `4096`
+- tiny codebook size: `64`
+- main codebook size: `512`
+
+The direct pixel-space prior benchmarks below remain checked in, but they are
+now comparison controls rather than the promoted upstream mainline.
+
+This document therefore serves two purposes:
+
+- record the stage conclusion that the continuous prior mainline failed
+- preserve the direct-mask benchmark matrix as negative but informative controls
 
 - task: `p(semantic_mask)`
 - task type: unconditional semantic layout generation
@@ -57,7 +79,7 @@ upstream route:
 - no image branch
 - no change to the frozen `p(image | semantic_mask)` renderer
 
-The purpose of this step is narrow and explicit:
+The purpose of the retained benchmark section is narrow and explicit:
 
 - test whether a stronger SiT-style transformer backbone plus either a
   conventional diffusion control or a direct discrete baseline is a better fit
@@ -66,10 +88,63 @@ The purpose of this step is narrow and explicit:
 - keep the evaluation protocol fixed so the comparison stays
   apples-to-apples
 
-This step does **not** claim that flow is dead. It only asks whether the
+This benchmark does **not** claim that flow is dead. It only asks whether the
 current direct-mask U-Net flow baseline is being limited by backbone capacity
 and objective choice. If a SiT-style baseline wins under the same protocol, the
 next comparison should be the same SiT-style backbone under flow or AlphaFlow.
+
+## Discrete Tokenizer Commands
+
+Tokenizer-only training:
+
+```bash
+python scripts/train_semantic_mask_vq_tokenizer.py \
+  --config configs/semantic_mask_vq_tokenizer_tiny_256.yaml \
+  --scale-lr true \
+  --gpus 0
+
+python scripts/train_semantic_mask_vq_tokenizer.py \
+  --config configs/semantic_mask_vq_tokenizer_main_256.yaml \
+  --scale-lr true \
+  --gpus 0
+
+python scripts/train_semantic_mask_vq_tokenizer.py \
+  --config configs/diagnostics/semantic_mask_vq_tokenizer_memorize_1_256.yaml \
+  --scale-lr false \
+  --gpus 0
+
+python scripts/train_semantic_mask_vq_tokenizer.py \
+  --config configs/diagnostics/semantic_mask_vq_tokenizer_memorize_4_256.yaml \
+  --scale-lr false \
+  --gpus 0
+```
+
+Tokenizer-only reconstruction evaluation:
+
+```bash
+python scripts/eval_semantic_mask_vq_tokenizer.py \
+  --config configs/semantic_mask_vq_tokenizer_main_256.yaml \
+  --ckpt /path/to/semantic_mask_vq_tokenizer.ckpt \
+  --outdir outputs/semantic_mask_vq_tokenizer_eval/main \
+  --split validation \
+  --n-samples 32 \
+  --batch-size 4 \
+  --seed 23 \
+  --overwrite
+
+python scripts/eval_semantic_mask_vq_tokenizer.py \
+  --config configs/diagnostics/semantic_mask_vq_tokenizer_memorize_4_256.yaml \
+  --ckpt /path/to/semantic_mask_vq_tokenizer_memorize_4.ckpt \
+  --outdir outputs/semantic_mask_vq_tokenizer_eval/memorize_4 \
+  --split validation \
+  --n-samples 4 \
+  --batch-size 4 \
+  --seed 23 \
+  --overwrite
+```
+
+These commands evaluate reconstruction only. They do **not** evaluate
+unconditional generation because the token prior is still `not implemented yet`.
 
 ## Compared Routes
 

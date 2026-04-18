@@ -12,61 +12,62 @@ Current conclusion:
 - `memorize_1` showed that a direct pixel-space route can memorize one fixed
   layout
 - `memorize_4` collapsed toward a small number of low-quality prototypes
-- therefore the direct pixel-space route is not being promoted as the mainline
-  for unconditional multimodal `p(semantic_mask)`
+- frozen tokenizer + continuous latent diffusion prior v1 also failed on the
+  same tiny-bank style diagnostics
+- therefore neither the direct pixel-space route nor the continuous latent
+  route is being promoted as the mainline for unconditional multimodal
+  `p(semantic_mask)`
 
 Next mainline:
 
-- `mask-only semantic tokenizer -> latent/token prior`
-- the tokenizer has passed reconstruction review and is now treated as fixed
-- the current patch implements a frozen-tokenizer continuous latent diffusion
-  prior v1
-- codebook / VQ token priors are still `not implemented yet`
+- `mask-only discrete tokenizer -> token prior`
+- this patch implements the discrete tokenizer half only
+- token prior is still `not implemented yet`
 
-## Frozen-Tokenizer Latent Prior v1
+## Mask-Only Discrete Tokenizer Mainline
 
-The current upstream control baseline is now:
+The current upstream mainline step is now:
 
-- frozen `SemanticMaskAutoencoder`
-- deterministic tokenizer latent target via
-  `encode_batch(..., sample_posterior=False)`
-- continuous latent diffusion prior on `z`
+- mask-only discrete tokenizer
+- VQ / codebook quantization
+- encode path:
+  `semantic_mask -> encoder -> code indices`
 - decode path:
-  `sample latent z -> tokenizer.decode_latents(z) -> semantic_mask`
+  `code indices -> quantized embeddings -> decoder -> semantic_mask`
 
-This route exists to answer a narrow question with minimal extra variables:
+This route exists because the last two upstream continuous routes already
+failed:
 
-- after removing the direct pixel-space bottleneck, does unconditional
-  multimodal `p(semantic_mask)` become easier immediately?
+- direct pixel-space discrete prior failed at `memorize_4`
+- frozen continuous latent prior repeated the same failure mode in continuous
+  latent space
 
 This patch does **not** implement:
 
-- codebook / VQ tokenizer
+- token prior
 - token autoregressive prior
-- latent discrete diffusion
-- latent flow / AlphaFlow prior
+- token-level discrete diffusion prior
+- any new continuous latent prior
 - image branch coupling
 - boundary / area / adjacency / topology auxiliary losses
 
-## Frozen-Tokenizer Latent Prior Deliverables
+## Discrete Tokenizer Deliverables
 
-Project-layer files for the first latent-prior control baseline:
+Project-layer files for the discrete tokenizer baseline:
 
-- `latent_meanflow/trainers/semantic_mask_latent_prior_trainer.py`
-- `configs/latent_semantic_mask_prior_diffusion_sit_tiny.yaml`
-- `configs/latent_semantic_mask_prior_diffusion_sit.yaml`
-- `configs/diagnostics/latent_semantic_mask_prior_diffusion_memorize_1.yaml`
-- `configs/diagnostics/latent_semantic_mask_prior_diffusion_memorize_4.yaml`
-- `tests/test_semantic_mask_latent_prior_smoke.py`
+- `latent_meanflow/models/semantic_mask_vq_autoencoder.py`
+- `scripts/train_semantic_mask_vq_tokenizer.py`
+- `scripts/eval_semantic_mask_vq_tokenizer.py`
+- `configs/semantic_mask_vq_tokenizer_tiny_256.yaml`
+- `configs/semantic_mask_vq_tokenizer_main_256.yaml`
+- `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_1_256.yaml`
+- `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_4_256.yaml`
+- `tests/test_semantic_mask_vq_tokenizer_smoke.py`
 
-This route deliberately reuses existing project-layer wrappers:
+This route deliberately stays tokenizer-only:
 
-- `scripts/train_mask_prior_diffusion.py`
-- `scripts/sample_mask_prior_diffusion.py`
-- `scripts/eval_mask_prior.py`
-
-`tokenizer_ckpt_path` stays `null` in checked-in configs on purpose. Pass it
-explicitly at runtime via `--set`.
+- no token prior is implemented in this patch
+- no generation evaluation is claimed in this patch
 
 ## Route Definition
 
@@ -423,151 +424,104 @@ python scripts/eval_semantic_mask_tokenizer.py \
   --overwrite
 ```
 
-## Frozen-Tokenizer Latent Prior Route
+## Discrete Tokenizer Route
 
-This is the current second-step upstream mainline:
+This is the current upstream mainline:
 
-- task: unconditional `p(semantic_mask)`
-- representation during prior training: continuous tokenizer latent `z`
-- tokenizer:
-  - mask-only
-  - frozen
-  - deterministic posterior mode only
-- prior:
-  - backbone: `LatentIntervalSiT`
-  - objective: `GaussianDiffusionObjective`
-  - sampler: `DDIMDiffusionSampler`
+- task: reconstruct `semantic_mask`
+- representation during tokenizer training:
+  - encoder feature map -> discrete code indices
+  - code indices -> quantized embeddings -> decoder
 - no image branch
-- no codebook / VQ tokenizer
-- no token autoregressive prior
-- no latent discrete diffusion
-- no latent flow / AlphaFlow in this patch
+- no token prior
+- no latent continuous prior
+
+The frozen-tokenizer continuous latent prior remains checked in only as a
+negative control baseline. It is not the promoted mainline after its
+`memorize_1` / `memorize_4` failure.
 
 Checked-in configs:
 
-- `configs/latent_semantic_mask_prior_diffusion_sit_tiny.yaml`
-- `configs/latent_semantic_mask_prior_diffusion_sit.yaml`
-- `configs/diagnostics/latent_semantic_mask_prior_diffusion_memorize_1.yaml`
-- `configs/diagnostics/latent_semantic_mask_prior_diffusion_memorize_4.yaml`
+- `configs/semantic_mask_vq_tokenizer_tiny_256.yaml`
+- `configs/semantic_mask_vq_tokenizer_main_256.yaml`
+- `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_1_256.yaml`
+- `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_4_256.yaml`
 
-Interpretation of the decisive diagnostics:
+Current tokenizer geometry:
 
-- if frozen-tokenizer latent prior passes `memorize_4`, then the direct
-  pixel-space bottleneck was the main problem
-- if it still collapses badly, the next mainline should move toward a true
-  token / codebook prior rather than more direct pixel-space patching
-
-Recommended latent bridge:
-
-- use per-channel affine latent normalization for the frozen-tokenizer latent
-  prior
-- the checked-in configs keep `latent_normalization_config.mode=none` for
-  portability, but the intended runtime path is:
-  - export tokenizer latent stats with `scripts/eval_semantic_mask_tokenizer.py`
-  - pass `latent_normalization_config.mode=per_channel_affine`
-  - pass `latent_normalization_config.stats_path=<latent_stats.json>` via
-    `--set`
+- tiny token grid: `64 x 64`
+- main token grid: `64 x 64`
+- future token sequence length at this stage: `4096`
+- tiny codebook size: `64`
+- main codebook size: `512`
 
 Commands:
 
-Export tokenizer latent stats:
+Tiny discrete tokenizer:
 
 ```bash
-python scripts/eval_semantic_mask_tokenizer.py \
-  --config configs/semantic_mask_tokenizer_mid_plus_256.yaml \
-  --ckpt /path/to/semantic_mask_tokenizer.ckpt \
-  --outdir outputs/semantic_mask_tokenizer_eval/mid_plus_validation \
-  --split validation \
-  --n-samples 256 \
-  --batch-size 8 \
-  --overwrite
-```
-
-Tiny latent prior:
-
-```bash
-python scripts/train_mask_prior_diffusion.py \
-  --config configs/latent_semantic_mask_prior_diffusion_sit_tiny.yaml \
-  --set model.params.tokenizer_ckpt_path=/path/to/semantic_mask_tokenizer.ckpt \
-  --set model.params.latent_normalization_config.mode=per_channel_affine \
-  --set model.params.latent_normalization_config.stats_path=outputs/semantic_mask_tokenizer_eval/mid_plus_validation/latent_stats.json \
+python scripts/train_semantic_mask_vq_tokenizer.py \
+  --config configs/semantic_mask_vq_tokenizer_tiny_256.yaml \
   --scale-lr true \
   --gpus 0
 ```
 
-Base latent prior:
+Main discrete tokenizer:
 
 ```bash
-python scripts/train_mask_prior_diffusion.py \
-  --config configs/latent_semantic_mask_prior_diffusion_sit.yaml \
-  --set model.params.tokenizer_ckpt_path=/path/to/semantic_mask_tokenizer.ckpt \
-  --set model.params.latent_normalization_config.mode=per_channel_affine \
-  --set model.params.latent_normalization_config.stats_path=outputs/semantic_mask_tokenizer_eval/mid_plus_validation/latent_stats.json \
+python scripts/train_semantic_mask_vq_tokenizer.py \
+  --config configs/semantic_mask_vq_tokenizer_main_256.yaml \
   --scale-lr true \
   --gpus 0
 ```
 
-Memorize-1 diagnostic:
+Memorize-1 discrete tokenizer:
 
 ```bash
-python scripts/train_mask_prior_diffusion.py \
-  --config configs/diagnostics/latent_semantic_mask_prior_diffusion_memorize_1.yaml \
-  --set model.params.tokenizer_ckpt_path=/path/to/semantic_mask_tokenizer.ckpt \
-  --set model.params.latent_normalization_config.mode=per_channel_affine \
-  --set model.params.latent_normalization_config.stats_path=outputs/semantic_mask_tokenizer_eval/mid_plus_validation/latent_stats.json \
+python scripts/train_semantic_mask_vq_tokenizer.py \
+  --config configs/diagnostics/semantic_mask_vq_tokenizer_memorize_1_256.yaml \
   --scale-lr false \
   --gpus 0
 ```
 
-Memorize-4 diagnostic:
+Memorize-4 discrete tokenizer:
 
 ```bash
-python scripts/train_mask_prior_diffusion.py \
-  --config configs/diagnostics/latent_semantic_mask_prior_diffusion_memorize_4.yaml \
-  --set model.params.tokenizer_ckpt_path=/path/to/semantic_mask_tokenizer.ckpt \
-  --set model.params.latent_normalization_config.mode=per_channel_affine \
-  --set model.params.latent_normalization_config.stats_path=outputs/semantic_mask_tokenizer_eval/mid_plus_validation/latent_stats.json \
+python scripts/train_semantic_mask_vq_tokenizer.py \
+  --config configs/diagnostics/semantic_mask_vq_tokenizer_memorize_4_256.yaml \
   --scale-lr false \
   --gpus 0
 ```
 
-Sampling sweep:
+Main reconstruction evaluation:
 
 ```bash
-python scripts/sample_mask_prior_diffusion.py \
-  --config configs/latent_semantic_mask_prior_diffusion_sit.yaml \
-  --set model.params.tokenizer_ckpt_path=/path/to/semantic_mask_tokenizer.ckpt \
-  --set model.params.latent_normalization_config.mode=per_channel_affine \
-  --set model.params.latent_normalization_config.stats_path=outputs/semantic_mask_tokenizer_eval/mid_plus_validation/latent_stats.json \
-  --ckpt <best-latent-prior-ckpt> \
-  --outdir outputs/latent_semantic_mask_prior_samples/base \
-  --n-samples 32 \
-  --batch-size 8 \
-  --nfe-values 8 4 2 1 \
-  --seed 23 \
-  --overwrite
-```
-
-Distributional evaluation:
-
-```bash
-python scripts/eval_mask_prior.py \
-  --config configs/latent_semantic_mask_prior_diffusion_sit.yaml \
-  --set model.params.tokenizer_ckpt_path=/path/to/semantic_mask_tokenizer.ckpt \
-  --set model.params.latent_normalization_config.mode=per_channel_affine \
-  --set model.params.latent_normalization_config.stats_path=outputs/semantic_mask_tokenizer_eval/mid_plus_validation/latent_stats.json \
-  --ckpt <best-latent-prior-ckpt> \
-  --outdir outputs/latent_semantic_mask_prior_eval/base \
+python scripts/eval_semantic_mask_vq_tokenizer.py \
+  --config configs/semantic_mask_vq_tokenizer_main_256.yaml \
+  --ckpt /path/to/semantic_mask_vq_tokenizer.ckpt \
+  --outdir outputs/semantic_mask_vq_tokenizer_eval/main \
   --split validation \
   --n-samples 32 \
-  --batch-size 8 \
-  --nfe-values 8 4 2 1 \
+  --batch-size 4 \
   --seed 23 \
   --overwrite
 ```
 
-Memorize diagnostics are deliberate overfit controls, not generalization
-benchmarks.
+Memorize-4 reconstruction evaluation:
+
+```bash
+python scripts/eval_semantic_mask_vq_tokenizer.py \
+  --config configs/diagnostics/semantic_mask_vq_tokenizer_memorize_4_256.yaml \
+  --ckpt /path/to/semantic_mask_vq_tokenizer_memorize_4.ckpt \
+  --outdir outputs/semantic_mask_vq_tokenizer_eval/memorize_4 \
+  --split validation \
+  --n-samples 4 \
+  --batch-size 4 \
+  --seed 23 \
+  --overwrite
+```
+
+These are reconstruction diagnostics, not generation benchmarks.
 
 Memorize-4 reconstruction evaluation:
 
