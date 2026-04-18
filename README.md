@@ -151,6 +151,7 @@ Checked-in discrete tokenizer configs:
 - `configs/semantic_mask_vq_tokenizer_tiny_256.yaml`
 - `configs/semantic_mask_vq_tokenizer_main_256.yaml`
 - `configs/semantic_mask_vq_tokenizer_main_stable_256.yaml`
+- `configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml`
 - `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_1_256.yaml`
 - `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_4_256.yaml`
 - `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_1_hifi_256.yaml`
@@ -175,6 +176,14 @@ Current promoted main config:
 - checkpoint monitor:
   `val/mask_ce`
 
+Tail-aware main config:
+
+- `configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml`
+- keeps the same 64x64 token grid and stabilized VQ path
+- adds train-set scanned class-balanced CE
+- checkpoint monitor:
+  `val/mask_ce_unweighted`
+
 Train the tiny discrete tokenizer sanity route:
 
 ```bash
@@ -185,6 +194,12 @@ Train the main discrete tokenizer candidate:
 
 ```bash
 python scripts/train_semantic_mask_vq_tokenizer.py --config configs/semantic_mask_vq_tokenizer_main_stable_256.yaml --scale-lr true --gpus 0
+```
+
+Train the class-balanced main discrete tokenizer candidate:
+
+```bash
+python scripts/train_semantic_mask_vq_tokenizer.py --config configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml --scale-lr true --gpus 0
 ```
 
 Train the deliberate overfit `memorize_1` discrete tokenizer diagnostic:
@@ -209,7 +224,9 @@ python scripts/train_semantic_mask_vq_tokenizer.py --config configs/diagnostics/
 ```
 
 Evaluate discrete tokenizer reconstruction and export `input_mask_raw/`,
-`input_mask_color/`, `recon_mask_raw/`, `recon_mask_color/`, and `panel/`:
+`input_mask_color/`, `recon_mask_raw/`, `recon_mask_color/`, `panel/`, plus
+`analysis/confusion_matrix.json`, `analysis/worst_miou.json`, and
+`analysis/worst_per_class.json`:
 
 ```bash
 python scripts/eval_semantic_mask_vq_tokenizer.py --config configs/semantic_mask_vq_tokenizer_main_stable_256.yaml --ckpt /path/to/semantic_mask_vq_tokenizer.ckpt --outdir outputs/semantic_mask_vq_tokenizer_eval/main --split validation --n-samples 32 --batch-size 4 --seed 23 --overwrite

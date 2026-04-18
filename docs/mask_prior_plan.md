@@ -61,6 +61,7 @@ Project-layer files for the discrete tokenizer baseline:
 - `configs/semantic_mask_vq_tokenizer_tiny_256.yaml`
 - `configs/semantic_mask_vq_tokenizer_main_256.yaml`
 - `configs/semantic_mask_vq_tokenizer_main_stable_256.yaml`
+- `configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml`
 - `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_1_256.yaml`
 - `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_4_256.yaml`
 - `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_1_hifi_256.yaml`
@@ -472,6 +473,14 @@ Current promoted main config:
 - checkpoint monitor:
   `val/mask_ce`
 
+Current tail-aware main variant:
+
+- `configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml`
+- same stabilized VQ path and `64 x 64` token grid
+- train-set scanned class-balanced CE for rare semantic classes
+- checkpoint monitor:
+  `val/mask_ce_unweighted`
+
 Commands:
 
 Tiny discrete tokenizer:
@@ -488,6 +497,11 @@ Main discrete tokenizer:
 ```bash
 python scripts/train_semantic_mask_vq_tokenizer.py \
   --config configs/semantic_mask_vq_tokenizer_main_stable_256.yaml \
+  --scale-lr true \
+  --gpus 0
+
+python scripts/train_semantic_mask_vq_tokenizer.py \
+  --config configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml \
   --scale-lr true \
   --gpus 0
 ```
@@ -533,6 +547,14 @@ python scripts/eval_semantic_mask_vq_tokenizer.py \
   --seed 23 \
   --overwrite
 ```
+
+The VQ reconstruction eval now also writes:
+
+- `analysis/confusion_matrix.json`
+- `analysis/worst_miou.json`
+- `analysis/worst_per_class.json`
+- `analysis/worst_miou_panel/`
+- `analysis/worst_per_class_panel/`
 
 Memorize-4 reconstruction evaluation:
 

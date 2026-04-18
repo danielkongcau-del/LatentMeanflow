@@ -21,6 +21,15 @@ def _dist_is_initialized():
     return dist.is_available() and dist.is_initialized()
 
 
+def _as_float_tensor(value, *, name):
+    tensor = torch.as_tensor(value, dtype=torch.float32)
+    if tensor.ndim != 1:
+        raise ValueError(f"{name} must be rank-1, got shape {tuple(tensor.shape)}")
+    if int(tensor.numel()) <= 0:
+        raise ValueError(f"{name} must not be empty")
+    return tensor
+
+
 class SemanticMaskVectorQuantizer(nn.Module):
     def __init__(
         self,
@@ -202,6 +211,9 @@ class SemanticMaskVQLoss(nn.Module):
         focal_gamma=2.0,
         ce_label_smoothing=0.0,
         dice_eps=1.0e-6,
+        class_balance_mode="none",
+        effective_num_beta=0.9999,
+        class_counts=None,
     ):
         super().__init__()
         self.mask_ce_weight = float(mask_ce_weight)
@@ -213,25 +225,150 @@ class SemanticMaskVQLoss(nn.Module):
         self.focal_gamma = float(focal_gamma)
         self.ce_label_smoothing = float(ce_label_smoothing)
         self.dice_eps = float(dice_eps)
+        self.class_balance_mode = str(class_balance_mode).lower()
+        self.effective_num_beta = float(effective_num_beta)
+        if self.class_balance_mode not in {"none", "inverse_sqrt_frequency", "effective_num"}:
+            raise ValueError(
+                "class_balance_mode must be one of "
+                f"{{'none', 'inverse_sqrt_frequency', 'effective_num'}}, got {self.class_balance_mode!r}"
+            )
+        if self.class_balance_mode == "effective_num" and not 0.0 < self.effective_num_beta < 1.0:
+            raise ValueError(
+                f"effective_num_beta must be in (0, 1) for effective_num, got {self.effective_num_beta}"
+            )
+
+        self.num_classes = None
+        self._pending_class_counts = None if class_counts is None else _as_float_tensor(
+            class_counts,
+            name="class_counts",
+        )
+        self.register_buffer("class_counts", torch.empty(0, dtype=torch.float32), persistent=False)
+        self.register_buffer("class_weights", torch.empty(0, dtype=torch.float32), persistent=False)
+        self.register_buffer("active_class_mask", torch.empty(0, dtype=torch.bool), persistent=False)
+
+    def _buffer_device(self):
+        for name in ("class_weights", "class_counts", "active_class_mask"):
+            value = getattr(self, name, None)
+            if isinstance(value, torch.Tensor):
+                return value.device
+        return torch.device("cpu")
+
+    def configure_num_classes(self, num_classes):
+        self.num_classes = int(num_classes)
+        if self.num_classes <= 0:
+            raise ValueError(f"num_classes must be positive, got {self.num_classes}")
+
+        buffer_device = self._buffer_device()
+        self.class_weights = torch.ones(self.num_classes, dtype=torch.float32, device=buffer_device)
+        self.active_class_mask = torch.ones(self.num_classes, dtype=torch.bool, device=buffer_device)
+        if self.class_balance_mode == "none":
+            self.class_counts = torch.zeros(self.num_classes, dtype=torch.float32, device=buffer_device)
+        elif self._pending_class_counts is not None:
+            self.configure_class_balance(self._pending_class_counts)
+        else:
+            self.class_counts = torch.empty(0, dtype=torch.float32, device=buffer_device)
+
+    def _require_num_classes(self):
+        if self.num_classes is None:
+            raise RuntimeError("SemanticMaskVQLoss must be configured with num_classes before use.")
+
+    def configure_class_balance(self, class_counts):
+        self._require_num_classes()
+        buffer_device = self._buffer_device()
+        class_counts = _as_float_tensor(class_counts, name="class_counts").to(device=buffer_device)
+        if int(class_counts.numel()) != self.num_classes:
+            raise ValueError(
+                f"class_counts length must equal num_classes={self.num_classes}, got {int(class_counts.numel())}"
+            )
+        if torch.any(class_counts < 0):
+            raise ValueError("class_counts must be non-negative")
+
+        self.class_counts = class_counts.to(dtype=torch.float32, device=buffer_device)
+        active_mask = self.class_counts > 0
+        self.active_class_mask = active_mask
+
+        weights = torch.ones(self.num_classes, dtype=torch.float32, device=buffer_device)
+        if self.class_balance_mode == "none":
+            self.class_weights = weights
+            return
+
+        if torch.any(active_mask):
+            active_counts = self.class_counts[active_mask].clamp_min(1.0)
+            if self.class_balance_mode == "inverse_sqrt_frequency":
+                active_weights = active_counts.rsqrt()
+            elif self.class_balance_mode == "effective_num":
+                beta = self.effective_num_beta
+                active_weights = (1.0 - beta) / (1.0 - torch.pow(beta, active_counts))
+            else:
+                raise ValueError(f"Unsupported class_balance_mode: {self.class_balance_mode}")
+            active_weights = active_weights / active_weights.mean().clamp_min(1.0e-8)
+            weights[active_mask] = active_weights
+
+        self.class_weights = weights
+
+    def needs_class_count_scan(self):
+        return self.class_balance_mode != "none" and int(self.class_counts.numel()) == 0
+
+    def _class_weight_summary(self, *, device):
+        self._require_num_classes()
+        if self.class_weights.numel() == 0:
+            weights = torch.ones(self.num_classes, dtype=torch.float32, device=device)
+            active_mask = torch.ones(self.num_classes, dtype=torch.bool, device=device)
+        else:
+            weights = self.class_weights.to(device=device, dtype=torch.float32)
+            if self.active_class_mask.numel() == 0:
+                active_mask = torch.ones_like(weights, dtype=torch.bool)
+            else:
+                active_mask = self.active_class_mask.to(device=device, dtype=torch.bool)
+        active_weights = weights[active_mask] if torch.any(active_mask) else weights
+        return {
+            "class_weight_min": active_weights.min().detach(),
+            "class_weight_max": active_weights.max().detach(),
+            "class_weight_mean": active_weights.mean().detach(),
+        }
+
+    def class_weight_summary(self):
+        if self.num_classes is None:
+            return None
+        summary = self._class_weight_summary(device=self._buffer_device())
+        return {name: float(value.detach().cpu().item()) for name, value in summary.items()}
 
     def _mask_valid(self, mask_index):
         if self.ignore_index is None:
             return torch.ones_like(mask_index, dtype=torch.bool)
         return mask_index != self.ignore_index
 
-    def _cross_entropy_loss(self, mask_logits, mask_index):
+    def _safe_targets(self, mask_index, valid_mask):
+        safe_targets = mask_index.clone()
+        safe_targets[~valid_mask] = 0
+        return safe_targets
+
+    def _pixel_class_weights(self, safe_targets, *, device, dtype, use_class_weights):
+        if not use_class_weights or self.class_weights.numel() == 0:
+            return torch.ones_like(safe_targets, dtype=dtype, device=device)
+        return self.class_weights.to(device=device, dtype=dtype)[safe_targets]
+
+    def _cross_entropy_loss(self, mask_logits, mask_index, *, use_class_weights):
         valid_mask = self._mask_valid(mask_index)
         if not torch.any(valid_mask):
             return mask_logits.new_tensor(0.0)
 
+        safe_targets = self._safe_targets(mask_index, valid_mask)
         loss = F.cross_entropy(
             mask_logits,
-            mask_index,
-            ignore_index=-100 if self.ignore_index is None else self.ignore_index,
+            safe_targets,
             reduction="none",
             label_smoothing=self.ce_label_smoothing,
         )
-        return loss[valid_mask].mean()
+        valid_weight = valid_mask.to(dtype=loss.dtype)
+        pixel_class_weights = self._pixel_class_weights(
+            safe_targets,
+            device=mask_logits.device,
+            dtype=loss.dtype,
+            use_class_weights=use_class_weights,
+        )
+        weighted_loss = loss * pixel_class_weights * valid_weight
+        return weighted_loss.sum() / valid_weight.sum().clamp_min(1.0)
 
     def _dice_loss(self, mask_logits, mask_index):
         valid_mask = self._mask_valid(mask_index)
@@ -256,19 +393,28 @@ class SemanticMaskVQLoss(nn.Module):
         if not torch.any(valid_mask):
             return mask_logits.new_tensor(0.0)
 
+        safe_targets = self._safe_targets(mask_index, valid_mask)
         ce = F.cross_entropy(
             mask_logits,
-            mask_index,
-            ignore_index=-100 if self.ignore_index is None else self.ignore_index,
+            safe_targets,
             reduction="none",
             label_smoothing=self.ce_label_smoothing,
         )
-        ce = ce[valid_mask]
         pt = torch.exp(-ce)
-        return (((1.0 - pt) ** self.focal_gamma) * ce).mean()
+        focal = ((1.0 - pt) ** self.focal_gamma) * ce
+        valid_weight = valid_mask.to(dtype=focal.dtype)
+        pixel_class_weights = self._pixel_class_weights(
+            safe_targets,
+            device=mask_logits.device,
+            dtype=focal.dtype,
+            use_class_weights=True,
+        )
+        weighted_focal = focal * pixel_class_weights * valid_weight
+        return weighted_focal.sum() / valid_weight.sum().clamp_min(1.0)
 
     def forward(self, mask_index, mask_logits, *, vq_codebook_loss, vq_commitment_loss, quantizer_stats=None):
-        mask_ce = self._cross_entropy_loss(mask_logits, mask_index)
+        mask_ce = self._cross_entropy_loss(mask_logits, mask_index, use_class_weights=True)
+        mask_ce_unweighted = self._cross_entropy_loss(mask_logits, mask_index, use_class_weights=False)
         mask_dice = self._dice_loss(mask_logits, mask_index)
         mask_focal = self._focal_loss(mask_logits, mask_index)
         vq_total = (
@@ -284,6 +430,7 @@ class SemanticMaskVQLoss(nn.Module):
 
         loss_dict = {
             "mask_ce": mask_ce,
+            "mask_ce_unweighted": mask_ce_unweighted,
             "mask_dice": mask_dice,
             "mask_focal": mask_focal,
             "vq_codebook": vq_codebook_loss,
@@ -296,6 +443,8 @@ class SemanticMaskVQLoss(nn.Module):
                 value = quantizer_stats.get(name)
                 if isinstance(value, torch.Tensor) and value.ndim == 0:
                     loss_dict[f"codebook_{name}"] = value
+        if self.num_classes is not None:
+            loss_dict.update(self._class_weight_summary(device=mask_logits.device))
         return total_loss, loss_dict
 
 
@@ -359,6 +508,9 @@ class SemanticMaskVQAutoencoder(pl.LightningModule):
         )
 
         self.loss = instantiate_from_config(lossconfig)
+        configure_num_classes = getattr(self.loss, "configure_num_classes", None)
+        if callable(configure_num_classes):
+            configure_num_classes(self.num_classes)
         self.learning_rate = 1.0e-4
         self.latent_channels = self.embed_dim
         self.latent_spatial_shape = tuple(int(v) for v in self.decoder.z_shape[2:])
@@ -493,6 +645,101 @@ class SemanticMaskVQAutoencoder(pl.LightningModule):
         if self.mask_index_key in batch:
             return int(torch.as_tensor(batch[self.mask_index_key]).shape[0])
         return int(torch.as_tensor(batch[self.mask_onehot_key]).shape[0])
+
+    def _is_global_zero(self):
+        trainer = getattr(self, "trainer", None)
+        if trainer is not None and hasattr(trainer, "is_global_zero"):
+            return bool(trainer.is_global_zero)
+        return int(getattr(self, "global_rank", 0)) == 0
+
+    def _log_info(self, message):
+        if self._is_global_zero():
+            print(message)
+
+    def _get_train_dataset(self):
+        trainer = getattr(self, "trainer", None)
+        if trainer is None:
+            raise RuntimeError("Trainer must be attached before accessing the train dataset.")
+
+        datamodule = getattr(trainer, "datamodule", None)
+        if datamodule is not None:
+            datasets = getattr(datamodule, "datasets", None)
+            if isinstance(datasets, dict) and "train" in datasets:
+                dataset = datasets["train"]
+                if hasattr(dataset, "data") and hasattr(dataset.data, "__len__") and hasattr(dataset.data, "__getitem__"):
+                    return dataset.data
+                return dataset
+
+        train_dataloader = getattr(trainer, "train_dataloader", None)
+        if train_dataloader is not None:
+            if isinstance(train_dataloader, (list, tuple)):
+                train_dataloader = train_dataloader[0]
+            dataset = getattr(train_dataloader, "dataset", None)
+            if dataset is not None:
+                if hasattr(dataset, "data") and hasattr(dataset.data, "__len__") and hasattr(dataset.data, "__getitem__"):
+                    return dataset.data
+                return dataset
+
+        raise RuntimeError("Could not resolve the train dataset for class-balance scanning.")
+
+    def _scan_train_class_counts(self):
+        dataset = self._get_train_dataset()
+        counts = torch.zeros(self.num_classes, dtype=torch.float64)
+        for sample_idx in range(len(dataset)):
+            sample = dataset[sample_idx]
+            if self.mask_index_key not in sample:
+                raise KeyError(
+                    "SemanticMaskVQAutoencoder class-count scan requires train dataset samples to include "
+                    f"'{self.mask_index_key}'."
+                )
+            mask_index = self._normalize_mask_index(sample[self.mask_index_key]).view(-1)
+            if self.loss.ignore_index is not None:
+                mask_index = mask_index[mask_index != int(self.loss.ignore_index)]
+            if int(mask_index.numel()) <= 0:
+                continue
+            bincount = torch.bincount(mask_index.clamp(min=0), minlength=self.num_classes)
+            counts += bincount[: self.num_classes].to(dtype=counts.dtype)
+        return counts
+
+    def _broadcast_class_counts(self, class_counts):
+        device = self.device if isinstance(self.device, torch.device) else torch.device("cpu")
+        if device.type not in {"cpu", "cuda"}:
+            device = torch.device("cpu")
+        counts_tensor = torch.zeros(self.num_classes, dtype=torch.float64, device=device)
+        if class_counts is not None:
+            counts_tensor.copy_(class_counts.to(device=device, dtype=torch.float64))
+        if _dist_is_initialized():
+            dist.broadcast(counts_tensor, src=0)
+        return counts_tensor.cpu().to(dtype=torch.float32)
+
+    def _maybe_configure_loss_class_balance(self):
+        configure_class_balance = getattr(self.loss, "configure_class_balance", None)
+        needs_class_count_scan = getattr(self.loss, "needs_class_count_scan", None)
+        if not callable(configure_class_balance) or not callable(needs_class_count_scan):
+            return
+        if not bool(needs_class_count_scan()):
+            return
+
+        class_counts = None
+        if self._is_global_zero():
+            class_counts = self._scan_train_class_counts()
+        class_counts = self._broadcast_class_counts(class_counts)
+        configure_class_balance(class_counts)
+        class_weight_summary = getattr(self.loss, "class_weight_summary", None)
+        weight_summary = class_weight_summary() if callable(class_weight_summary) else None
+        summary_text = ""
+        if isinstance(weight_summary, dict):
+            summary_text = (
+                ", "
+                f"class_weight_min={weight_summary['class_weight_min']:.4f}, "
+                f"class_weight_max={weight_summary['class_weight_max']:.4f}, "
+                f"class_weight_mean={weight_summary['class_weight_mean']:.4f}"
+            )
+        self._log_info(
+            "[SemanticMaskVQAutoencoder] "
+            f"class_balance_mode={getattr(self.loss, 'class_balance_mode', 'none')}, "
+            f"class_counts={class_counts.tolist()}{summary_text}"
+        )
 
     def _should_sync_dist(self):
         trainer = getattr(self, "trainer", None)
@@ -669,6 +916,9 @@ class SemanticMaskVQAutoencoder(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         _, detached_loss_dict = self.shared_step(batch, split="val")
         return detached_loss_dict["total_loss"]
+
+    def on_fit_start(self):
+        self._maybe_configure_loss_class_balance()
 
     def configure_optimizers(self):
         lr = float(getattr(self, "learning_rate", 1.0e-4))

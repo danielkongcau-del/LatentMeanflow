@@ -142,6 +142,25 @@ class SemanticMaskVQTokenizerSmokeTest(unittest.TestCase):
         self.assertEqual(float(outputs["loss_dict"]["vq_codebook"].item()), 0.0)
         self.assertGreaterEqual(int(outputs["quantizer_stats"]["used_code_count"].item()), 1)
 
+    def test_class_balanced_ce_configures_rare_class_weights(self):
+        model = _make_model(
+            loss_params={
+                "class_balance_mode": "inverse_sqrt_frequency",
+            }
+        )
+        self.assertTrue(bool(model.loss.needs_class_count_scan()))
+        model.loss.configure_class_balance(torch.tensor([100.0, 64.0, 16.0, 1.0], dtype=torch.float32))
+        self.assertFalse(bool(model.loss.needs_class_count_scan()))
+
+        class_weights = model.loss.class_weights.detach().cpu()
+        self.assertGreater(float(class_weights[3].item()), float(class_weights[0].item()))
+
+        outputs = model(_make_batch())
+        self.assertIn("mask_ce_unweighted", outputs["loss_dict"])
+        self.assertIn("class_weight_min", outputs["loss_dict"])
+        self.assertIn("class_weight_max", outputs["loss_dict"])
+        self.assertTrue(torch.isfinite(outputs["loss_dict"]["mask_ce_unweighted"]))
+
     def test_strict_mask_index_mask_onehot_consistency(self):
         model = _make_model()
         batch = _make_batch()
@@ -195,6 +214,23 @@ class SemanticMaskVQTokenizerSmokeTest(unittest.TestCase):
         self.assertEqual(model.codebook_size, 512)
         self.assertEqual(model.latent_spatial_shape, (64, 64))
         self.assertTrue(model.quantizer.use_ema_update)
+
+    def test_main_balanced_config_contract(self):
+        config = OmegaConf.load(REPO_ROOT / "configs" / "semantic_mask_vq_tokenizer_main_balanced_256.yaml")
+        self.assertEqual(
+            config.model.target,
+            "latent_meanflow.models.semantic_mask_vq_autoencoder.SemanticMaskVQAutoencoder",
+        )
+        self.assertEqual(str(config.model.params.monitor), "val/mask_ce_unweighted")
+        self.assertEqual(int(config.model.params.codebook_size), 512)
+        self.assertEqual(list(config.model.params.ddconfig.ch_mult), [1, 2, 4])
+        self.assertEqual(str(config.model.params.lossconfig.params.class_balance_mode), "inverse_sqrt_frequency")
+        self.assertTrue(bool(config.model.params.ddconfig.use_linear_attn))
+
+        model = instantiate_from_config(config.model)
+        self.assertEqual(model.codebook_size, 512)
+        self.assertEqual(model.latent_spatial_shape, (64, 64))
+        self.assertEqual(str(model.loss.class_balance_mode), "inverse_sqrt_frequency")
 
     def test_hifi_memorize_config_contract(self):
         config = OmegaConf.load(REPO_ROOT / "configs" / "diagnostics" / "semantic_mask_vq_tokenizer_memorize_4_hifi_256.yaml")

@@ -54,6 +54,7 @@ The discrete-tokenizer half now has checked-in project-layer files:
 - `configs/semantic_mask_vq_tokenizer_tiny_256.yaml`
 - `configs/semantic_mask_vq_tokenizer_main_256.yaml`
 - `configs/semantic_mask_vq_tokenizer_main_stable_256.yaml`
+- `configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml`
 - `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_1_256.yaml`
 - `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_4_256.yaml`
 - `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_1_hifi_256.yaml`
@@ -77,6 +78,14 @@ Current promoted main config:
   cosine matching + EMA codebook update + dead-code refresh
 - checkpoint monitor:
   `val/mask_ce`
+
+Tail-aware main variant:
+
+- `configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml`
+- same `64x64` token grid and stabilized quantizer
+- train-set scanned class-balanced CE for rare semantic classes
+- checkpoint monitor:
+  `val/mask_ce_unweighted`
 
 The direct pixel-space prior benchmarks below remain checked in, but they are
 now comparison controls rather than the promoted upstream mainline.
@@ -119,6 +128,11 @@ python scripts/train_semantic_mask_vq_tokenizer.py \
 
 python scripts/train_semantic_mask_vq_tokenizer.py \
   --config configs/semantic_mask_vq_tokenizer_main_stable_256.yaml \
+  --scale-lr true \
+  --gpus 0
+
+python scripts/train_semantic_mask_vq_tokenizer.py \
+  --config configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml \
   --scale-lr true \
   --gpus 0
 
@@ -176,6 +190,14 @@ python scripts/eval_semantic_mask_vq_tokenizer.py \
   --seed 23 \
   --overwrite
 ```
+
+The VQ reconstruction eval also exports class diagnostics:
+
+- `analysis/confusion_matrix.json`
+- `analysis/worst_miou.json`
+- `analysis/worst_per_class.json`
+- `analysis/worst_miou_panel/`
+- `analysis/worst_per_class_panel/`
 
 These commands evaluate reconstruction only. They do **not** evaluate
 unconditional generation because the token prior is still `not implemented yet`.
