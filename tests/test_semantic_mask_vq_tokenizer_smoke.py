@@ -187,6 +187,7 @@ class SemanticMaskVQTokenizerSmokeTest(unittest.TestCase):
         self.assertEqual(str(config.model.params.monitor), "val/mask_ce")
         self.assertEqual(int(config.model.params.codebook_size), 512)
         self.assertEqual(list(config.model.params.ddconfig.ch_mult), [1, 2])
+        self.assertTrue(bool(config.model.params.ddconfig.use_linear_attn))
         self.assertEqual(str(config.model.params.quantizer_config.distance_metric), "cosine")
         self.assertTrue(bool(config.model.params.quantizer_config.use_ema_update))
         self.assertEqual(float(config.lightning.trainer.gradient_clip_val), 1.0)
