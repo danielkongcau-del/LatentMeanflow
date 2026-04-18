@@ -177,6 +177,25 @@ class SemanticMaskVQTokenizerSmokeTest(unittest.TestCase):
         model = instantiate_from_config(config.model)
         self.assertEqual(model.codebook_size, int(config.model.params.codebook_size))
 
+    def test_main_stable_config_contract(self):
+        config = OmegaConf.load(REPO_ROOT / "configs" / "semantic_mask_vq_tokenizer_main_stable_256.yaml")
+        self.assertEqual(
+            config.model.target,
+            "latent_meanflow.models.semantic_mask_vq_autoencoder.SemanticMaskVQAutoencoder",
+        )
+        self.assertEqual(str(config.model.params.monitor), "val/mask_ce")
+        self.assertEqual(int(config.model.params.codebook_size), 512)
+        self.assertEqual(list(config.model.params.ddconfig.ch_mult), [1, 2, 4])
+        self.assertTrue(bool(config.model.params.ddconfig.use_linear_attn))
+        self.assertEqual(str(config.model.params.quantizer_config.distance_metric), "cosine")
+        self.assertTrue(bool(config.model.params.quantizer_config.use_ema_update))
+        self.assertEqual(float(config.lightning.trainer.gradient_clip_val), 1.0)
+
+        model = instantiate_from_config(config.model)
+        self.assertEqual(model.codebook_size, 512)
+        self.assertEqual(model.latent_spatial_shape, (64, 64))
+        self.assertTrue(model.quantizer.use_ema_update)
+
     def test_hifi_memorize_config_contract(self):
         config = OmegaConf.load(REPO_ROOT / "configs" / "diagnostics" / "semantic_mask_vq_tokenizer_memorize_4_hifi_256.yaml")
         self.assertEqual(

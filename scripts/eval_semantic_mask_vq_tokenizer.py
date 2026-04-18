@@ -25,7 +25,7 @@ from latent_meanflow.utils import colorize_mask_index
 from scripts.sample_latent_flow import load_config, load_model, validate_ckpt_matches_config
 
 
-DEFAULT_CONFIG = REPO_ROOT / "configs" / "semantic_mask_vq_tokenizer_main_256.yaml"
+DEFAULT_CONFIG = REPO_ROOT / "configs" / "semantic_mask_vq_tokenizer_main_stable_256.yaml"
 
 
 def parse_args():

@@ -60,6 +60,7 @@ Project-layer files for the discrete tokenizer baseline:
 - `scripts/eval_semantic_mask_vq_tokenizer.py`
 - `configs/semantic_mask_vq_tokenizer_tiny_256.yaml`
 - `configs/semantic_mask_vq_tokenizer_main_256.yaml`
+- `configs/semantic_mask_vq_tokenizer_main_stable_256.yaml`
 - `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_1_256.yaml`
 - `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_4_256.yaml`
 - `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_1_hifi_256.yaml`
@@ -446,6 +447,7 @@ Checked-in configs:
 
 - `configs/semantic_mask_vq_tokenizer_tiny_256.yaml`
 - `configs/semantic_mask_vq_tokenizer_main_256.yaml`
+- `configs/semantic_mask_vq_tokenizer_main_stable_256.yaml`
 - `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_1_256.yaml`
 - `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_4_256.yaml`
 - `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_1_hifi_256.yaml`
@@ -462,6 +464,14 @@ Current tokenizer geometry:
 - high-fidelity overfit sequence length: `16384`
 - high-fidelity overfit codebook size: `1024`
 
+Current promoted main config:
+
+- `configs/semantic_mask_vq_tokenizer_main_stable_256.yaml`
+- stable quantizer path:
+  cosine matching + EMA codebook update + dead-code refresh
+- checkpoint monitor:
+  `val/mask_ce`
+
 Commands:
 
 Tiny discrete tokenizer:
@@ -477,7 +487,7 @@ Main discrete tokenizer:
 
 ```bash
 python scripts/train_semantic_mask_vq_tokenizer.py \
-  --config configs/semantic_mask_vq_tokenizer_main_256.yaml \
+  --config configs/semantic_mask_vq_tokenizer_main_stable_256.yaml \
   --scale-lr true \
   --gpus 0
 ```
@@ -514,7 +524,7 @@ Main reconstruction evaluation:
 
 ```bash
 python scripts/eval_semantic_mask_vq_tokenizer.py \
-  --config configs/semantic_mask_vq_tokenizer_main_256.yaml \
+  --config configs/semantic_mask_vq_tokenizer_main_stable_256.yaml \
   --ckpt /path/to/semantic_mask_vq_tokenizer.ckpt \
   --outdir outputs/semantic_mask_vq_tokenizer_eval/main \
   --split validation \

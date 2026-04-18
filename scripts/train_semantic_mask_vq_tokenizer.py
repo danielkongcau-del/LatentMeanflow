@@ -20,7 +20,7 @@ SCRIPT_ROOT = Path(__file__).resolve().parent
 LDM_ROOT = REPO_ROOT / "third_party" / "latent-diffusion"
 TAMING_ROOT = LDM_ROOT / "taming-transformers"
 LDM_LAUNCHER = SCRIPT_ROOT / "launch_ldm_main.py"
-DEFAULT_CONFIG = REPO_ROOT / "configs" / "semantic_mask_vq_tokenizer_main_256.yaml"
+DEFAULT_CONFIG = REPO_ROOT / "configs" / "semantic_mask_vq_tokenizer_main_stable_256.yaml"
 
 
 def parse_args():
