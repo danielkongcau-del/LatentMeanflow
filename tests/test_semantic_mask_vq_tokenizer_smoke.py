@@ -167,11 +167,12 @@ class SemanticMaskVQTokenizerSmokeTest(unittest.TestCase):
             "latent_meanflow.models.semantic_mask_vq_autoencoder.SemanticMaskVQAutoencoder",
         )
         self.assertEqual(config.data.params.train.target, "latent_meanflow.data.subset.FixedSubsetDataset")
-        self.assertEqual(int(config.model.params.codebook_size), 1024)
+        self.assertEqual(int(config.model.params.codebook_size), 512)
         self.assertEqual(list(config.model.params.ddconfig.ch_mult), [1, 2])
+        self.assertEqual(float(config.lightning.trainer.gradient_clip_val), 1.0)
 
         model = instantiate_from_config(config.model)
-        self.assertEqual(model.codebook_size, 1024)
+        self.assertEqual(model.codebook_size, 512)
         self.assertEqual(model.latent_spatial_shape, (128, 128))
 
     def test_codes_are_discrete_and_in_range(self):

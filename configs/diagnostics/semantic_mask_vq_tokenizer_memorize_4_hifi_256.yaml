@@ -1,5 +1,5 @@
 model:
-  base_learning_rate: 2.0e-4
+  base_learning_rate: 5.0e-5
   target: latent_meanflow.models.semantic_mask_vq_autoencoder.SemanticMaskVQAutoencoder
   params:
     # High-fidelity overfit diagnostic for mask-only discrete tokenizer reconstruction.
@@ -7,7 +7,7 @@ model:
     # whether the tokenizer can preserve fine geometry across a fixed 4-mask bank.
     monitor: "val/total_loss"
     embed_dim: 64
-    codebook_size: 1024
+    codebook_size: 512
     num_classes: 7
     lossconfig:
       target: latent_meanflow.models.semantic_mask_vq_autoencoder.SemanticMaskVQLoss
@@ -15,8 +15,8 @@ model:
         mask_ce_weight: 1.0
         mask_dice_weight: 0.5
         mask_focal_weight: 0.0
-        vq_codebook_weight: 0.25
-        vq_commit_weight: 0.05
+        vq_codebook_weight: 1.0
+        vq_commit_weight: 0.25
         ignore_index: -1
         focal_gamma: 2.0
         ce_label_smoothing: 0.0
@@ -86,4 +86,6 @@ lightning:
     num_sanity_val_steps: 0
     log_every_n_steps: 1
     accumulate_grad_batches: 1
+    gradient_clip_val: 1.0
+    gradient_clip_algorithm: norm
     strategy: ddp_find_unused_parameters_false
