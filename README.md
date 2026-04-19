@@ -277,6 +277,8 @@ Checked-in project-layer token-generator files:
 - `scripts/eval_token_mask_prior.py`
 - `configs/token_mask_prior_vq_sit_tiny.yaml`
 - `configs/token_mask_prior_vq_sit.yaml`
+- `configs/token_mask_prior_vq_sit_hifi_tiny.yaml`
+- `configs/token_mask_prior_vq_sit_hifi.yaml`
 - `configs/token_mask_prior_vq_sit_tiny_control.yaml`
 - `configs/token_mask_prior_vq_sit_control.yaml`
 - `configs/diagnostics/token_mask_prior_vq_sit_memorize_1.yaml`
@@ -308,6 +310,18 @@ Old control configs kept for apples-to-apples comparison:
 - `configs/token_mask_prior_vq_sit_tiny_control.yaml`
 - keep the earlier progressive-reveal semantics as the control route
 
+Parallel high-fidelity branch for thin structures:
+
+- `configs/token_mask_prior_vq_sit_hifi.yaml`
+- `configs/token_mask_prior_vq_sit_hifi_tiny.yaml`
+- keeps the same frozen tokenizer, discrete diffusion objective family, and
+  downstream renderer contract
+- changes only the prior backbone granularity to `patch_size=1`
+- purpose:
+  improve thin roads, narrow boundaries, and small-object connectivity
+- this is a parallel fidelity branch, not a replacement for the promoted
+  refine mainline
+
 Train the tiny token-code mask-generator pilot:
 
 ```bash
@@ -324,6 +338,12 @@ Train the old progressive-reveal control baseline:
 
 ```bash
 python scripts/train_token_mask_prior.py --config configs/token_mask_prior_vq_sit_control.yaml --tokenizer-ckpt /path/to/semantic_mask_vq_tokenizer_balanced.ckpt --scale-lr true --gpus 0
+```
+
+Train the high-fidelity thin-structure branch:
+
+```bash
+python scripts/train_token_mask_prior.py --config configs/token_mask_prior_vq_sit_hifi.yaml --tokenizer-ckpt /path/to/semantic_mask_vq_tokenizer_balanced.ckpt --scale-lr true --gpus 0
 ```
 
 Run the decisive tiny-bank memorize diagnostics:

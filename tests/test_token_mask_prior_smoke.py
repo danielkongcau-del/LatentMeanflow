@@ -361,6 +361,44 @@ class TokenMaskPriorSmokeTest(unittest.TestCase):
             self.assertAlmostEqual(float(config.model.params.area_ratio_loss_weight), 0.05)
             self.assertAlmostEqual(float(config.model.params.adjacency_loss_weight), 0.02)
 
+    def test_hifi_configs_pin_patch_size_one(self):
+        expected_backbones = {
+            REPO_ROOT / "configs" / "token_mask_prior_vq_sit_hifi.yaml": {
+                "patch_size": 1,
+                "hidden_size": 256,
+                "depth": 8,
+                "num_heads": 4,
+            },
+            REPO_ROOT / "configs" / "token_mask_prior_vq_sit_hifi_tiny.yaml": {
+                "patch_size": 1,
+                "hidden_size": 192,
+                "depth": 6,
+                "num_heads": 3,
+            },
+        }
+        for config_path, expected in expected_backbones.items():
+            config = OmegaConf.load(config_path)
+            self.assertEqual(
+                config.model.target,
+                "latent_meanflow.trainers.token_mask_prior_trainer.TokenMaskPriorTrainer",
+            )
+            self.assertEqual(
+                str(config.model.params.tokenizer_config_path),
+                "configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml",
+            )
+            self.assertTrue(bool(config.model.params.freeze_tokenizer))
+            self.assertFalse(bool(config.model.params.tokenizer_sample_posterior))
+            backbone_params = config.model.params.backbone_config.params
+            self.assertEqual(int(backbone_params.patch_size), expected["patch_size"])
+            self.assertEqual(int(backbone_params.hidden_size), expected["hidden_size"])
+            self.assertEqual(int(backbone_params.depth), expected["depth"])
+            self.assertEqual(int(backbone_params.num_heads), expected["num_heads"])
+            self.assertAlmostEqual(float(config.model.params.semantic_ce_weight), 0.2)
+            self.assertAlmostEqual(float(config.model.params.semantic_dice_weight), 0.1)
+            self.assertAlmostEqual(float(config.model.params.boundary_loss_weight), 0.05)
+            self.assertAlmostEqual(float(config.model.params.area_ratio_loss_weight), 0.05)
+            self.assertAlmostEqual(float(config.model.params.adjacency_loss_weight), 0.02)
+
     def test_control_configs_keep_old_progressive_reveal_semantics(self):
         config_paths = [
             REPO_ROOT / "configs" / "token_mask_prior_vq_sit_tiny_control.yaml",
@@ -427,6 +465,37 @@ class TokenMaskPriorSmokeTest(unittest.TestCase):
             )
             self.assertEqual(tuple(sampled.shape), (2, *token_spatial_shape))
             self.assertEqual(sampled.dtype, torch.long)
+
+    def test_hifi_tiny_config_instantiates_and_samples(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path, ckpt_path, token_spatial_shape, _ = _write_tokenizer_artifacts(tmpdir)
+            config = OmegaConf.load(REPO_ROOT / "configs" / "token_mask_prior_vq_sit_hifi_tiny.yaml")
+            OmegaConf.update(config, "model.params.tokenizer_config_path", str(config_path), merge=False)
+            OmegaConf.update(config, "model.params.tokenizer_ckpt_path", str(ckpt_path), merge=False)
+
+            trainer = instantiate_from_config(config.model)
+            self.assertEqual(int(trainer.backbone.patch_size), 1)
+            sampled = trainer.sample_latents(
+                batch_size=1,
+                nfe=2,
+                device=torch.device("cpu"),
+                noise=torch.randn((1, trainer.latent_channels, *trainer.latent_spatial_shape)),
+            )
+            self.assertEqual(tuple(sampled.shape), (1, *token_spatial_shape))
+            self.assertEqual(sampled.dtype, torch.long)
+
+    def test_hifi_main_config_instantiates(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path, ckpt_path, _, _ = _write_tokenizer_artifacts(tmpdir)
+            config = OmegaConf.load(REPO_ROOT / "configs" / "token_mask_prior_vq_sit_hifi.yaml")
+            OmegaConf.update(config, "model.params.tokenizer_config_path", str(config_path), merge=False)
+            OmegaConf.update(config, "model.params.tokenizer_ckpt_path", str(ckpt_path), merge=False)
+
+            trainer = instantiate_from_config(config.model)
+            self.assertEqual(int(trainer.backbone.patch_size), 1)
+            self.assertEqual(int(trainer.backbone.hidden_size), 256)
+            self.assertEqual(int(trainer.backbone.depth), 8)
+            self.assertEqual(int(trainer.backbone.num_heads), 4)
 
 
 if __name__ == "__main__":

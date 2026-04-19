@@ -31,6 +31,8 @@ Configs:
 
 - `configs/token_mask_prior_vq_sit_tiny.yaml`
 - `configs/token_mask_prior_vq_sit.yaml`
+- `configs/token_mask_prior_vq_sit_hifi_tiny.yaml`
+- `configs/token_mask_prior_vq_sit_hifi.yaml`
 - `configs/token_mask_prior_vq_sit_tiny_control.yaml`
 - `configs/token_mask_prior_vq_sit_control.yaml`
 - `configs/diagnostics/token_mask_prior_vq_sit_memorize_1.yaml`
@@ -68,6 +70,19 @@ Mainline configs:
 - `configs/token_mask_prior_vq_sit.yaml`
 - `configs/token_mask_prior_vq_sit_tiny.yaml`
 
+High-fidelity thin-structure branch:
+
+- `configs/token_mask_prior_vq_sit_hifi.yaml`
+- `configs/token_mask_prior_vq_sit_hifi_tiny.yaml`
+- keeps `patch_size=1` inside `LatentIntervalSiT` so the prior no longer
+  aggregates neighboring tokenizer codes into larger prior patches
+- meant to improve thin regions, narrow boundaries, and small-target
+  connectivity
+- stays on the same frozen-tokenizer decode contract and the same downstream
+  renderer route
+- should be treated as a parallel fidelity branch, not as an unconditional
+  replacement for the promoted mainline
+
 Control configs:
 
 - `configs/token_mask_prior_vq_sit_control.yaml`
@@ -96,6 +111,16 @@ Train the old progressive-reveal control:
 ```bash
 python scripts/train_token_mask_prior.py \
   --config configs/token_mask_prior_vq_sit_control.yaml \
+  --tokenizer-ckpt /path/to/semantic_mask_vq_tokenizer_balanced.ckpt \
+  --scale-lr true \
+  --gpus 0
+```
+
+Train the high-fidelity thin-structure branch:
+
+```bash
+python scripts/train_token_mask_prior.py \
+  --config configs/token_mask_prior_vq_sit_hifi.yaml \
   --tokenizer-ckpt /path/to/semantic_mask_vq_tokenizer_balanced.ckpt \
   --scale-lr true \
   --gpus 0
