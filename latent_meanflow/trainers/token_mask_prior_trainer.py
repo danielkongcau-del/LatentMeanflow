@@ -7,6 +7,14 @@ import torch.nn.functional as F
 from ldm.util import instantiate_from_config
 from omegaconf import OmegaConf
 
+from latent_meanflow.losses.semantic_structure import (
+    adjacency_l1_loss,
+    area_ratio_l1_loss,
+    boundary_bce_loss,
+    build_valid_mask,
+    mask_index_to_boundary_target,
+    semantic_probs_to_soft_boundary,
+)
 from latent_meanflow.models.tokenizer import SemanticTokenizerAdapter
 
 
@@ -23,6 +31,9 @@ class TokenMaskPriorTrainer(pl.LightningModule):
         tokenizer_sample_posterior=False,
         semantic_ce_weight=0.0,
         semantic_dice_weight=0.0,
+        boundary_loss_weight=0.0,
+        area_ratio_loss_weight=0.0,
+        adjacency_loss_weight=0.0,
         log_sample_nfe=4,
         monitor="val/base_error_mean",
         mask_key="mask_onehot",
@@ -56,6 +67,9 @@ class TokenMaskPriorTrainer(pl.LightningModule):
         self.tokenizer_ckpt_path = str(tokenizer_ckpt_path)
         self.semantic_ce_weight = float(semantic_ce_weight)
         self.semantic_dice_weight = float(semantic_dice_weight)
+        self.boundary_loss_weight = float(boundary_loss_weight)
+        self.area_ratio_loss_weight = float(area_ratio_loss_weight)
+        self.adjacency_loss_weight = float(adjacency_loss_weight)
 
         self.tokenizer = SemanticTokenizerAdapter.from_pretrained(
             config_path=self.tokenizer_config_path,
@@ -65,6 +79,7 @@ class TokenMaskPriorTrainer(pl.LightningModule):
         )
         if any(param.requires_grad for param in self.tokenizer.parameters()):
             raise ValueError("Frozen token-mask prior requires tokenizer parameters to stay non-trainable.")
+        self.ignore_index = self.tokenizer.ignore_index
 
         self.num_classes = int(self.tokenizer.num_classes)
         self.codebook_size = int(self.tokenizer.codebook_size)
@@ -211,7 +226,10 @@ class TokenMaskPriorTrainer(pl.LightningModule):
             f"codebook_size={self.codebook_size}, token_spatial_shape={self.token_spatial_shape}, "
             f"mask_spatial_shape={self.mask_spatial_shape}, objective={self.objective_name}, "
             f"semantic_ce_weight={self.semantic_ce_weight:.3f}, "
-            f"semantic_dice_weight={self.semantic_dice_weight:.3f}"
+            f"semantic_dice_weight={self.semantic_dice_weight:.3f}, "
+            f"boundary_loss_weight={self.boundary_loss_weight:.3f}, "
+            f"area_ratio_loss_weight={self.area_ratio_loss_weight:.3f}, "
+            f"adjacency_loss_weight={self.adjacency_loss_weight:.3f}"
         )
 
     def _token_usage_metrics(self, codes):
@@ -254,8 +272,17 @@ class TokenMaskPriorTrainer(pl.LightningModule):
         decoded["codes"] = codes
         return decoded
 
-    def _semantic_auxiliary_enabled(self):
-        return self.semantic_ce_weight > 0.0 or self.semantic_dice_weight > 0.0
+    def _semantic_decode_bridge_enabled(self):
+        return any(
+            weight > 0.0
+            for weight in (
+                self.semantic_ce_weight,
+                self.semantic_dice_weight,
+                self.boundary_loss_weight,
+                self.area_ratio_loss_weight,
+                self.adjacency_loss_weight,
+            )
+        )
 
     def _decode_semantic_from_code_logits(self, code_logits):
         if tuple(int(v) for v in code_logits.shape[1:]) != (self.codebook_size, *self.token_spatial_shape):
@@ -290,6 +317,43 @@ class TokenMaskPriorTrainer(pl.LightningModule):
                 "semantic_pixel_accuracy": semantic_metrics["pixel_accuracy"].detach(),
                 "semantic_miou": semantic_metrics["miou"].detach(),
             },
+        }
+
+    def _semantic_structure_terms(self, *, mask_probs, mask_index, mask_onehot):
+        valid_mask = build_valid_mask(mask_index, ignore_index=self.ignore_index)
+        boundary_target = mask_index_to_boundary_target(mask_index, ignore_index=self.ignore_index)
+        boundary_pred = semantic_probs_to_soft_boundary(mask_probs, valid_mask=valid_mask)
+        boundary_loss = boundary_bce_loss(
+            boundary_pred,
+            boundary_target,
+            valid_mask=valid_mask,
+        )
+        area_ratio_loss, pred_area_ratio, target_area_ratio = area_ratio_l1_loss(
+            mask_probs,
+            mask_onehot,
+            valid_mask=valid_mask,
+        )
+        adjacency_loss, pred_adjacency, target_adjacency = adjacency_l1_loss(
+            mask_probs,
+            mask_onehot,
+            valid_mask=valid_mask,
+        )
+        structure_total = (
+            self.boundary_loss_weight * boundary_loss
+            + self.area_ratio_loss_weight * area_ratio_loss
+            + self.adjacency_loss_weight * adjacency_loss
+        )
+        return {
+            "boundary_loss": boundary_loss,
+            "area_ratio_loss": area_ratio_loss,
+            "adjacency_loss": adjacency_loss,
+            "structure_aux_total": structure_total,
+            "boundary_target": boundary_target.detach(),
+            "boundary_pred": boundary_pred.detach(),
+            "pred_area_ratio": pred_area_ratio.detach(),
+            "target_area_ratio": target_area_ratio.detach(),
+            "pred_adjacency": pred_adjacency.detach(),
+            "target_adjacency": target_adjacency.detach(),
         }
 
     def predict_field(self, z_t, t=None, condition=None, r=None, delta_t=None):
@@ -336,11 +400,13 @@ class TokenMaskPriorTrainer(pl.LightningModule):
         loss_dict = dict(objective_outputs.get("loss_dict", {}))
         semantic_bridge_metrics = {}
         semantic_outputs = {}
-        if self._semantic_auxiliary_enabled():
+        structure_outputs = {}
+        if self._semantic_decode_bridge_enabled():
             semantic_outputs = self._semantic_auxiliary_terms(
                 code_logits=objective_outputs["pred_field"],
                 mask_index=encoded["mask_index"],
             )
+            semantic_bridge_metrics = semantic_outputs["semantic_metrics"]
             total_loss = total_loss + semantic_outputs["semantic_aux_total"]
             loss_dict.update(
                 {
@@ -349,7 +415,20 @@ class TokenMaskPriorTrainer(pl.LightningModule):
                     "semantic_aux_total": semantic_outputs["semantic_aux_total"].detach(),
                 }
             )
-            semantic_bridge_metrics = semantic_outputs["semantic_metrics"]
+            structure_outputs = self._semantic_structure_terms(
+                mask_probs=semantic_outputs["decoded"]["mask_probs"],
+                mask_index=encoded["mask_index"],
+                mask_onehot=encoded["mask_onehot"],
+            )
+            total_loss = total_loss + structure_outputs["structure_aux_total"]
+            loss_dict.update(
+                {
+                    "boundary_loss": structure_outputs["boundary_loss"].detach(),
+                    "area_ratio_loss": structure_outputs["area_ratio_loss"].detach(),
+                    "adjacency_loss": structure_outputs["adjacency_loss"].detach(),
+                    "structure_aux_total": structure_outputs["structure_aux_total"].detach(),
+                }
+            )
         loss_dict["total_loss"] = total_loss.detach()
         loss_dict["base_error_mean"] = total_loss.detach()
         return {
@@ -361,6 +440,12 @@ class TokenMaskPriorTrainer(pl.LightningModule):
             "semantic_mask_logits": semantic_outputs.get("decoded", {}).get("mask_logits"),
             "semantic_mask_probs": semantic_outputs.get("decoded", {}).get("mask_probs"),
             "semantic_mask_index": semantic_outputs.get("decoded", {}).get("mask_index"),
+            "boundary_target": structure_outputs.get("boundary_target"),
+            "boundary_pred": structure_outputs.get("boundary_pred"),
+            "pred_area_ratio": structure_outputs.get("pred_area_ratio"),
+            "target_area_ratio": structure_outputs.get("target_area_ratio"),
+            "pred_adjacency": structure_outputs.get("pred_adjacency"),
+            "target_adjacency": structure_outputs.get("target_adjacency"),
             "semantic_bridge_metrics": semantic_bridge_metrics,
             "loss": total_loss,
             "loss_dict": loss_dict,

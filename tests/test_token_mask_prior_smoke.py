@@ -7,6 +7,16 @@ import torch.nn.functional as F
 from ldm.util import instantiate_from_config
 from omegaconf import OmegaConf
 
+from latent_meanflow.losses.semantic_structure import (
+    adjacency_l1_loss,
+    area_ratio_l1_loss,
+    boundary_bce_loss,
+    build_valid_mask,
+    compute_class_adjacency_matrix,
+    compute_class_area_ratios,
+    mask_index_to_boundary_target,
+    semantic_probs_to_soft_boundary,
+)
 from latent_meanflow.models.semantic_mask_vq_autoencoder import SemanticMaskVQAutoencoder
 from latent_meanflow.trainers.token_mask_prior_trainer import TokenMaskPriorTrainer
 
@@ -110,6 +120,9 @@ def _make_prior_trainer(
     token_spatial_shape,
     semantic_ce_weight=0.2,
     semantic_dice_weight=0.1,
+    boundary_loss_weight=0.05,
+    area_ratio_loss_weight=0.05,
+    adjacency_loss_weight=0.02,
 ):
     return TokenMaskPriorTrainer(
         tokenizer_config_path=str(tokenizer_config_path),
@@ -152,6 +165,9 @@ def _make_prior_trainer(
         tokenizer_sample_posterior=False,
         semantic_ce_weight=semantic_ce_weight,
         semantic_dice_weight=semantic_dice_weight,
+        boundary_loss_weight=boundary_loss_weight,
+        area_ratio_loss_weight=area_ratio_loss_weight,
+        adjacency_loss_weight=adjacency_loss_weight,
         log_sample_nfe=2,
     )
 
@@ -188,8 +204,18 @@ class TokenMaskPriorSmokeTest(unittest.TestCase):
             self.assertIn("semantic_ce", outputs["loss_dict"])
             self.assertIn("semantic_dice", outputs["loss_dict"])
             self.assertIn("semantic_aux_total", outputs["loss_dict"])
+            self.assertIn("boundary_loss", outputs["loss_dict"])
+            self.assertIn("area_ratio_loss", outputs["loss_dict"])
+            self.assertIn("adjacency_loss", outputs["loss_dict"])
+            self.assertIn("structure_aux_total", outputs["loss_dict"])
             self.assertIn("semantic_pixel_accuracy", outputs["semantic_bridge_metrics"])
             self.assertIn("semantic_miou", outputs["semantic_bridge_metrics"])
+            self.assertEqual(tuple(outputs["boundary_target"].shape), (2, 1, 16, 16))
+            self.assertEqual(tuple(outputs["boundary_pred"].shape), (2, 1, 16, 16))
+            self.assertEqual(tuple(outputs["pred_area_ratio"].shape), (2, 4))
+            self.assertEqual(tuple(outputs["target_area_ratio"].shape), (2, 4))
+            self.assertEqual(tuple(outputs["pred_adjacency"].shape), (2, 4, 4))
+            self.assertEqual(tuple(outputs["target_adjacency"].shape), (2, 4, 4))
 
     def test_tokenizer_is_frozen_and_not_in_optimizer(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -235,6 +261,40 @@ class TokenMaskPriorSmokeTest(unittest.TestCase):
             self.assertIsNotNone(code_logits.grad)
             self.assertGreater(float(code_logits.grad.abs().sum().item()), 0.0)
             self.assertTrue(all(param.grad is None for param in trainer.tokenizer.parameters()))
+
+    def test_semantic_structure_loss_utils_smoke(self):
+        batch = _make_batch()
+        mask_index = batch["mask_index"]
+        mask_onehot = batch["mask_onehot"].permute(0, 3, 1, 2).float()
+        mask_probs = (0.9 * mask_onehot) + (0.1 / 4.0)
+        valid_mask = build_valid_mask(mask_index, ignore_index=None)
+
+        boundary_target = mask_index_to_boundary_target(mask_index, ignore_index=None)
+        boundary_pred = semantic_probs_to_soft_boundary(mask_probs, valid_mask=valid_mask)
+        boundary_loss = boundary_bce_loss(boundary_pred, boundary_target, valid_mask=valid_mask)
+        self.assertEqual(tuple(boundary_target.shape), (2, 1, 16, 16))
+        self.assertEqual(tuple(boundary_pred.shape), (2, 1, 16, 16))
+        self.assertTrue(torch.isfinite(boundary_loss))
+
+        area_loss, pred_area_ratio, target_area_ratio = area_ratio_l1_loss(
+            mask_probs,
+            mask_onehot,
+            valid_mask=valid_mask,
+        )
+        self.assertEqual(tuple(pred_area_ratio.shape), (2, 4))
+        self.assertEqual(tuple(target_area_ratio.shape), (2, 4))
+        self.assertTrue(torch.isfinite(area_loss))
+        self.assertEqual(tuple(compute_class_area_ratios(mask_probs, valid_mask=valid_mask).shape), (2, 4))
+
+        adjacency_loss, pred_adjacency, target_adjacency = adjacency_l1_loss(
+            mask_probs,
+            mask_onehot,
+            valid_mask=valid_mask,
+        )
+        self.assertEqual(tuple(pred_adjacency.shape), (2, 4, 4))
+        self.assertEqual(tuple(target_adjacency.shape), (2, 4, 4))
+        self.assertTrue(torch.isfinite(adjacency_loss))
+        self.assertEqual(tuple(compute_class_adjacency_matrix(mask_probs, valid_mask=valid_mask).shape), (2, 4, 4))
 
     def test_sampled_token_grids_decode_into_valid_semantic_masks(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -285,6 +345,9 @@ class TokenMaskPriorSmokeTest(unittest.TestCase):
             config = OmegaConf.load(config_path)
             self.assertAlmostEqual(float(config.model.params.semantic_ce_weight), 0.2)
             self.assertAlmostEqual(float(config.model.params.semantic_dice_weight), 0.1)
+            self.assertAlmostEqual(float(config.model.params.boundary_loss_weight), 0.05)
+            self.assertAlmostEqual(float(config.model.params.area_ratio_loss_weight), 0.05)
+            self.assertAlmostEqual(float(config.model.params.adjacency_loss_weight), 0.02)
 
     def test_memorize_config_uses_fixed_subset(self):
         config = OmegaConf.load(
@@ -308,6 +371,9 @@ class TokenMaskPriorSmokeTest(unittest.TestCase):
             self.assertIn("semantic_ce", outputs["loss_dict"])
             self.assertIn("semantic_dice", outputs["loss_dict"])
             self.assertIn("semantic_aux_total", outputs["loss_dict"])
+            self.assertIn("boundary_loss", outputs["loss_dict"])
+            self.assertIn("area_ratio_loss", outputs["loss_dict"])
+            self.assertIn("adjacency_loss", outputs["loss_dict"])
 
 
 if __name__ == "__main__":

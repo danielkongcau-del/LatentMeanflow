@@ -17,6 +17,9 @@ model:
     tokenizer_sample_posterior: false
     semantic_ce_weight: 0.2
     semantic_dice_weight: 0.1
+    boundary_loss_weight: 0.05
+    area_ratio_loss_weight: 0.05
+    adjacency_loss_weight: 0.02
     log_sample_nfe: 8
     backbone_config:
       target: latent_meanflow.models.backbones.latent_interval_sit.LatentIntervalSiT
