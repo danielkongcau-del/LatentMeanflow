@@ -84,7 +84,7 @@ def parse_args():
         ),
     )
     parser.add_argument("--overwrite", action="store_true")
-    parser.add_argument("--expected-monitor", type=str, default="val/base_error_mean")
+    parser.add_argument("--expected-monitor", type=str, default="val/sampled_monitor_error")
     parser.add_argument(
         "--set",
         dest="overrides",
@@ -100,7 +100,7 @@ def _check_monitor(config, expected_monitor):
     if expected_monitor is not None and configured_monitor != expected_monitor:
         raise ValueError(
             f"Evaluation monitor mismatch: expected '{expected_monitor}', got '{configured_monitor}'. "
-            "Use the best checkpoint selected by val/base_error_mean for the token-code mask baseline."
+            "Use the best checkpoint selected by val/sampled_monitor_error for the token-code mask baseline."
         )
     return configured_monitor
 

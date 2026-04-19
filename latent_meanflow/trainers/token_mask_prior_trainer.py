@@ -42,7 +42,7 @@ class TokenMaskPriorTrainer(pl.LightningModule):
         validation_sample_batch_size=4,
         validation_sample_nfe=None,
         validation_sample_seed=1234,
-        monitor="val/base_error_mean",
+        monitor="val/sampled_monitor_error",
         mask_key="mask_onehot",
         mask_index_key="mask_index",
     ):
@@ -84,6 +84,14 @@ class TokenMaskPriorTrainer(pl.LightningModule):
             int(log_sample_nfe) if validation_sample_nfe is None else max(1, int(validation_sample_nfe))
         )
         self.validation_sample_seed = int(validation_sample_seed)
+        self.per_class_metric_logging_limit = 32
+        if self.monitor == "val/sampled_monitor_error" and (
+            not self.enable_validation_sample_metrics or self.validation_sample_batch_size <= 0
+        ):
+            raise ValueError(
+                "TokenMaskPriorTrainer monitor=val/sampled_monitor_error requires "
+                "enable_validation_sample_metrics=True and validation_sample_batch_size > 0."
+            )
 
         self.tokenizer = SemanticTokenizerAdapter.from_pretrained(
             config_path=self.tokenizer_config_path,
@@ -464,6 +472,7 @@ class TokenMaskPriorTrainer(pl.LightningModule):
             f"tokenizer_config={self.tokenizer_config_path}, tokenizer_ckpt={self.tokenizer_ckpt_path}, "
             f"codebook_size={self.codebook_size}, token_spatial_shape={self.token_spatial_shape}, "
             f"mask_spatial_shape={self.mask_spatial_shape}, objective={self.objective_name}, "
+            f"monitor={self.monitor}, "
             f"semantic_ce_weight={self.semantic_ce_weight:.3f}, "
             f"semantic_ce_use_class_weights={self.semantic_ce_use_class_weights}, "
             f"semantic_dice_weight={self.semantic_dice_weight:.3f}, "
@@ -561,26 +570,56 @@ class TokenMaskPriorTrainer(pl.LightningModule):
             "class_entropy": (-(mean_class_ratios * torch.log(mean_class_ratios.clamp_min(1.0e-10))).sum()).detach(),
         }
 
+    def _distribution_monitor_error(self, *, class_hist_l1, boundary_ratio_gap, unique_class_count_gap):
+        return (
+            class_hist_l1
+            + boundary_ratio_gap
+            + (unique_class_count_gap / float(max(self.num_classes, 1)))
+        ).detach()
+
     def _mask_distribution_gap_metrics(self, *, pred_mask_index, target_mask_index, prefix):
         pred_summary = self._mask_distribution_summary(pred_mask_index)
         target_summary = self._mask_distribution_summary(target_mask_index)
-        return {
-            f"{prefix}_class_hist_l1": (
-                pred_summary["mean_class_ratios"] - target_summary["mean_class_ratios"]
-            ).abs().sum().detach(),
+        class_ratio_gap = (
+            pred_summary["mean_class_ratios"] - target_summary["mean_class_ratios"]
+        ).abs().detach()
+        class_hist_l1 = class_ratio_gap.sum().detach()
+        majority_class_ratio_gap = (
+            pred_summary["majority_class_ratio_mean"] - target_summary["majority_class_ratio_mean"]
+        ).abs().detach()
+        unique_class_count_gap = (
+            pred_summary["unique_class_count_mean"] - target_summary["unique_class_count_mean"]
+        ).abs().detach()
+        boundary_ratio_gap = (
+            pred_summary["boundary_ratio_mean"] - target_summary["boundary_ratio_mean"]
+        ).abs().detach()
+        class_entropy_gap = (
+            pred_summary["class_entropy"] - target_summary["class_entropy"]
+        ).abs().detach()
+        metrics = {
+            f"{prefix}_class_hist_l1": class_hist_l1,
             f"{prefix}_pred_majority_class_ratio": pred_summary["majority_class_ratio_mean"],
             f"{prefix}_target_majority_class_ratio": target_summary["majority_class_ratio_mean"],
+            f"{prefix}_majority_class_ratio_gap": majority_class_ratio_gap,
             f"{prefix}_pred_unique_class_count": pred_summary["unique_class_count_mean"],
             f"{prefix}_target_unique_class_count": target_summary["unique_class_count_mean"],
-            f"{prefix}_unique_class_count_gap": (
-                pred_summary["unique_class_count_mean"] - target_summary["unique_class_count_mean"]
-            ).abs().detach(),
-            f"{prefix}_boundary_ratio_gap": (
-                pred_summary["boundary_ratio_mean"] - target_summary["boundary_ratio_mean"]
-            ).abs().detach(),
+            f"{prefix}_unique_class_count_gap": unique_class_count_gap,
+            f"{prefix}_boundary_ratio_gap": boundary_ratio_gap,
             f"{prefix}_pred_class_entropy": pred_summary["class_entropy"],
             f"{prefix}_target_class_entropy": target_summary["class_entropy"],
+            f"{prefix}_class_entropy_gap": class_entropy_gap,
+            f"{prefix}_monitor_error": self._distribution_monitor_error(
+                class_hist_l1=class_hist_l1,
+                boundary_ratio_gap=boundary_ratio_gap,
+                unique_class_count_gap=unique_class_count_gap,
+            ),
         }
+        if int(self.num_classes) <= int(self.per_class_metric_logging_limit):
+            for class_idx in range(int(self.num_classes)):
+                metrics[f"{prefix}_pred_class_ratio_{class_idx}"] = pred_summary["mean_class_ratios"][class_idx]
+                metrics[f"{prefix}_target_class_ratio_{class_idx}"] = target_summary["mean_class_ratios"][class_idx]
+                metrics[f"{prefix}_class_ratio_gap_{class_idx}"] = class_ratio_gap[class_idx]
+        return metrics
 
     def _decode_semantic_from_code_logits(self, code_logits):
         if tuple(int(v) for v in code_logits.shape[1:]) != (self.codebook_size, *self.token_spatial_shape):

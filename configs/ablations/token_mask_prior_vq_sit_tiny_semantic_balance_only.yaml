@@ -5,7 +5,7 @@ model:
     # Tiny diagnostic ablation: keep semantic CE class weights, disable code-level class balancing.
     # This isolates whether raw code balancing is causing the high-entropy fragment failure mode.
     objective_name: discrete_mask_diffusion
-    monitor: val/base_error_mean
+    monitor: val/sampled_monitor_error
     tokenizer_config_path: configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml
     tokenizer_ckpt_path: null
     freeze_tokenizer: true

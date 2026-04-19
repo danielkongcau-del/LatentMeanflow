@@ -11,7 +11,7 @@ model:
     # - downstream p(image | semantic_mask) renderer stays frozen infrastructure
     # - mainline sampler semantics: remask-low-confidence refinement
     objective_name: discrete_mask_diffusion
-    monitor: val/base_error_mean
+    monitor: val/sampled_monitor_error
     tokenizer_config_path: configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml
     tokenizer_ckpt_path: null
     freeze_tokenizer: true

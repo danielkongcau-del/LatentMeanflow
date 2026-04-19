@@ -128,7 +128,7 @@ def _write_token_mask_prior_runtime_ckpt(tmpdir, *, tokenizer_config_path, token
         {
             "state_dict": {},
             "hyper_parameters": {
-                "monitor": "val/base_error_mean",
+                "monitor": "val/sampled_monitor_error",
                 "objective_name": "discrete_mask_diffusion",
                 "tokenizer_config_path": str(Path(tokenizer_config_path).resolve()),
                 "tokenizer_ckpt_path": str(Path(tokenizer_ckpt_path).resolve()),
@@ -146,12 +146,15 @@ def _make_prior_trainer(
     tokenizer_config_path,
     tokenizer_ckpt_path,
     token_spatial_shape,
+    monitor="val/sampled_monitor_error",
     semantic_ce_weight=0.2,
     semantic_ce_use_class_weights=False,
     semantic_dice_weight=0.1,
     boundary_loss_weight=0.05,
     area_ratio_loss_weight=0.05,
     adjacency_loss_weight=0.02,
+    enable_validation_sample_metrics=True,
+    validation_sample_batch_size=4,
     objective_extra_params=None,
 ):
     objective_params = {
@@ -196,12 +199,15 @@ def _make_prior_trainer(
         },
         freeze_tokenizer=True,
         tokenizer_sample_posterior=False,
+        monitor=monitor,
         semantic_ce_weight=semantic_ce_weight,
         semantic_ce_use_class_weights=semantic_ce_use_class_weights,
         semantic_dice_weight=semantic_dice_weight,
         boundary_loss_weight=boundary_loss_weight,
         area_ratio_loss_weight=area_ratio_loss_weight,
         adjacency_loss_weight=adjacency_loss_weight,
+        enable_validation_sample_metrics=enable_validation_sample_metrics,
+        validation_sample_batch_size=validation_sample_batch_size,
         log_sample_nfe=2,
     )
 
@@ -257,6 +263,8 @@ class TokenMaskPriorSmokeTest(unittest.TestCase):
             self.assertIn("semantic_pixel_accuracy", outputs["semantic_bridge_metrics"])
             self.assertIn("semantic_miou", outputs["semantic_bridge_metrics"])
             self.assertIn("teacher_forced_class_hist_l1", outputs["semantic_bridge_metrics"])
+            self.assertIn("teacher_forced_class_ratio_gap_0", outputs["semantic_bridge_metrics"])
+            self.assertIn("teacher_forced_monitor_error", outputs["semantic_bridge_metrics"])
             self.assertIn("teacher_forced_pred_majority_class_ratio", outputs["semantic_bridge_metrics"])
             self.assertIn("teacher_forced_unique_class_count_gap", outputs["semantic_bridge_metrics"])
             self.assertEqual(tuple(outputs["boundary_target"].shape), (2, 1, 16, 16))
@@ -437,9 +445,22 @@ class TokenMaskPriorSmokeTest(unittest.TestCase):
             metrics = trainer._validation_sample_metrics(_make_batch()["mask_index"])
 
             self.assertIn("sampled_class_hist_l1", metrics)
+            self.assertIn("sampled_class_ratio_gap_0", metrics)
+            self.assertIn("sampled_monitor_error", metrics)
             self.assertIn("sampled_pred_majority_class_ratio", metrics)
             self.assertIn("sampled_unique_class_count_gap", metrics)
             self.assertIn("sampled_boundary_ratio_gap", metrics)
+
+    def test_sampled_monitor_requires_validation_sample_metrics(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path, ckpt_path, token_spatial_shape, _ = _write_tokenizer_artifacts(tmpdir)
+            with self.assertRaisesRegex(ValueError, "monitor=val/sampled_monitor_error requires"):
+                _make_prior_trainer(
+                    tokenizer_config_path=config_path,
+                    tokenizer_ckpt_path=ckpt_path,
+                    token_spatial_shape=token_spatial_shape,
+                    enable_validation_sample_metrics=False,
+                )
 
     def test_main_configs_pin_balanced_tokenizer_and_remask_mainline_sampler(self):
         config_paths = [
@@ -456,6 +477,7 @@ class TokenMaskPriorSmokeTest(unittest.TestCase):
                 str(config.model.params.tokenizer_config_path),
                 "configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml",
             )
+            self.assertEqual(str(config.model.params.monitor), "val/sampled_monitor_error")
             self.assertIsNone(config.model.params.tokenizer_ckpt_path)
             self.assertTrue(bool(config.model.params.freeze_tokenizer))
             self.assertFalse(bool(config.model.params.tokenizer_sample_posterior))
@@ -496,6 +518,7 @@ class TokenMaskPriorSmokeTest(unittest.TestCase):
                 str(config.model.params.tokenizer_config_path),
                 "configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml",
             )
+            self.assertEqual(str(config.model.params.monitor), "val/sampled_monitor_error")
             self.assertIsNone(config.model.params.tokenizer_ckpt_path)
             self.assertTrue(bool(config.model.params.freeze_tokenizer))
             self.assertFalse(bool(config.model.params.tokenizer_sample_posterior))
@@ -542,6 +565,7 @@ class TokenMaskPriorSmokeTest(unittest.TestCase):
                 str(config.model.params.tokenizer_config_path),
                 "configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml",
             )
+            self.assertEqual(str(config.model.params.monitor), "val/sampled_monitor_error")
             self.assertTrue(bool(config.model.params.freeze_tokenizer))
             self.assertFalse(bool(config.model.params.tokenizer_sample_posterior))
             backbone_params = config.model.params.backbone_config.params
@@ -575,6 +599,7 @@ class TokenMaskPriorSmokeTest(unittest.TestCase):
                 str(config.model.params.tokenizer_config_path),
                 "configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml",
             )
+            self.assertEqual(str(config.model.params.monitor), "val/sampled_monitor_error")
             objective_params = config.model.params.objective_config.params
             sampler_params = config.model.params.sampler_config.params
             self.assertEqual(str(objective_params.corruption_mode), "exact_count")
