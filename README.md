@@ -366,6 +366,15 @@ Evaluate decoded semantic-mask distribution quality:
 python scripts/eval_token_mask_prior.py --config configs/token_mask_prior_vq_sit.yaml --ckpt /path/to/token_mask_prior.ckpt --tokenizer-config configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml --tokenizer-ckpt /path/to/semantic_mask_vq_tokenizer_balanced.ckpt --outdir outputs/token_mask_prior_eval/main --n-samples 32 --batch-size 8 --nfe-values 8 4 2 1 --seed 23 --overwrite
 ```
 
+The mask-prior evaluators now report more remote-sensing-specific structure
+checks in addition to class area / component / boundary / small-region
+statistics:
+
+- 4-neighbor class adjacency gaps
+- largest connected-component share gaps
+- hole / enclosed-region statistics
+- optional thin-structure continuity gaps for user-specified class ids
+
 Compose the upstream token-code route through the frozen downstream renderer:
 
 ```bash

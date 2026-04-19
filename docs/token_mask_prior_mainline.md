@@ -215,6 +215,9 @@ Evaluation adds:
 - token-usage diagnostics such as active-code count and code perplexity
 - route metadata such as `refinement_mode`, `corruption_mode`, and reveal /
   lock-noise settings
+- remote-sensing-oriented structure metrics such as adjacency gaps,
+  largest-component-share gaps, hole statistics, and optional thin-structure
+  continuity summaries
 - compose-to-image metrics through the frozen renderer and frozen teacher
 
 ## Still Not Implemented Yet

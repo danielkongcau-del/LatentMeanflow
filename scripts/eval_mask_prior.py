@@ -85,6 +85,16 @@ def parse_args():
         default=0.02,
         help="Connected components no larger than this ratio of valid pixels count as small regions.",
     )
+    parser.add_argument(
+        "--thin-structure-class-ids",
+        type=int,
+        nargs="*",
+        default=None,
+        help=(
+            "Optional semantic class ids to audit with thin-structure continuity statistics "
+            "(skeleton length, endpoint count, fragment count)."
+        ),
+    )
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--expected-monitor", type=str, default="val/base_error_mean")
     parser.add_argument(
@@ -204,9 +214,12 @@ def _component_profile(mask, *, num_classes, ignore_index=None, small_region_thr
 
     component_count = np.zeros((num_classes,), dtype=np.float64)
     largest_component_area_ratio = np.zeros((num_classes,), dtype=np.float64)
+    largest_component_class_share = np.zeros((num_classes,), dtype=np.float64)
     mean_component_area_ratio = np.zeros((num_classes,), dtype=np.float64)
     small_region_count = np.zeros((num_classes,), dtype=np.float64)
     small_region_area_ratio = np.zeros((num_classes,), dtype=np.float64)
+    hole_count = np.zeros((num_classes,), dtype=np.float64)
+    hole_area_ratio = np.zeros((num_classes,), dtype=np.float64)
     component_area_lists = {int(class_id): [] for class_id in range(int(num_classes))}
 
     for class_id in range(int(num_classes)):
@@ -221,6 +234,7 @@ def _component_profile(mask, *, num_classes, ignore_index=None, small_region_thr
         component_count[class_id] = float(component_ratios.size)
         mean_component_area_ratio[class_id] = float(component_ratios.mean())
         largest_component_area_ratio[class_id] = float(component_ratios.max())
+        largest_component_class_share[class_id] = float(component_areas.max() / max(1.0, float(binary_mask.sum())))
         component_area_lists[int(class_id)].extend(component_ratios.tolist())
 
         small_mask = component_ratios <= float(small_region_threshold_ratio)
@@ -228,13 +242,145 @@ def _component_profile(mask, *, num_classes, ignore_index=None, small_region_thr
             small_region_count[class_id] = float(small_mask.sum())
             small_region_area_ratio[class_id] = float(component_ratios[small_mask].sum())
 
+        complement = (binary_mask == 0).astype(np.uint8)
+        padded = np.ones((int(complement.shape[0]) + 2, int(complement.shape[1]) + 2), dtype=np.uint8)
+        padded[1:-1, 1:-1] = complement
+        hole_labels, hole_map, hole_stats, _ = cv2.connectedComponentsWithStats(padded, connectivity=4)
+        exterior_label = int(hole_map[0, 0])
+        class_area = max(1.0, float(binary_mask.sum()))
+        enclosed_count = 0.0
+        enclosed_area = 0.0
+        for label_index in range(1, int(hole_labels)):
+            if int(label_index) == exterior_label:
+                continue
+            area = float(hole_stats[label_index, cv2.CC_STAT_AREA])
+            if area <= 0.0:
+                continue
+            enclosed_count += 1.0
+            enclosed_area += area
+        hole_count[class_id] = enclosed_count
+        hole_area_ratio[class_id] = enclosed_area / class_area
+
     return {
         "component_count": component_count,
         "largest_component_area_ratio": largest_component_area_ratio,
+        "largest_component_class_share": largest_component_class_share,
         "mean_component_area_ratio": mean_component_area_ratio,
         "small_region_count": small_region_count,
         "small_region_area_ratio": small_region_area_ratio,
+        "hole_count": hole_count,
+        "hole_area_ratio": hole_area_ratio,
         "component_area_lists": component_area_lists,
+    }
+
+
+def _normalize_probability_array(values):
+    values = np.asarray(values, dtype=np.float64)
+    values = np.clip(values, a_min=0.0, a_max=None)
+    total = float(values.sum())
+    if total <= 0.0:
+        return np.zeros_like(values, dtype=np.float64)
+    return values / total
+
+
+def _js_divergence(left, right, eps=1.0e-12):
+    left = _normalize_probability_array(left).reshape(-1)
+    right = _normalize_probability_array(right).reshape(-1)
+    if left.size != right.size:
+        raise ValueError(f"Distribution shape mismatch for JSD: {left.shape} vs {right.shape}")
+    midpoint = 0.5 * (left + right)
+
+    def _kl_divergence(source, target):
+        valid = source > eps
+        if not np.any(valid):
+            return 0.0
+        return float(np.sum(source[valid] * (np.log(source[valid] + eps) - np.log(target[valid] + eps))))
+
+    return 0.5 * _kl_divergence(left, midpoint) + 0.5 * _kl_divergence(right, midpoint)
+
+
+def _adjacency_profile(mask, *, num_classes, ignore_index=None):
+    mask = np.asarray(mask, dtype=np.int64)
+    valid_mask = _valid_mask(mask, ignore_index=ignore_index)
+    adjacency = np.zeros((int(num_classes), int(num_classes)), dtype=np.float64)
+
+    if int(mask.shape[1]) > 1:
+        horizontal_valid = valid_mask[:, :-1] & valid_mask[:, 1:]
+        left = mask[:, :-1][horizontal_valid]
+        right = mask[:, 1:][horizontal_valid]
+        if left.size > 0:
+            np.add.at(adjacency, (left, right), 1.0)
+
+    if int(mask.shape[0]) > 1:
+        vertical_valid = valid_mask[:-1, :] & valid_mask[1:, :]
+        top = mask[:-1, :][vertical_valid]
+        bottom = mask[1:, :][vertical_valid]
+        if top.size > 0:
+            np.add.at(adjacency, (top, bottom), 1.0)
+
+    adjacency = 0.5 * (adjacency + adjacency.T)
+    np.fill_diagonal(adjacency, 0.0)
+    return _normalize_probability_array(adjacency)
+
+
+def _count_neighbors(binary_mask):
+    padded = np.pad(binary_mask.astype(np.uint8), 1, mode="constant")
+    return (
+        padded[:-2, :-2]
+        + padded[:-2, 1:-1]
+        + padded[:-2, 2:]
+        + padded[1:-1, :-2]
+        + padded[1:-1, 2:]
+        + padded[2:, :-2]
+        + padded[2:, 1:-1]
+        + padded[2:, 2:]
+    )
+
+
+def _skeletonize_binary(binary_mask):
+    binary_mask = (np.asarray(binary_mask, dtype=np.uint8) > 0).astype(np.uint8)
+    if int(binary_mask.sum()) <= 0:
+        return binary_mask
+    working = (binary_mask * 255).astype(np.uint8)
+    skeleton = np.zeros_like(working, dtype=np.uint8)
+    kernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
+    while True:
+        eroded = cv2.erode(working, kernel)
+        temp = cv2.dilate(eroded, kernel)
+        temp = cv2.subtract(working, temp)
+        skeleton = cv2.bitwise_or(skeleton, temp)
+        working = eroded
+        if cv2.countNonZero(working) == 0:
+            break
+    return (skeleton > 0).astype(np.uint8)
+
+
+def _thin_structure_profile(mask, *, num_classes, thin_structure_class_ids, ignore_index=None):
+    mask = np.asarray(mask, dtype=np.int64)
+    valid_mask = _valid_mask(mask, ignore_index=ignore_index)
+    valid_pixels = float(max(1, valid_mask.sum()))
+
+    skeleton_length_ratio = np.zeros((int(num_classes),), dtype=np.float64)
+    endpoint_count = np.zeros((int(num_classes),), dtype=np.float64)
+    fragment_count = np.zeros((int(num_classes),), dtype=np.float64)
+
+    for class_id in thin_structure_class_ids:
+        binary_mask = ((mask == int(class_id)) & valid_mask).astype(np.uint8)
+        if int(binary_mask.sum()) <= 0:
+            continue
+        skeleton = _skeletonize_binary(binary_mask)
+        if int(skeleton.sum()) <= 0:
+            continue
+        skeleton_length_ratio[int(class_id)] = float(skeleton.sum() / valid_pixels)
+        neighbor_count = _count_neighbors(skeleton)
+        endpoint_count[int(class_id)] = float(np.logical_and(skeleton > 0, neighbor_count == 1).sum())
+        component_labels, _ = cv2.connectedComponents(skeleton.astype(np.uint8), connectivity=8)
+        fragment_count[int(class_id)] = float(max(0, int(component_labels) - 1))
+
+    return {
+        "skeleton_length_ratio": skeleton_length_ratio,
+        "endpoint_count": endpoint_count,
+        "fragment_count": fragment_count,
     }
 
 
@@ -273,6 +419,20 @@ def _per_class_stats_from_matrix(matrix):
     return stats
 
 
+def _per_class_stats_subset_from_matrix(matrix, class_ids):
+    stats = {}
+    for class_id in class_ids:
+        values = np.asarray(matrix[:, int(class_id)], dtype=np.float64)
+        stats[int(class_id)] = {
+            "mean": float(values.mean()),
+            "std": float(values.std()),
+            "median": float(np.median(values)),
+            "p05": float(np.quantile(values, 0.05)),
+            "p95": float(np.quantile(values, 0.95)),
+        }
+    return stats
+
+
 def _per_class_component_area_stats(component_area_lists):
     stats = {}
     for class_id, values in component_area_lists.items():
@@ -297,9 +457,20 @@ def _area_ratio_histograms(ratios, bins):
     return hist_counts, hist_freqs
 
 
-def _summarize_distribution(masks, *, num_classes, ignore_index=None, small_region_threshold_ratio=0.02):
+def _summarize_distribution(
+    masks,
+    *,
+    num_classes,
+    ignore_index=None,
+    small_region_threshold_ratio=0.02,
+    thin_structure_class_ids=None,
+):
     if not masks:
         raise ValueError("Mask collection must not be empty.")
+
+    thin_structure_class_ids = sorted(
+        {int(class_id) for class_id in (thin_structure_class_ids or []) if 0 <= int(class_id) < int(num_classes)}
+    )
 
     ratios_list = []
     counts_total = np.zeros((num_classes,), dtype=np.float64)
@@ -310,9 +481,16 @@ def _summarize_distribution(masks, *, num_classes, ignore_index=None, small_regi
 
     component_count_rows = []
     largest_component_rows = []
+    largest_component_class_share_rows = []
     mean_component_rows = []
     small_region_count_rows = []
     small_region_area_rows = []
+    hole_count_rows = []
+    hole_area_ratio_rows = []
+    adjacency_rows = []
+    thin_skeleton_rows = []
+    thin_endpoint_rows = []
+    thin_fragment_rows = []
     component_area_lists = {int(class_id): [] for class_id in range(int(num_classes))}
 
     for mask in masks:
@@ -326,6 +504,7 @@ def _summarize_distribution(masks, *, num_classes, ignore_index=None, small_regi
         boundary_length, boundary_ratio = _boundary_length(mask, ignore_index=ignore_index)
         boundary_lengths.append(boundary_length)
         boundary_ratios.append(boundary_ratio)
+        adjacency_rows.append(_adjacency_profile(mask, num_classes=num_classes, ignore_index=ignore_index))
 
         component_profile = _component_profile(
             mask,
@@ -335,19 +514,37 @@ def _summarize_distribution(masks, *, num_classes, ignore_index=None, small_regi
         )
         component_count_rows.append(component_profile["component_count"])
         largest_component_rows.append(component_profile["largest_component_area_ratio"])
+        largest_component_class_share_rows.append(component_profile["largest_component_class_share"])
         mean_component_rows.append(component_profile["mean_component_area_ratio"])
         small_region_count_rows.append(component_profile["small_region_count"])
         small_region_area_rows.append(component_profile["small_region_area_ratio"])
+        hole_count_rows.append(component_profile["hole_count"])
+        hole_area_ratio_rows.append(component_profile["hole_area_ratio"])
         for class_id, values in component_profile["component_area_lists"].items():
             component_area_lists[int(class_id)].extend(values)
+
+        if thin_structure_class_ids:
+            thin_profile = _thin_structure_profile(
+                mask,
+                num_classes=num_classes,
+                thin_structure_class_ids=thin_structure_class_ids,
+                ignore_index=ignore_index,
+            )
+            thin_skeleton_rows.append(thin_profile["skeleton_length_ratio"])
+            thin_endpoint_rows.append(thin_profile["endpoint_count"])
+            thin_fragment_rows.append(thin_profile["fragment_count"])
 
     ratios = np.stack(ratios_list, axis=0)
     presences = (ratios > 0.0).astype(np.float64)
     component_count_matrix = np.stack(component_count_rows, axis=0)
     largest_component_matrix = np.stack(largest_component_rows, axis=0)
+    largest_component_class_share_matrix = np.stack(largest_component_class_share_rows, axis=0)
     mean_component_matrix = np.stack(mean_component_rows, axis=0)
     small_region_count_matrix = np.stack(small_region_count_rows, axis=0)
     small_region_area_matrix = np.stack(small_region_area_rows, axis=0)
+    hole_count_matrix = np.stack(hole_count_rows, axis=0)
+    hole_area_ratio_matrix = np.stack(hole_area_ratio_rows, axis=0)
+    adjacency_matrix = np.stack(adjacency_rows, axis=0)
     histogram_counts, histogram_freqs = _area_ratio_histograms(ratios, bins=AREA_RATIO_HISTOGRAM_BINS)
 
     global_class_pixel_ratio = (
@@ -355,8 +552,7 @@ def _summarize_distribution(masks, *, num_classes, ignore_index=None, small_regi
         if total_valid_pixels > 0.0
         else np.zeros((num_classes,), dtype=np.float64)
     )
-
-    return {
+    summary = {
         "sample_count": int(len(masks)),
         "histogram_bins": AREA_RATIO_HISTOGRAM_BINS.tolist(),
         "global_class_pixel_ratio": global_class_pixel_ratio,
@@ -376,13 +572,41 @@ def _summarize_distribution(masks, *, num_classes, ignore_index=None, small_regi
         "unique_class_count_std": float(np.std(unique_class_counts)),
         "component_count_stats": _per_class_stats_from_matrix(component_count_matrix),
         "largest_component_area_ratio_stats": _per_class_stats_from_matrix(largest_component_matrix),
+        "largest_component_class_share_stats": _per_class_stats_from_matrix(largest_component_class_share_matrix),
         "mean_component_area_ratio_stats": _per_class_stats_from_matrix(mean_component_matrix),
         "component_area_ratio_stats": _per_class_component_area_stats(component_area_lists),
         "small_region_count_stats": _per_class_stats_from_matrix(small_region_count_matrix),
         "small_region_area_ratio_stats": _per_class_stats_from_matrix(small_region_area_matrix),
         "small_region_sample_frequency": (small_region_count_matrix > 0.0).mean(axis=0),
+        "hole_count_stats": _per_class_stats_from_matrix(hole_count_matrix),
+        "hole_area_ratio_stats": _per_class_stats_from_matrix(hole_area_ratio_matrix),
+        "adjacency_frequency_mean": adjacency_matrix.mean(axis=0),
+        "adjacency_frequency_std": adjacency_matrix.std(axis=0),
         "small_region_threshold_ratio": float(small_region_threshold_ratio),
+        "thin_structure_class_ids": thin_structure_class_ids,
     }
+    if thin_structure_class_ids:
+        thin_skeleton_matrix = np.stack(thin_skeleton_rows, axis=0)
+        thin_endpoint_matrix = np.stack(thin_endpoint_rows, axis=0)
+        thin_fragment_matrix = np.stack(thin_fragment_rows, axis=0)
+        summary["thin_structure_skeleton_length_ratio_stats"] = _per_class_stats_subset_from_matrix(
+            thin_skeleton_matrix,
+            thin_structure_class_ids,
+        )
+        summary["thin_structure_endpoint_count_stats"] = _per_class_stats_subset_from_matrix(
+            thin_endpoint_matrix,
+            thin_structure_class_ids,
+        )
+        summary["thin_structure_fragment_count_stats"] = _per_class_stats_subset_from_matrix(
+            thin_fragment_matrix,
+            thin_structure_class_ids,
+        )
+    else:
+        summary["thin_structure_skeleton_length_ratio_stats"] = {}
+        summary["thin_structure_endpoint_count_stats"] = {}
+        summary["thin_structure_fragment_count_stats"] = {}
+
+    return summary
 
 
 def _mask_miou(mask_a, mask_b, num_classes, ignore_index=None):
@@ -445,12 +669,16 @@ def _load_generated_masks(nfe_dir, n_samples):
 def _get_per_class_vector(stats_map, field_name, num_classes):
     values = np.zeros((num_classes,), dtype=np.float64)
     for class_id in range(int(num_classes)):
-        value = stats_map[int(class_id)][field_name]
+        stats = stats_map.get(int(class_id), {})
+        value = stats.get(field_name, 0.0)
         values[class_id] = 0.0 if value is None else float(value)
     return values
 
 
-def _compare_distribution(generated_stats, reference_stats, *, num_classes):
+def _compare_distribution(generated_stats, reference_stats, *, num_classes, thin_structure_class_ids=None):
+    thin_structure_class_ids = sorted(
+        {int(class_id) for class_id in (thin_structure_class_ids or []) if 0 <= int(class_id) < int(num_classes)}
+    )
     generated_hist = np.asarray(
         [generated_stats["class_area_histogram_freq"][int(class_id)] for class_id in range(int(num_classes))],
         dtype=np.float64,
@@ -481,8 +709,79 @@ def _compare_distribution(generated_stats, reference_stats, *, num_classes):
         "mean",
         num_classes=num_classes,
     )
+    generated_largest_component_share = _get_per_class_vector(
+        generated_stats["largest_component_class_share_stats"],
+        "mean",
+        num_classes=num_classes,
+    )
+    reference_largest_component_share = _get_per_class_vector(
+        reference_stats["largest_component_class_share_stats"],
+        "mean",
+        num_classes=num_classes,
+    )
+    generated_hole_count = _get_per_class_vector(
+        generated_stats["hole_count_stats"],
+        "mean",
+        num_classes=num_classes,
+    )
+    reference_hole_count = _get_per_class_vector(
+        reference_stats["hole_count_stats"],
+        "mean",
+        num_classes=num_classes,
+    )
+    generated_hole_area_ratio = _get_per_class_vector(
+        generated_stats["hole_area_ratio_stats"],
+        "mean",
+        num_classes=num_classes,
+    )
+    reference_hole_area_ratio = _get_per_class_vector(
+        reference_stats["hole_area_ratio_stats"],
+        "mean",
+        num_classes=num_classes,
+    )
     generated_small_freq = np.asarray(generated_stats["small_region_sample_frequency"], dtype=np.float64)
     reference_small_freq = np.asarray(reference_stats["small_region_sample_frequency"], dtype=np.float64)
+    generated_adjacency = np.asarray(generated_stats["adjacency_frequency_mean"], dtype=np.float64)
+    reference_adjacency = np.asarray(reference_stats["adjacency_frequency_mean"], dtype=np.float64)
+    adjacency_l1 = np.abs(generated_adjacency - reference_adjacency)
+
+    thin_structure_skeleton_length_gap_mean = None
+    thin_structure_endpoint_count_gap_mean = None
+    thin_structure_fragment_count_gap_mean = None
+    if thin_structure_class_ids:
+        generated_skeleton = _get_per_class_vector(
+            generated_stats["thin_structure_skeleton_length_ratio_stats"],
+            "mean",
+            num_classes=num_classes,
+        )[thin_structure_class_ids]
+        reference_skeleton = _get_per_class_vector(
+            reference_stats["thin_structure_skeleton_length_ratio_stats"],
+            "mean",
+            num_classes=num_classes,
+        )[thin_structure_class_ids]
+        generated_endpoints = _get_per_class_vector(
+            generated_stats["thin_structure_endpoint_count_stats"],
+            "mean",
+            num_classes=num_classes,
+        )[thin_structure_class_ids]
+        reference_endpoints = _get_per_class_vector(
+            reference_stats["thin_structure_endpoint_count_stats"],
+            "mean",
+            num_classes=num_classes,
+        )[thin_structure_class_ids]
+        generated_fragments = _get_per_class_vector(
+            generated_stats["thin_structure_fragment_count_stats"],
+            "mean",
+            num_classes=num_classes,
+        )[thin_structure_class_ids]
+        reference_fragments = _get_per_class_vector(
+            reference_stats["thin_structure_fragment_count_stats"],
+            "mean",
+            num_classes=num_classes,
+        )[thin_structure_class_ids]
+        thin_structure_skeleton_length_gap_mean = float(np.abs(generated_skeleton - reference_skeleton).mean())
+        thin_structure_endpoint_count_gap_mean = float(np.abs(generated_endpoints - reference_endpoints).mean())
+        thin_structure_fragment_count_gap_mean = float(np.abs(generated_fragments - reference_fragments).mean())
 
     return {
         "global_class_pixel_ratio_l1": float(
@@ -494,8 +793,15 @@ def _compare_distribution(generated_stats, reference_stats, *, num_classes):
         "class_area_histogram_l1_mean": float(histogram_l1_per_class.mean()),
         "class_area_histogram_l1_max": float(histogram_l1_per_class.max()),
         "histogram_l1_per_class": histogram_l1_per_class,
+        "adjacency_matrix_l1_mean": float(adjacency_l1.mean()),
+        "adjacency_matrix_jsd": float(_js_divergence(generated_adjacency, reference_adjacency)),
         "component_count_l1_mean": float(np.abs(generated_component_count - reference_component_count).mean()),
         "component_area_ratio_l1_mean": float(np.abs(generated_component_area - reference_component_area).mean()),
+        "largest_component_class_share_l1_mean": float(
+            np.abs(generated_largest_component_share - reference_largest_component_share).mean()
+        ),
+        "hole_count_l1_mean": float(np.abs(generated_hole_count - reference_hole_count).mean()),
+        "hole_area_ratio_l1_mean": float(np.abs(generated_hole_area_ratio - reference_hole_area_ratio).mean()),
         "boundary_length_ratio_gap": abs(
             float(generated_stats["boundary_length_ratio_mean"])
             - float(reference_stats["boundary_length_ratio_mean"])
@@ -504,6 +810,9 @@ def _compare_distribution(generated_stats, reference_stats, *, num_classes):
         "unique_class_count_gap": abs(
             float(generated_stats["unique_class_count_mean"]) - float(reference_stats["unique_class_count_mean"])
         ),
+        "thin_structure_skeleton_length_gap_mean": thin_structure_skeleton_length_gap_mean,
+        "thin_structure_endpoint_count_gap_mean": thin_structure_endpoint_count_gap_mean,
+        "thin_structure_fragment_count_gap_mean": thin_structure_fragment_count_gap_mean,
     }
 
 
@@ -531,11 +840,12 @@ def _write_markdown_report(path, summary):
         f"- monitor: `{summary['monitor']}`",
         f"- reference source: `{summary['reference_source']}`",
         f"- small-region threshold ratio: `{summary['small_region_threshold_ratio']}`",
+        f"- thin-structure class ids: `{summary['thin_structure_class_ids']}`",
         "",
-        "Mask-only evaluation is distributional. It compares generated masks against the real split on area, topology, boundary, and small-region statistics. `nearest_real_miou_mean` remains a real-bank plausibility sanity metric, not a paired target metric.",
+        "Mask-only evaluation is distributional. It compares generated masks against the real split on area, topology, adjacency, connectivity, boundary, holes, and small-region statistics. `nearest_real_miou_mean` remains a real-bank plausibility sanity metric, not a paired target metric.",
         "",
-        "| NFE | nearest-real mIoU | pairwise fake mIoU | global class ratio L1 | area hist L1 | component count gap | boundary gap | small-region freq gap |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| NFE | nearest-real mIoU | pairwise fake mIoU | adjacency L1 | adjacency JSD | largest-CC gap | hole-count gap | boundary gap | small-region gap | thin-frag gap |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for result in summary["results"]:
         pairwise = result["pairwise_fake_miou_mean"]
@@ -546,11 +856,15 @@ def _write_markdown_report(path, summary):
                     str(int(result["nfe"])),
                     f"{float(result['nearest_real_miou_mean']):.4f}",
                     "n/a" if pairwise is None else f"{float(pairwise):.4f}",
-                    f"{float(result['global_class_pixel_ratio_l1']):.4f}",
-                    f"{float(result['class_area_histogram_l1_mean']):.4f}",
-                    f"{float(result['component_count_l1_mean']):.4f}",
+                    f"{float(result['adjacency_matrix_l1_mean']):.4f}",
+                    f"{float(result['adjacency_matrix_jsd']):.4f}",
+                    f"{float(result['largest_component_class_share_l1_mean']):.4f}",
+                    f"{float(result['hole_count_l1_mean']):.4f}",
                     f"{float(result['boundary_length_ratio_gap']):.4f}",
                     f"{float(result['small_region_frequency_l1_mean']):.4f}",
+                    "n/a"
+                    if result["thin_structure_fragment_count_gap_mean"] is None
+                    else f"{float(result['thin_structure_fragment_count_gap_mean']):.4f}",
                 ]
             )
             + " |"
@@ -563,7 +877,8 @@ def _write_markdown_report(path, summary):
             "- Lower is better for all gap metrics.",
             "- Higher `nearest_real_miou_mean` is better.",
             "- Very high `pairwise_fake_miou_mean` can indicate reduced diversity or mode collapse.",
-            "- `summary.json` contains the full per-class histograms and connected-component statistics for both the real bank and every generated NFE sweep.",
+            "- Adjacency, largest-component share, enclosed-hole counts, and thin-structure continuity are useful in remote sensing because roads, parcels, rivers, and small built structures depend on topology rather than only class area.",
+            "- `summary.json` contains the full per-class histograms, adjacency matrices, connected-component statistics, and thin-structure summaries for both the real bank and every generated NFE sweep.",
         ]
     )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -636,6 +951,7 @@ def main():
         num_classes=num_classes,
         ignore_index=ignore_index,
         small_region_threshold_ratio=args.small_region_threshold_ratio,
+        thin_structure_class_ids=args.thin_structure_class_ids,
     )
     results = []
     for nfe, nfe_dir in nfe_dirs:
@@ -645,6 +961,7 @@ def main():
             num_classes=num_classes,
             ignore_index=ignore_index,
             small_region_threshold_ratio=args.small_region_threshold_ratio,
+            thin_structure_class_ids=args.thin_structure_class_ids,
         )
         nearest_real_mious = _nearest_real_mious(
             generated_masks,
@@ -661,6 +978,7 @@ def main():
             generated_stats,
             reference_stats,
             num_classes=num_classes,
+            thin_structure_class_ids=args.thin_structure_class_ids,
         )
 
         results.append(
@@ -681,14 +999,22 @@ def main():
                 "global_class_pixel_ratio_l1": distribution_gap["global_class_pixel_ratio_l1"],
                 "class_area_histogram_l1_mean": distribution_gap["class_area_histogram_l1_mean"],
                 "class_area_histogram_l1_max": distribution_gap["class_area_histogram_l1_max"],
+                "adjacency_matrix_l1_mean": distribution_gap["adjacency_matrix_l1_mean"],
+                "adjacency_matrix_jsd": distribution_gap["adjacency_matrix_jsd"],
                 "component_count_l1_mean": distribution_gap["component_count_l1_mean"],
                 "component_area_ratio_l1_mean": distribution_gap["component_area_ratio_l1_mean"],
+                "largest_component_class_share_l1_mean": distribution_gap["largest_component_class_share_l1_mean"],
+                "hole_count_l1_mean": distribution_gap["hole_count_l1_mean"],
+                "hole_area_ratio_l1_mean": distribution_gap["hole_area_ratio_l1_mean"],
                 "boundary_length_generated_mean": float(generated_stats["boundary_length_mean"]),
                 "boundary_length_reference_mean": float(reference_stats["boundary_length_mean"]),
                 "boundary_length_ratio_generated_mean": float(generated_stats["boundary_length_ratio_mean"]),
                 "boundary_length_ratio_reference_mean": float(reference_stats["boundary_length_ratio_mean"]),
                 "boundary_length_ratio_gap": distribution_gap["boundary_length_ratio_gap"],
                 "small_region_frequency_l1_mean": distribution_gap["small_region_frequency_l1_mean"],
+                "thin_structure_skeleton_length_gap_mean": distribution_gap["thin_structure_skeleton_length_gap_mean"],
+                "thin_structure_endpoint_count_gap_mean": distribution_gap["thin_structure_endpoint_count_gap_mean"],
+                "thin_structure_fragment_count_gap_mean": distribution_gap["thin_structure_fragment_count_gap_mean"],
                 "unique_class_count_generated_mean": float(generated_stats["unique_class_count_mean"]),
                 "unique_class_count_reference_mean": float(reference_stats["unique_class_count_mean"]),
                 "unique_class_count_gap": distribution_gap["unique_class_count_gap"],
@@ -738,6 +1064,54 @@ def main():
                     _to_json_ready(np.asarray(reference_stats["small_region_sample_frequency"]).round(6)),
                     ensure_ascii=True,
                 ),
+                "generated_adjacency_frequency_mean_json": json.dumps(
+                    _to_json_ready(np.asarray(generated_stats["adjacency_frequency_mean"]).round(6)),
+                    ensure_ascii=True,
+                ),
+                "reference_adjacency_frequency_mean_json": json.dumps(
+                    _to_json_ready(np.asarray(reference_stats["adjacency_frequency_mean"]).round(6)),
+                    ensure_ascii=True,
+                ),
+                "generated_largest_component_class_share_json": json.dumps(
+                    _to_json_ready(generated_stats["largest_component_class_share_stats"]),
+                    ensure_ascii=True,
+                    sort_keys=True,
+                ),
+                "reference_largest_component_class_share_json": json.dumps(
+                    _to_json_ready(reference_stats["largest_component_class_share_stats"]),
+                    ensure_ascii=True,
+                    sort_keys=True,
+                ),
+                "generated_hole_count_stats_json": json.dumps(
+                    _to_json_ready(generated_stats["hole_count_stats"]),
+                    ensure_ascii=True,
+                    sort_keys=True,
+                ),
+                "reference_hole_count_stats_json": json.dumps(
+                    _to_json_ready(reference_stats["hole_count_stats"]),
+                    ensure_ascii=True,
+                    sort_keys=True,
+                ),
+                "generated_hole_area_ratio_stats_json": json.dumps(
+                    _to_json_ready(generated_stats["hole_area_ratio_stats"]),
+                    ensure_ascii=True,
+                    sort_keys=True,
+                ),
+                "reference_hole_area_ratio_stats_json": json.dumps(
+                    _to_json_ready(reference_stats["hole_area_ratio_stats"]),
+                    ensure_ascii=True,
+                    sort_keys=True,
+                ),
+                "generated_thin_structure_skeleton_stats_json": json.dumps(
+                    _to_json_ready(generated_stats["thin_structure_skeleton_length_ratio_stats"]),
+                    ensure_ascii=True,
+                    sort_keys=True,
+                ),
+                "reference_thin_structure_skeleton_stats_json": json.dumps(
+                    _to_json_ready(reference_stats["thin_structure_skeleton_length_ratio_stats"]),
+                    ensure_ascii=True,
+                    sort_keys=True,
+                ),
                 "generated_class_area_histogram_json": json.dumps(
                     _to_json_ready(generated_stats["class_area_histogram_freq"]),
                     ensure_ascii=True,
@@ -749,9 +1123,10 @@ def main():
                     sort_keys=True,
                 ),
                 "metrics_note": (
-                    "Mask-only evaluation is distributional. Global class-area, connected-component, boundary, "
-                    "and small-region statistics are the main protocol. nearest_real_miou_mean remains a real-bank "
-                    "plausibility sanity metric; pairwise_fake_miou_mean is a diversity-collapse sanity metric."
+                    "Mask-only evaluation is distributional. Global class-area, adjacency, connected-component, "
+                    "largest-component share, hole-count, boundary, thin-structure, and small-region statistics "
+                    "form the main protocol. nearest_real_miou_mean remains a real-bank plausibility sanity metric; "
+                    "pairwise_fake_miou_mean is a diversity-collapse sanity metric."
                 ),
             }
         )
@@ -771,10 +1146,17 @@ def main():
         "label_spec": str(args.label_spec.resolve()),
         "num_classes": int(num_classes),
         "small_region_threshold_ratio": float(args.small_region_threshold_ratio),
+        "thin_structure_class_ids": sorted(
+            {int(class_id) for class_id in (args.thin_structure_class_ids or []) if 0 <= int(class_id) < int(num_classes)}
+        ),
         "primary_readout": [
             "global_class_pixel_ratio_l1",
+            "adjacency_matrix_l1_mean",
+            "adjacency_matrix_jsd",
             "class_area_histogram_l1_mean",
             "component_count_l1_mean",
+            "largest_component_class_share_l1_mean",
+            "hole_count_l1_mean",
             "boundary_length_ratio_gap",
             "small_region_frequency_l1_mean",
             "nearest_real_miou_mean",
@@ -785,6 +1167,10 @@ def main():
             "nfe_rule": "Use the fixed NFE=8/4/2/1 sweep instead of reporting only NFE=1.",
             "small_region_note": "Small regions are connected components whose area is no larger than small_region_threshold_ratio of valid pixels in a sample.",
             "boundary_note": "Boundary length is measured by vertical and horizontal class-transition counts, normalized by valid pixels.",
+            "adjacency_note": "Class adjacency uses a 4-neighbor class-contact matrix. This is useful for remote sensing because layout realism depends on which classes touch each other, not only how much area each class occupies.",
+            "largest_component_note": "Largest connected-component class share measures whether a class stays consolidated or fragments into many islands.",
+            "hole_note": "Hole counts treat enclosed non-class islands inside a class region as structural defects or topology signals.",
+            "thin_structure_note": "Thin-structure continuity uses skeleton length, endpoint count, and fragment count for user-specified thin classes such as roads or waterways.",
             "checkpoint_rule": "Use best checkpoints selected by val/base_error_mean.",
         },
         "reference_distribution": _to_json_ready(reference_stats),
@@ -812,14 +1198,22 @@ def main():
                 "global_class_pixel_ratio_l1",
                 "class_area_histogram_l1_mean",
                 "class_area_histogram_l1_max",
+                "adjacency_matrix_l1_mean",
+                "adjacency_matrix_jsd",
                 "component_count_l1_mean",
                 "component_area_ratio_l1_mean",
+                "largest_component_class_share_l1_mean",
+                "hole_count_l1_mean",
+                "hole_area_ratio_l1_mean",
                 "boundary_length_generated_mean",
                 "boundary_length_reference_mean",
                 "boundary_length_ratio_generated_mean",
                 "boundary_length_ratio_reference_mean",
                 "boundary_length_ratio_gap",
                 "small_region_frequency_l1_mean",
+                "thin_structure_skeleton_length_gap_mean",
+                "thin_structure_endpoint_count_gap_mean",
+                "thin_structure_fragment_count_gap_mean",
                 "unique_class_count_generated_mean",
                 "unique_class_count_reference_mean",
                 "unique_class_count_gap",
@@ -833,6 +1227,16 @@ def main():
                 "reference_component_area_ratio_stats_json",
                 "generated_small_region_frequency_json",
                 "reference_small_region_frequency_json",
+                "generated_adjacency_frequency_mean_json",
+                "reference_adjacency_frequency_mean_json",
+                "generated_largest_component_class_share_json",
+                "reference_largest_component_class_share_json",
+                "generated_hole_count_stats_json",
+                "reference_hole_count_stats_json",
+                "generated_hole_area_ratio_stats_json",
+                "reference_hole_area_ratio_stats_json",
+                "generated_thin_structure_skeleton_stats_json",
+                "reference_thin_structure_skeleton_stats_json",
                 "generated_class_area_histogram_json",
                 "reference_class_area_histogram_json",
                 "metrics_note",

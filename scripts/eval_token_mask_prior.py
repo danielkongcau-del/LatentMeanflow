@@ -70,6 +70,16 @@ def parse_args():
     parser.add_argument("--nfe-values", type=int, nargs="+", default=DEFAULT_NFE_VALUES)
     parser.add_argument("--seed", type=int, default=23)
     parser.add_argument("--small-region-threshold-ratio", type=float, default=0.02)
+    parser.add_argument(
+        "--thin-structure-class-ids",
+        type=int,
+        nargs="*",
+        default=None,
+        help=(
+            "Optional semantic class ids to audit with thin-structure continuity statistics "
+            "(skeleton length, endpoint count, fragment count)."
+        ),
+    )
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--expected-monitor", type=str, default="val/base_error_mean")
     parser.add_argument(
@@ -131,6 +141,7 @@ def _write_markdown_report(path, summary):
         f"- monitor: `{summary['monitor']}`",
         f"- reference source: `{summary['reference_source']}`",
         f"- small-region threshold ratio: `{summary['small_region_threshold_ratio']}`",
+        f"- thin-structure class ids: `{summary['thin_structure_class_ids']}`",
         f"- refinement mode: `{route.get('refinement_mode', 'unknown')}`",
         f"- corruption mode: `{route.get('corruption_mode', 'unknown')}`",
         f"- final full reveal: `{route.get('final_full_reveal', 'unknown')}`",
@@ -139,10 +150,10 @@ def _write_markdown_report(path, summary):
         f"- reveal noise scale: `{route.get('reveal_noise_scale', 'unknown')}`",
         f"- sample temperature: `{route.get('sample_temperature', 'unknown')}`",
         "",
-        "Primary mask-quality readout stays distributional on the decoded semantic masks. Token diagnostics are secondary and answer whether the frozen-tokenizer code vocabulary is actually being used.",
+        "Primary mask-quality readout stays distributional on the decoded semantic masks. Adjacency, largest-component share, hole statistics, and optional thin-structure continuity are included because remote-sensing layout quality depends on topology, not only class area. Token diagnostics remain secondary and answer whether the frozen-tokenizer code vocabulary is actually being used.",
         "",
-        "| NFE | nearest-real mIoU | pairwise fake mIoU | global class ratio L1 | area hist L1 | boundary gap | active codes | code perplexity | unique codes / sample |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| NFE | nearest-real mIoU | adjacency L1 | adjacency JSD | largest-CC gap | hole-count gap | boundary gap | thin-frag gap |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for result in summary["results"]:
         lines.append(
@@ -153,12 +164,36 @@ def _write_markdown_report(path, summary):
                     f"{float(result['nearest_real_miou_mean']):.4f}"
                     if result["nearest_real_miou_mean"] is not None
                     else "n/a",
+                    f"{float(result['adjacency_matrix_l1_mean']):.4f}",
+                    f"{float(result['adjacency_matrix_jsd']):.4f}",
+                    f"{float(result['largest_component_class_share_l1_mean']):.4f}",
+                    f"{float(result['hole_count_l1_mean']):.4f}",
+                    f"{float(result['boundary_length_ratio_gap']):.4f}",
+                    "n/a"
+                    if result["thin_structure_fragment_count_gap_mean"] is None
+                    else f"{float(result['thin_structure_fragment_count_gap_mean']):.4f}",
+                ]
+            )
+            + " |"
+        )
+    lines.extend(
+        [
+            "",
+            "| NFE | pairwise fake mIoU | global class ratio L1 | area hist L1 | active codes | code perplexity | unique codes / sample |",
+            "| --- | --- | --- | --- | --- | --- | --- |",
+        ]
+    )
+    for result in summary["results"]:
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    str(int(result["nfe"])),
                     f"{float(result['pairwise_fake_miou_mean']):.4f}"
                     if result["pairwise_fake_miou_mean"] is not None
                     else "n/a",
                     f"{float(result['global_class_pixel_ratio_l1']):.4f}",
                     f"{float(result['class_area_histogram_l1_mean']):.4f}",
-                    f"{float(result['boundary_length_ratio_gap']):.4f}",
                     str(result["active_code_count"]) if result["active_code_count"] is not None else "n/a",
                     f"{float(result['code_perplexity']):.2f}" if result["code_perplexity"] is not None else "n/a",
                     f"{float(result['unique_code_count_mean']):.2f}" if result["unique_code_count_mean"] is not None else "n/a",
@@ -234,6 +269,7 @@ def main():
         num_classes=num_classes,
         ignore_index=ignore_index,
         small_region_threshold_ratio=args.small_region_threshold_ratio,
+        thin_structure_class_ids=args.thin_structure_class_ids,
     )
 
     results = []
@@ -248,11 +284,13 @@ def main():
             num_classes=num_classes,
             ignore_index=ignore_index,
             small_region_threshold_ratio=args.small_region_threshold_ratio,
+            thin_structure_class_ids=args.thin_structure_class_ids,
         )
         comparison = _compare_distribution(
             generated_stats,
             reference_stats,
             num_classes=num_classes,
+            thin_structure_class_ids=args.thin_structure_class_ids,
         )
         nearest_real = _nearest_real_mious(
             generated_masks,
@@ -277,10 +315,18 @@ def main():
                 "global_class_pixel_ratio_l1": float(comparison["global_class_pixel_ratio_l1"]),
                 "class_area_histogram_l1_mean": float(comparison["class_area_histogram_l1_mean"]),
                 "class_area_histogram_l1_max": float(comparison["class_area_histogram_l1_max"]),
+                "adjacency_matrix_l1_mean": float(comparison["adjacency_matrix_l1_mean"]),
+                "adjacency_matrix_jsd": float(comparison["adjacency_matrix_jsd"]),
                 "component_count_l1_mean": float(comparison["component_count_l1_mean"]),
                 "component_area_ratio_l1_mean": float(comparison["component_area_ratio_l1_mean"]),
+                "largest_component_class_share_l1_mean": float(comparison["largest_component_class_share_l1_mean"]),
+                "hole_count_l1_mean": float(comparison["hole_count_l1_mean"]),
+                "hole_area_ratio_l1_mean": float(comparison["hole_area_ratio_l1_mean"]),
                 "boundary_length_ratio_gap": float(comparison["boundary_length_ratio_gap"]),
                 "small_region_frequency_l1_mean": float(comparison["small_region_frequency_l1_mean"]),
+                "thin_structure_skeleton_length_gap_mean": comparison["thin_structure_skeleton_length_gap_mean"],
+                "thin_structure_endpoint_count_gap_mean": comparison["thin_structure_endpoint_count_gap_mean"],
+                "thin_structure_fragment_count_gap_mean": comparison["thin_structure_fragment_count_gap_mean"],
                 "unique_class_count_gap": float(comparison["unique_class_count_gap"]),
                 "active_code_count": None if code_summary is None else int(code_summary["active_code_count"]),
                 "active_code_fraction": None if code_summary is None else float(code_summary["active_code_fraction"]),
@@ -303,6 +349,9 @@ def main():
         "split": str(split_key),
         "label_spec": str(args.label_spec.resolve()),
         "small_region_threshold_ratio": float(args.small_region_threshold_ratio),
+        "thin_structure_class_ids": sorted(
+            {int(class_id) for class_id in (args.thin_structure_class_ids or []) if 0 <= int(class_id) < int(num_classes)}
+        ),
         "codebook_size": int(codebook_size),
         "route_metadata": route_metadata,
         "reference_stats": _to_json_ready(reference_stats),
@@ -326,10 +375,18 @@ def main():
                 "global_class_pixel_ratio_l1",
                 "class_area_histogram_l1_mean",
                 "class_area_histogram_l1_max",
+                "adjacency_matrix_l1_mean",
+                "adjacency_matrix_jsd",
                 "component_count_l1_mean",
                 "component_area_ratio_l1_mean",
+                "largest_component_class_share_l1_mean",
+                "hole_count_l1_mean",
+                "hole_area_ratio_l1_mean",
                 "boundary_length_ratio_gap",
                 "small_region_frequency_l1_mean",
+                "thin_structure_skeleton_length_gap_mean",
+                "thin_structure_endpoint_count_gap_mean",
+                "thin_structure_fragment_count_gap_mean",
                 "unique_class_count_gap",
                 "active_code_count",
                 "active_code_fraction",

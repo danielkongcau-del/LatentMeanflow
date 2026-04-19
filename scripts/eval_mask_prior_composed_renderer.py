@@ -40,6 +40,10 @@ from scripts.sample_mask_conditioned_image import (
     apply_tokenizer_overrides,
     generate_mask_conditioned_sweep,
 )
+from scripts.eval_mask_prior import (
+    _compare_distribution,
+    _summarize_distribution,
+)
 
 
 DEFAULT_MASK_CONFIG = REPO_ROOT / "configs" / "latent_alphaflow_mask_prior_unet.yaml"
@@ -89,6 +93,16 @@ def parse_args():
     parser.add_argument("--renderer-two-step-time", type=float, default=None)
     parser.add_argument("--boundary-tolerance-px", type=int, default=2)
     parser.add_argument("--small-region-threshold-ratio", type=float, default=0.02)
+    parser.add_argument(
+        "--thin-structure-class-ids",
+        type=int,
+        nargs="*",
+        default=None,
+        help=(
+            "Optional semantic class ids to audit with thin-structure continuity statistics "
+            "when comparing input masks against teacher-decoded masks."
+        ),
+    )
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--expected-mask-monitor", type=str, default="val/base_error_mean")
     parser.add_argument("--expected-renderer-monitor", type=str, default="val/base_error_mean")
@@ -291,8 +305,8 @@ def _write_markdown_report(path, summary):
         "",
         "This protocol freezes the downstream `p(image | semantic_mask)` renderer and the in-domain teacher. It measures whether sampled `p(mask)` layouts remain valid when composed through the renderer.",
         "",
-        "| mask NFE | renderer NFE | teacher mIoU | Boundary F1 | layout pixel acc | small-region mIoU |",
-        "| --- | --- | --- | --- | --- | --- |",
+        "| mask NFE | renderer NFE | teacher mIoU | Boundary F1 | layout pixel acc | small-region mIoU | adjacency L1 | largest-CC gap | thin-frag gap |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for result in summary["results"]:
         lines.append(
@@ -307,6 +321,11 @@ def _write_markdown_report(path, summary):
                     if result["layout_pixel_accuracy"] is not None
                     else "n/a",
                     f"{float(result['small_region_miou']):.4f}" if result["small_region_miou"] is not None else "n/a",
+                    f"{float(result['layout_adjacency_matrix_l1_mean']):.4f}",
+                    f"{float(result['layout_largest_component_class_share_l1_mean']):.4f}",
+                    "n/a"
+                    if result["layout_thin_structure_fragment_count_gap_mean"] is None
+                    else f"{float(result['layout_thin_structure_fragment_count_gap_mean']):.4f}",
                 ]
             )
             + " |"
@@ -316,7 +335,8 @@ def _write_markdown_report(path, summary):
             "",
             "Interpretation:",
             "",
-            "- `teacher_miou`, `boundary_f1`, `layout_pixel_accuracy`, and `small_region_miou` are the primary compose metrics.",
+            "- `teacher_miou`, `boundary_f1`, `layout_pixel_accuracy`, and `small_region_miou` remain the primary compose metrics.",
+            "- Adjacency and largest-component share gaps help detect topological drift after rendering, especially for remote-sensing layouts.",
             "- If these collapse while the frozen renderer route is already validated, the first suspect is the sampled mask distribution rather than the renderer itself.",
             "- Formal reporting uses the fixed `mask_nfe=8/4/2/1` and `renderer_nfe=8/4/2/1` sweep with the same seed and sample count.",
         ]
@@ -452,6 +472,26 @@ def main():
                 boundary_tolerance_px=args.boundary_tolerance_px,
                 small_region_threshold_ratio=args.small_region_threshold_ratio,
             )
+            target_distribution = _summarize_distribution(
+                [mask.cpu().numpy() for mask in target_masks],
+                num_classes=num_classes,
+                ignore_index=ignore_index,
+                small_region_threshold_ratio=args.small_region_threshold_ratio,
+                thin_structure_class_ids=args.thin_structure_class_ids,
+            )
+            teacher_distribution = _summarize_distribution(
+                [mask.cpu().numpy() for mask in teacher_masks],
+                num_classes=num_classes,
+                ignore_index=ignore_index,
+                small_region_threshold_ratio=args.small_region_threshold_ratio,
+                thin_structure_class_ids=args.thin_structure_class_ids,
+            )
+            layout_distribution_gap = _compare_distribution(
+                teacher_distribution,
+                target_distribution,
+                num_classes=num_classes,
+                thin_structure_class_ids=args.thin_structure_class_ids,
+            )
             results.append(
                 {
                     "mask_nfe": int(mask_nfe),
@@ -469,6 +509,22 @@ def main():
                     "boundary_f1": layout_metrics["boundary_f1"],
                     "layout_pixel_accuracy": layout_metrics["layout_pixel_accuracy"],
                     "small_region_miou": layout_metrics["small_region_miou"],
+                    "layout_adjacency_matrix_l1_mean": layout_distribution_gap["adjacency_matrix_l1_mean"],
+                    "layout_adjacency_matrix_jsd": layout_distribution_gap["adjacency_matrix_jsd"],
+                    "layout_largest_component_class_share_l1_mean": layout_distribution_gap[
+                        "largest_component_class_share_l1_mean"
+                    ],
+                    "layout_hole_count_l1_mean": layout_distribution_gap["hole_count_l1_mean"],
+                    "layout_hole_area_ratio_l1_mean": layout_distribution_gap["hole_area_ratio_l1_mean"],
+                    "layout_thin_structure_skeleton_length_gap_mean": layout_distribution_gap[
+                        "thin_structure_skeleton_length_gap_mean"
+                    ],
+                    "layout_thin_structure_endpoint_count_gap_mean": layout_distribution_gap[
+                        "thin_structure_endpoint_count_gap_mean"
+                    ],
+                    "layout_thin_structure_fragment_count_gap_mean": layout_distribution_gap[
+                        "thin_structure_fragment_count_gap_mean"
+                    ],
                     "small_region_threshold_ratio": layout_metrics["small_region_threshold_ratio"],
                     "small_region_active_class_count": layout_metrics["small_region_active_class_count"],
                     "teacher_per_class_iou_json": json.dumps(
@@ -512,6 +568,9 @@ def main():
         "label_spec": str(args.label_spec.resolve()),
         "seed": int(args.seed),
         "n_samples": int(args.n_samples),
+        "thin_structure_class_ids": sorted(
+            {int(class_id) for class_id in (args.thin_structure_class_ids or []) if 0 <= int(class_id) < int(num_classes)}
+        ),
         "mask_nfe_values": [int(value) for value, _ in mask_nfe_dirs],
         "renderer_nfe_values": sorted({int(row["renderer_nfe"]) for row in results}),
         "primary_metric": "teacher_miou",
@@ -555,6 +614,14 @@ def main():
                 "boundary_f1",
                 "layout_pixel_accuracy",
                 "small_region_miou",
+                "layout_adjacency_matrix_l1_mean",
+                "layout_adjacency_matrix_jsd",
+                "layout_largest_component_class_share_l1_mean",
+                "layout_hole_count_l1_mean",
+                "layout_hole_area_ratio_l1_mean",
+                "layout_thin_structure_skeleton_length_gap_mean",
+                "layout_thin_structure_endpoint_count_gap_mean",
+                "layout_thin_structure_fragment_count_gap_mean",
                 "small_region_threshold_ratio",
                 "small_region_active_class_count",
                 "teacher_per_class_iou_json",

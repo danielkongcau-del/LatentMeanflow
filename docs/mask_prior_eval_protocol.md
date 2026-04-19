@@ -24,7 +24,7 @@ The protocol therefore splits evaluation into two questions:
 
 1. `mask-only distribution quality`
    - Does the generated mask bank match the real split on area, topology,
-     boundary complexity, and small-region behavior?
+     adjacency, boundary complexity, holes, thin structures, and small-region behavior?
 
 2. `compose-to-image quality`
    - If the generated masks are fed into the already validated frozen renderer,
@@ -54,18 +54,36 @@ the renderer.
 Mask-only metrics answer:
 
 - whether class area proportions are preserved
+- whether class-to-class contact patterns stay realistic
 - whether the generated masks keep the right amount of fragmentation
+- whether each class still keeps a dominant connected core instead of shattering
+- whether enclosed holes or islands appear with the right frequency
 - whether boundaries stay present instead of being oversmoothed
 - whether small connected regions still exist instead of disappearing
+- whether thin roads, waterways, or narrow strips remain continuous instead of breaking into fragments
 
 The mask-only protocol reports, for both the real split and generated masks:
 
 - class area histogram
 - per-class area ratio statistics
+- 4-neighbor class adjacency matrix statistics
 - connected component count statistics
 - connected component size statistics
+- largest connected-component share per class
+- hole count / enclosed-region area statistics
 - boundary length statistics
 - small-region frequency statistics
+- optional thin-structure continuity statistics for user-specified class ids
+
+These additions are especially useful for remote sensing:
+
+- adjacency matters because land-use realism depends on which classes touch,
+  not only how much area they occupy
+- largest-component share catches parcel/road/water masks that fragment into
+  implausible islands
+- hole statistics catch enclosed voids or islands inside large regions
+- thin-structure continuity is a direct sanity check for roads, rivers, and
+  other narrow elongated targets
 
 The main script is:
 
@@ -142,7 +160,8 @@ Outputs for the token-code mainline:
 The token-code summaries also record route metadata such as
 `refinement_mode`, `corruption_mode`, `final_full_reveal`, and the reveal /
 lock-noise settings so refine runs and progressive-reveal controls remain
-separable during reporting.
+separable during reporting. `summary.json/csv/md` now also expose adjacency,
+largest-component share, hole, and optional thin-structure gap metrics.
 
 ## Compose-To-Image Metrics Answer What
 
@@ -168,6 +187,11 @@ Primary compose metrics:
 - `boundary_f1`
 - `layout_pixel_accuracy`
 - `small_region_miou`
+
+The compose evaluator also writes structure-gap summaries between the input
+masks and the teacher-decoded masks, including adjacency and
+largest-component-share gaps. This helps separate renderer-induced drift from
+upstream `p(mask)` layout failures.
 
 The main script is:
 
