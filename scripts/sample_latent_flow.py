@@ -109,9 +109,73 @@ def validate_ckpt_matches_config(config_path, ckpt_path):
         )
 
 
-def load_model(config, ckpt_path, device):
+def load_checkpoint_state(ckpt_path):
+    return torch.load(ckpt_path, map_location="cpu", weights_only=False)
+
+
+def _normalize_contract_value(field_name, value):
+    if value in {None, ""}:
+        return None
+    if field_name.endswith("_path"):
+        return str(Path(str(value)).expanduser().resolve())
+    if isinstance(value, bool):
+        return bool(value)
+    return str(value)
+
+
+def validate_ckpt_matches_resolved_config(
+    config,
+    ckpt_path,
+    *,
+    config_path=None,
+    checkpoint_state=None,
+    fields=None,
+):
+    if config_path is not None:
+        validate_ckpt_matches_config(config_path, ckpt_path)
+
+    state = checkpoint_state if checkpoint_state is not None else load_checkpoint_state(ckpt_path)
+    if not isinstance(state, dict):
+        return state
+    hyper_parameters = state.get("hyper_parameters", {})
+    if not isinstance(hyper_parameters, dict):
+        return state
+
+    compare_fields = tuple(
+        fields
+        or (
+            "monitor",
+            "objective_name",
+            "tokenizer_config_path",
+            "tokenizer_ckpt_path",
+            "freeze_tokenizer",
+            "tokenizer_sample_posterior",
+        )
+    )
+    mismatches = []
+    for field_name in compare_fields:
+        runtime_value = OmegaConf.select(config, f"model.params.{field_name}", default=None)
+        ckpt_value = hyper_parameters.get(field_name)
+        if runtime_value in {None, ""} or ckpt_value in {None, ""}:
+            continue
+        runtime_norm = _normalize_contract_value(field_name, runtime_value)
+        ckpt_norm = _normalize_contract_value(field_name, ckpt_value)
+        if runtime_norm != ckpt_norm:
+            mismatches.append(
+                f"{field_name}: resolved runtime value {runtime_norm!r} != checkpoint value {ckpt_norm!r}"
+            )
+    if mismatches:
+        raise ValueError(
+            "Checkpoint/resolved-config mismatch after runtime overrides. "
+            "The loaded checkpoint does not match the final OmegaConf config:\n- "
+            + "\n- ".join(mismatches)
+        )
+    return state
+
+
+def load_model(config, ckpt_path, device, checkpoint_state=None):
     model = instantiate_from_config(config.model)
-    state = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    state = checkpoint_state if checkpoint_state is not None else load_checkpoint_state(ckpt_path)
     state_dict = state["state_dict"] if "state_dict" in state else state
     model.load_state_dict(state_dict, strict=False)
     model = model.to(device)

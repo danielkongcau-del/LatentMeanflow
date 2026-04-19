@@ -27,8 +27,9 @@ from latent_meanflow.utils.segmentation_teacher import (
 )
 from scripts.sample_latent_flow import (
     load_config,
+    load_checkpoint_state,
     load_model,
-    validate_ckpt_matches_config,
+    validate_ckpt_matches_resolved_config,
 )
 from scripts.sample_mask_prior import (
     DEFAULT_NFE_VALUES,
@@ -43,6 +44,11 @@ from scripts.sample_mask_conditioned_image import (
 from scripts.eval_mask_prior import (
     _compare_distribution,
     _summarize_distribution,
+)
+from scripts.sample_token_mask_prior import (
+    is_token_mask_prior_route,
+    resolve_configured_tokenizer_artifacts,
+    validate_token_mask_prior_checkpoint_contract,
 )
 
 
@@ -352,6 +358,11 @@ def main():
 
     mask_config = load_config(args.mask_config)
     renderer_config = load_config(args.renderer_config)
+    if is_token_mask_prior_route(mask_config) and args.mask_tokenizer_ckpt is None:
+        raise ValueError(
+            "mask-config points to the token-mask prior route, so --mask-tokenizer-ckpt is required explicitly. "
+            "Do not rely on a stale or missing tokenizer checkpoint path in the base config."
+        )
     mask_monitor = _check_monitor(mask_config, args.expected_mask_monitor, route_name="mask prior")
     renderer_monitor = _check_monitor(renderer_config, args.expected_renderer_monitor, route_name="renderer")
     apply_tokenizer_overrides(
@@ -363,6 +374,17 @@ def main():
         renderer_config,
         tokenizer_config=args.renderer_tokenizer_config,
         tokenizer_ckpt=args.renderer_tokenizer_ckpt,
+    )
+    mask_tokenizer_config_path = None
+    mask_tokenizer_ckpt_path = None
+    if is_token_mask_prior_route(mask_config):
+        mask_tokenizer_config_path, mask_tokenizer_ckpt_path = resolve_configured_tokenizer_artifacts(
+            mask_config,
+            route_name="Compose mask prior",
+        )
+    renderer_tokenizer_config_path, renderer_tokenizer_ckpt_path = resolve_configured_tokenizer_artifacts(
+        renderer_config,
+        route_name="Compose renderer",
     )
 
     label_metadata = resolve_label_spec_metadata(args.label_spec)
@@ -379,8 +401,22 @@ def main():
     if mask_generated_root is None:
         if mask_ckpt_path is None or not mask_ckpt_path.exists():
             raise FileNotFoundError("Mask-prior checkpoint not found. Pass --mask-ckpt explicitly.")
-        validate_ckpt_matches_config(args.mask_config, mask_ckpt_path)
-        mask_model = load_model(mask_config, mask_ckpt_path, device=device)
+        mask_checkpoint_state = load_checkpoint_state(mask_ckpt_path)
+        if is_token_mask_prior_route(mask_config):
+            validate_token_mask_prior_checkpoint_contract(
+                mask_config,
+                mask_ckpt_path,
+                config_path=args.mask_config,
+                checkpoint_state=mask_checkpoint_state,
+            )
+        else:
+            validate_ckpt_matches_resolved_config(
+                mask_config,
+                mask_ckpt_path,
+                config_path=args.mask_config,
+                checkpoint_state=mask_checkpoint_state,
+            )
+        mask_model = load_model(mask_config, mask_ckpt_path, device=device, checkpoint_state=mask_checkpoint_state)
         if args.mask_two_step_time is not None and hasattr(mask_model, "sampler") and hasattr(mask_model.sampler, "two_step_time"):
             mask_model.sampler.two_step_time = float(args.mask_two_step_time)
         mask_generated_root = outdir / "mask_prior_generated"
@@ -397,8 +433,19 @@ def main():
     if composed_root is None:
         if renderer_ckpt_path is None or not renderer_ckpt_path.exists():
             raise FileNotFoundError("Renderer checkpoint not found. Pass --renderer-ckpt explicitly.")
-        validate_ckpt_matches_config(args.renderer_config, renderer_ckpt_path)
-        renderer_model = load_model(renderer_config, renderer_ckpt_path, device=device)
+        renderer_checkpoint_state = load_checkpoint_state(renderer_ckpt_path)
+        validate_ckpt_matches_resolved_config(
+            renderer_config,
+            renderer_ckpt_path,
+            config_path=args.renderer_config,
+            checkpoint_state=renderer_checkpoint_state,
+        )
+        renderer_model = load_model(
+            renderer_config,
+            renderer_ckpt_path,
+            device=device,
+            checkpoint_state=renderer_checkpoint_state,
+        )
         if not hasattr(renderer_model, "build_condition_from_mask_onehot"):
             raise TypeError(f"Config '{args.renderer_config.name}' is not a mask-conditioned image route.")
         if args.renderer_two_step_time is not None and hasattr(renderer_model, "sampler") and hasattr(renderer_model.sampler, "two_step_time"):
@@ -548,18 +595,14 @@ def main():
         "task_decomposition": "p(mask) + p(image | semantic_mask)",
         "mask_config": str(args.mask_config.resolve()),
         "mask_checkpoint": None if mask_ckpt_path is None else str(mask_ckpt_path),
-        "mask_tokenizer_config": None
-        if args.mask_tokenizer_config is None
-        else str(args.mask_tokenizer_config.resolve()),
-        "mask_tokenizer_checkpoint": None
-        if args.mask_tokenizer_ckpt is None
-        else str(args.mask_tokenizer_ckpt.resolve()),
+        "mask_tokenizer_config": None if mask_tokenizer_config_path is None else str(mask_tokenizer_config_path),
+        "mask_tokenizer_checkpoint": None if mask_tokenizer_ckpt_path is None else str(mask_tokenizer_ckpt_path),
         "mask_generated_root": None if mask_generated_root is None else str(mask_generated_root),
         "mask_monitor": mask_monitor,
         "renderer_config": str(args.renderer_config.resolve()),
         "renderer_checkpoint": None if renderer_ckpt_path is None else str(renderer_ckpt_path),
-        "renderer_tokenizer_config": str(Path(renderer_config.model.params.tokenizer_config_path).resolve()),
-        "renderer_tokenizer_checkpoint": str(Path(renderer_config.model.params.tokenizer_ckpt_path).resolve()),
+        "renderer_tokenizer_config": str(renderer_tokenizer_config_path),
+        "renderer_tokenizer_checkpoint": str(renderer_tokenizer_ckpt_path),
         "renderer_monitor": renderer_monitor,
         "composed_root": str(composed_root),
         "teacher_run_dir": str(args.teacher_run_dir.resolve()),

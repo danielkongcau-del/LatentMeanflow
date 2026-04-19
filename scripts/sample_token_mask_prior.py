@@ -22,8 +22,9 @@ for path in (REPO_ROOT, LDM_ROOT, TAMING_ROOT):
 from latent_meanflow.utils import colorize_mask_index
 from scripts.sample_latent_flow import (
     load_config,
+    load_checkpoint_state,
     load_model,
-    validate_ckpt_matches_config,
+    validate_ckpt_matches_resolved_config,
 )
 from scripts.sample_mask_prior import _prepare_outdir
 
@@ -31,6 +32,7 @@ from scripts.sample_mask_prior import _prepare_outdir
 DEFAULT_CONFIG = REPO_ROOT / "configs" / "token_mask_prior_vq_sit.yaml"
 DEFAULT_TOKENIZER_CONFIG = REPO_ROOT / "configs" / "semantic_mask_vq_tokenizer_main_balanced_256.yaml"
 DEFAULT_NFE_VALUES = [8, 4, 2, 1]
+TOKEN_MASK_PRIOR_TARGET = "latent_meanflow.trainers.token_mask_prior_trainer.TokenMaskPriorTrainer"
 
 
 def parse_args():
@@ -74,6 +76,44 @@ def apply_tokenizer_overrides(config, *, tokenizer_config, tokenizer_ckpt):
         merge=False,
     )
     return config
+
+
+def is_token_mask_prior_route(config):
+    return str(OmegaConf.select(config, "model.target", default="")) == TOKEN_MASK_PRIOR_TARGET
+
+
+def resolve_configured_tokenizer_artifacts(config, *, route_name):
+    tokenizer_config_value = OmegaConf.select(config, "model.params.tokenizer_config_path", default=None)
+    tokenizer_ckpt_value = OmegaConf.select(config, "model.params.tokenizer_ckpt_path", default=None)
+    if tokenizer_config_value in {None, ""}:
+        raise ValueError(f"{route_name} requires model.params.tokenizer_config_path to be set in the resolved config.")
+    if tokenizer_ckpt_value in {None, ""}:
+        raise ValueError(f"{route_name} requires model.params.tokenizer_ckpt_path to be set in the resolved config.")
+
+    tokenizer_config_path = Path(str(tokenizer_config_value)).expanduser().resolve()
+    tokenizer_ckpt_path = Path(str(tokenizer_ckpt_value)).expanduser().resolve()
+    if not tokenizer_config_path.exists():
+        raise FileNotFoundError(f"{route_name} tokenizer config file not found: {tokenizer_config_path}")
+    if not tokenizer_ckpt_path.exists():
+        raise FileNotFoundError(f"{route_name} tokenizer checkpoint not found: {tokenizer_ckpt_path}")
+    return tokenizer_config_path, tokenizer_ckpt_path
+
+
+def validate_token_mask_prior_checkpoint_contract(config, ckpt_path, *, config_path=None, checkpoint_state=None):
+    return validate_ckpt_matches_resolved_config(
+        config,
+        ckpt_path,
+        config_path=config_path,
+        checkpoint_state=checkpoint_state,
+        fields=(
+            "monitor",
+            "objective_name",
+            "tokenizer_config_path",
+            "tokenizer_ckpt_path",
+            "freeze_tokenizer",
+            "tokenizer_sample_posterior",
+        ),
+    )
 
 
 def extract_token_mask_prior_route_metadata(*, config, model=None):
@@ -279,13 +319,23 @@ def main():
         tokenizer_config=args.tokenizer_config,
         tokenizer_ckpt=args.tokenizer_ckpt,
     )
+    resolved_tokenizer_config_path, resolved_tokenizer_ckpt_path = resolve_configured_tokenizer_artifacts(
+        config,
+        route_name="Token-mask prior sampling",
+    )
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(int(args.seed))
 
-    validate_ckpt_matches_config(args.config, args.ckpt.resolve())
+    checkpoint_state = load_checkpoint_state(args.ckpt.resolve())
+    validate_token_mask_prior_checkpoint_contract(
+        config,
+        args.ckpt.resolve(),
+        config_path=args.config,
+        checkpoint_state=checkpoint_state,
+    )
     outdir = args.outdir.resolve()
     _prepare_outdir(outdir, overwrite=args.overwrite)
-    model = load_model(config, args.ckpt.resolve(), device=device)
+    model = load_model(config, args.ckpt.resolve(), device=device, checkpoint_state=checkpoint_state)
     route_metadata = extract_token_mask_prior_route_metadata(config=config, model=model)
 
     summary_rows = generate_token_mask_prior_sweep(
@@ -301,8 +351,8 @@ def main():
         "task": "p(token_codes) -> frozen tokenizer decode -> semantic_mask",
         "config": str(args.config.resolve()),
         "checkpoint": str(args.ckpt.resolve()),
-        "tokenizer_config": str(args.tokenizer_config.resolve()),
-        "tokenizer_checkpoint": str(args.tokenizer_ckpt.resolve()),
+        "tokenizer_config": str(resolved_tokenizer_config_path),
+        "tokenizer_checkpoint": str(resolved_tokenizer_ckpt_path),
         "config_overrides": list(args.overrides),
         "seed": int(args.seed),
         "n_samples": int(args.n_samples),

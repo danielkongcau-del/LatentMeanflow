@@ -34,7 +34,7 @@ from scripts.eval_mask_prior import (
     _summarize_distribution,
     _to_json_ready,
 )
-from scripts.sample_latent_flow import load_config, load_model, validate_ckpt_matches_config
+from scripts.sample_latent_flow import load_config, load_model
 from scripts.sample_token_mask_prior import (
     DEFAULT_CONFIG,
     DEFAULT_NFE_VALUES,
@@ -42,7 +42,10 @@ from scripts.sample_token_mask_prior import (
     apply_tokenizer_overrides,
     extract_token_mask_prior_route_metadata,
     generate_token_mask_prior_sweep,
+    resolve_configured_tokenizer_artifacts,
+    validate_token_mask_prior_checkpoint_contract,
 )
+from scripts.sample_latent_flow import load_checkpoint_state
 
 
 def parse_args():
@@ -219,6 +222,10 @@ def main():
         tokenizer_config=args.tokenizer_config,
         tokenizer_ckpt=args.tokenizer_ckpt,
     )
+    resolved_tokenizer_config_path, resolved_tokenizer_ckpt_path = resolve_configured_tokenizer_artifacts(
+        config,
+        route_name="Token-mask prior evaluation",
+    )
     monitor = _check_monitor(config, args.expected_monitor)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -229,8 +236,14 @@ def main():
     if generated_root is None:
         if ckpt_path is None or not ckpt_path.exists():
             raise FileNotFoundError("Token-mask prior checkpoint not found. Pass --ckpt explicitly.")
-        validate_ckpt_matches_config(args.config, ckpt_path)
-        model = load_model(config, ckpt_path, device=device)
+        checkpoint_state = load_checkpoint_state(ckpt_path)
+        validate_token_mask_prior_checkpoint_contract(
+            config,
+            ckpt_path,
+            config_path=args.config,
+            checkpoint_state=checkpoint_state,
+        )
+        model = load_model(config, ckpt_path, device=device, checkpoint_state=checkpoint_state)
         route_metadata = extract_token_mask_prior_route_metadata(config=config, model=model)
         generated_root = outdir / "generated"
         _prepare_outdir(generated_root, overwrite=args.overwrite)
@@ -341,8 +354,8 @@ def main():
         "task": "p(token_codes) -> frozen tokenizer decode -> semantic_mask",
         "config": str(args.config.resolve()),
         "checkpoint": None if ckpt_path is None else str(ckpt_path.resolve()),
-        "tokenizer_config": str(args.tokenizer_config.resolve()),
-        "tokenizer_checkpoint": str(args.tokenizer_ckpt.resolve()),
+        "tokenizer_config": str(resolved_tokenizer_config_path),
+        "tokenizer_checkpoint": str(resolved_tokenizer_ckpt_path),
         "generated_root": str(generated_root),
         "monitor": monitor,
         "reference_source": str(reference_source),

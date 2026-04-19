@@ -19,6 +19,10 @@ from latent_meanflow.losses.semantic_structure import (
 )
 from latent_meanflow.models.semantic_mask_vq_autoencoder import SemanticMaskVQAutoencoder
 from latent_meanflow.trainers.token_mask_prior_trainer import TokenMaskPriorTrainer
+from scripts.sample_token_mask_prior import (
+    resolve_configured_tokenizer_artifacts,
+    validate_token_mask_prior_checkpoint_contract,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -111,6 +115,26 @@ def _write_tokenizer_artifacts(tmpdir):
     OmegaConf.save(config, config_path)
     torch.save({"state_dict": tokenizer.state_dict()}, ckpt_path)
     return config_path, ckpt_path, tokenizer.latent_spatial_shape, tokenizer.codebook_size
+
+
+def _write_token_mask_prior_runtime_ckpt(tmpdir, *, tokenizer_config_path, tokenizer_ckpt_path):
+    ckpt_path = Path(tmpdir) / "token_mask_prior_vq_sit_tiny" / "checkpoints" / "last.ckpt"
+    ckpt_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(
+        {
+            "state_dict": {},
+            "hyper_parameters": {
+                "monitor": "val/base_error_mean",
+                "objective_name": "discrete_mask_diffusion",
+                "tokenizer_config_path": str(Path(tokenizer_config_path).resolve()),
+                "tokenizer_ckpt_path": str(Path(tokenizer_ckpt_path).resolve()),
+                "freeze_tokenizer": True,
+                "tokenizer_sample_posterior": False,
+            },
+        },
+        ckpt_path,
+    )
+    return ckpt_path
 
 
 def _make_prior_trainer(
@@ -496,6 +520,47 @@ class TokenMaskPriorSmokeTest(unittest.TestCase):
             self.assertEqual(int(trainer.backbone.hidden_size), 256)
             self.assertEqual(int(trainer.backbone.depth), 8)
             self.assertEqual(int(trainer.backbone.num_heads), 4)
+
+    def test_resolved_tokenizer_artifacts_follow_runtime_overrides(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tokenizer_dir = Path(tmpdir) / "tokenizer_a"
+            tokenizer_dir.mkdir(parents=True, exist_ok=True)
+            tokenizer_config_path, tokenizer_ckpt_path, _, _ = _write_tokenizer_artifacts(tokenizer_dir)
+            config = OmegaConf.load(REPO_ROOT / "configs" / "token_mask_prior_vq_sit_tiny.yaml")
+            OmegaConf.update(config, "model.params.tokenizer_config_path", str(tokenizer_config_path), merge=False)
+            OmegaConf.update(config, "model.params.tokenizer_ckpt_path", str(tokenizer_ckpt_path), merge=False)
+
+            resolved_config_path, resolved_ckpt_path = resolve_configured_tokenizer_artifacts(
+                config,
+                route_name="Token-mask prior smoke test",
+            )
+            self.assertEqual(resolved_config_path, Path(tokenizer_config_path).resolve())
+            self.assertEqual(resolved_ckpt_path, Path(tokenizer_ckpt_path).resolve())
+
+    def test_runtime_tokenizer_override_mismatch_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tokenizer_dir_a = Path(tmpdir) / "tokenizer_a"
+            tokenizer_dir_b = Path(tmpdir) / "tokenizer_b"
+            tokenizer_dir_a.mkdir(parents=True, exist_ok=True)
+            tokenizer_dir_b.mkdir(parents=True, exist_ok=True)
+            tokenizer_config_a, tokenizer_ckpt_a, _, _ = _write_tokenizer_artifacts(tokenizer_dir_a)
+            tokenizer_config_b, tokenizer_ckpt_b, _, _ = _write_tokenizer_artifacts(tokenizer_dir_b)
+            prior_ckpt_path = _write_token_mask_prior_runtime_ckpt(
+                tmpdir,
+                tokenizer_config_path=tokenizer_config_a,
+                tokenizer_ckpt_path=tokenizer_ckpt_a,
+            )
+
+            config = OmegaConf.load(REPO_ROOT / "configs" / "token_mask_prior_vq_sit_tiny.yaml")
+            OmegaConf.update(config, "model.params.tokenizer_config_path", str(tokenizer_config_b), merge=False)
+            OmegaConf.update(config, "model.params.tokenizer_ckpt_path", str(tokenizer_ckpt_b), merge=False)
+
+            with self.assertRaisesRegex(ValueError, "resolved-config mismatch"):
+                validate_token_mask_prior_checkpoint_contract(
+                    config,
+                    prior_ckpt_path,
+                    config_path=REPO_ROOT / "configs" / "token_mask_prior_vq_sit_tiny.yaml",
+                )
 
 
 if __name__ == "__main__":
