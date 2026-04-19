@@ -184,6 +184,40 @@ def _make_batch():
 
 
 class TokenCodeAutoregressivePriorSmokeTest(unittest.TestCase):
+    def test_sample_latents_matches_reference_sliding_window_sampling(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path, ckpt_path, token_spatial_shape, _ = _write_tokenizer_artifacts(tmpdir)
+            trainer = _make_prior_trainer(
+                tokenizer_config_path=config_path,
+                tokenizer_ckpt_path=ckpt_path,
+                block_size=4,
+                sample_greedy=True,
+            )
+            trainer.eval()
+
+            sampled = trainer.sample_latents(
+                batch_size=1,
+                nfe=1,
+                device=torch.device("cpu"),
+            )
+
+            sequence = torch.full(
+                (1, 1),
+                fill_value=trainer.bos_token_id,
+                device=torch.device("cpu"),
+                dtype=torch.long,
+            )
+            for _ in range(trainer.code_sequence_length):
+                context = sequence[:, -trainer.context_length :]
+                logits, _ = trainer.backbone(context, targets=None)
+                next_logits = logits[:, -1, :] / float(max(trainer.sample_temperature, 1.0e-6))
+                next_token = trainer._sample_next_token(next_logits, generator=None)
+                sequence = torch.cat([sequence, next_token], dim=1)
+            reference = trainer._sequence_to_codes(sequence[:, 1:])
+
+            self.assertEqual(tuple(sampled.shape), (1, *token_spatial_shape))
+            self.assertTrue(torch.equal(sampled, reference))
+
     def test_forward_smoke(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path, ckpt_path, token_spatial_shape, codebook_size = _write_tokenizer_artifacts(tmpdir)
@@ -397,6 +431,9 @@ class TokenCodeAutoregressivePriorSmokeTest(unittest.TestCase):
             self.assertEqual(config.data.params.validation.target, "latent_meanflow.data.subset.FixedSubsetDataset")
             self.assertEqual(int(config.data.params.train.params.first_n), first_n)
             self.assertEqual(int(config.data.params.validation.params.first_n), first_n)
+            self.assertEqual(str(config.model.params.monitor), "val/base_error_mean")
+            self.assertFalse(bool(config.model.params.enable_validation_sample_metrics))
+            self.assertTrue(bool(config.lightning.callbacks.image_logger.params.disabled))
 
     def test_config_instantiation_contract(self):
         with tempfile.TemporaryDirectory() as tmpdir:

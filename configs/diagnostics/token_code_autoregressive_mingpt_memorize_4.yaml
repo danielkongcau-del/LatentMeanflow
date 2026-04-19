@@ -4,11 +4,12 @@ model:
   params:
     # Deliberate overfit diagnostic for the token-code autoregressive baseline on a fixed 4-mask bank.
     objective_name: token_code_autoregressive
-    monitor: val/sampled_monitor_error
+    monitor: val/base_error_mean
     tokenizer_config_path: configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml
     tokenizer_ckpt_path: null
     freeze_tokenizer: true
     tokenizer_sample_posterior: false
+    enable_validation_sample_metrics: false
     log_sample_nfe: 1
     sample_temperature: 1.0
     sample_top_k: null
@@ -66,7 +67,7 @@ lightning:
     image_logger:
       target: latent_meanflow.callbacks.semantic_logger.SemanticPairImageLogger
       params:
-        disabled: false
+        disabled: true
         batch_frequency: 10
         increase_log_steps: false
         max_images: 4

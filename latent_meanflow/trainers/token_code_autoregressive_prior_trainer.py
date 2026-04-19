@@ -411,9 +411,9 @@ class TokenCodeAutoregressivePriorTrainer(pl.LightningModule):
         if self.sample_top_k is not None and self.sample_top_k < int(logits.shape[-1]):
             threshold = torch.topk(logits, k=self.sample_top_k, dim=-1).values[..., -1, None]
             logits = logits.masked_fill(logits < threshold, float("-inf"))
-        probs = torch.softmax(logits, dim=-1)
         if self.sample_greedy:
-            return torch.argmax(probs, dim=-1, keepdim=True)
+            return torch.argmax(logits, dim=-1, keepdim=True)
+        probs = torch.softmax(logits, dim=-1)
         return torch.multinomial(probs, num_samples=1, generator=generator)
 
     def encode_batch(self, batch):
@@ -615,26 +615,38 @@ class TokenCodeAutoregressivePriorTrainer(pl.LightningModule):
             f"validation_sample_metric_batches={self.validation_sample_metric_batches}"
         )
 
+    @torch.no_grad()
     def sample_latents(self, batch_size, nfe=None, device=None, condition=None, noise=None):
         del nfe
         if condition is not None:
             raise ValueError("TokenCodeAutoregressivePriorTrainer is unconditional and does not accept condition.")
         if device is None:
             device = self.device
-        sequence = torch.full(
-            (int(batch_size), 1),
+        batch_size = int(batch_size)
+        context_tokens = torch.full(
+            (batch_size, 1),
             fill_value=self.bos_token_id,
             device=device,
             dtype=torch.long,
         )
+        generated_tokens = torch.empty(
+            (batch_size, self.code_sequence_length),
+            device=device,
+            dtype=torch.long,
+        )
         generator = self._sample_generator(device=device, noise=noise)
-        for _ in range(self.code_sequence_length):
-            context = sequence[:, -self.context_length :]
-            logits, _ = self.backbone(context, targets=None)
+        for step_idx in range(self.code_sequence_length):
+            logits, _ = self.backbone(context_tokens, targets=None)
             next_logits = logits[:, -1, :] / float(max(self.sample_temperature, 1.0e-6))
             next_token = self._sample_next_token(next_logits, generator=generator)
-            sequence = torch.cat([sequence, next_token], dim=1)
-        sampled_codes = self._sequence_to_codes(sequence[:, 1:])
+            generated_tokens[:, step_idx] = next_token[:, 0]
+            # Keep the sampling context capped at block_size while preserving the
+            # existing sliding-window semantics that reindex positions inside each crop.
+            if int(context_tokens.shape[1]) < self.context_length:
+                context_tokens = torch.cat([context_tokens, next_token], dim=1)
+            else:
+                context_tokens = torch.cat([context_tokens[:, 1:], next_token], dim=1)
+        sampled_codes = self._sequence_to_codes(generated_tokens)
         self._validate_sampled_codes(sampled_codes)
         return sampled_codes
 
