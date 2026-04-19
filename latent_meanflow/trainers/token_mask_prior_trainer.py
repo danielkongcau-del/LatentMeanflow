@@ -308,7 +308,7 @@ class TokenMaskPriorTrainer(pl.LightningModule):
                     "Frozen tokenizer did not return 'codes' during class-balance scan; "
                     "token-code prior balancing requires discrete tokenizer codes."
                 )
-            codes = self._prepare_codes(encoded["codes"]).view(-1)
+            codes = self._prepare_codes(encoded["codes"]).view(-1).detach().cpu()
             bincount = torch.bincount(codes, minlength=self.codebook_size)
             counts += bincount[: self.codebook_size].to(dtype=counts.dtype)
             if (sample_idx + 1) % progress_stride == 0 or (sample_idx + 1) == dataset_length:
