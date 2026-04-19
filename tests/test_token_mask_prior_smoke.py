@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import torch
 import torch.nn.functional as F
@@ -147,7 +148,17 @@ def _make_prior_trainer(
     boundary_loss_weight=0.05,
     area_ratio_loss_weight=0.05,
     adjacency_loss_weight=0.02,
+    objective_extra_params=None,
 ):
+    objective_params = {
+        "time_eps": 1.0e-3,
+        "loss_type": "cross_entropy",
+        "mask_schedule": "linear",
+        "min_mask_ratio": 0.0,
+        "max_mask_ratio": 1.0,
+    }
+    if objective_extra_params is not None:
+        objective_params.update(objective_extra_params)
     return TokenMaskPriorTrainer(
         tokenizer_config_path=str(tokenizer_config_path),
         tokenizer_ckpt_path=str(tokenizer_ckpt_path),
@@ -166,13 +177,7 @@ def _make_prior_trainer(
         },
         objective_config={
             "target": "latent_meanflow.objectives.discrete_mask_diffusion.DiscreteMaskDiffusionObjective",
-            "params": {
-                "time_eps": 1.0e-3,
-                "loss_type": "cross_entropy",
-                "mask_schedule": "linear",
-                "min_mask_ratio": 0.0,
-                "max_mask_ratio": 1.0,
-            },
+            "params": objective_params,
         },
         sampler_config={
             "target": "latent_meanflow.samplers.discrete_mask_diffusion.SeededDiscreteMaskDiffusionSampler",
@@ -209,6 +214,18 @@ def _make_batch():
     }
 
 
+def _make_dataset_samples():
+    batch = _make_batch()
+    return [
+        {
+            "mask_index": batch["mask_index"][sample_idx],
+            "mask_onehot": batch["mask_onehot"][sample_idx],
+            "num_classes": int(batch["num_classes"][sample_idx].item()),
+        }
+        for sample_idx in range(int(batch["mask_index"].shape[0]))
+    ]
+
+
 class TokenMaskPriorSmokeTest(unittest.TestCase):
     def test_token_mask_prior_forward_smoke(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -234,6 +251,9 @@ class TokenMaskPriorSmokeTest(unittest.TestCase):
             self.assertIn("structure_aux_total", outputs["loss_dict"])
             self.assertIn("semantic_pixel_accuracy", outputs["semantic_bridge_metrics"])
             self.assertIn("semantic_miou", outputs["semantic_bridge_metrics"])
+            self.assertIn("teacher_forced_class_hist_l1", outputs["semantic_bridge_metrics"])
+            self.assertIn("teacher_forced_pred_majority_class_ratio", outputs["semantic_bridge_metrics"])
+            self.assertIn("teacher_forced_unique_class_count_gap", outputs["semantic_bridge_metrics"])
             self.assertEqual(tuple(outputs["boundary_target"].shape), (2, 1, 16, 16))
             self.assertEqual(tuple(outputs["boundary_pred"].shape), (2, 1, 16, 16))
             self.assertEqual(tuple(outputs["pred_area_ratio"].shape), (2, 4))
@@ -259,6 +279,31 @@ class TokenMaskPriorSmokeTest(unittest.TestCase):
                 for param in group["params"]
             }
             self.assertTrue(tokenizer_param_ids.isdisjoint(optimizer_param_ids))
+
+    def test_token_mask_prior_on_fit_start_configures_code_class_balance(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path, ckpt_path, token_spatial_shape, codebook_size = _write_tokenizer_artifacts(tmpdir)
+            trainer = _make_prior_trainer(
+                tokenizer_config_path=config_path,
+                tokenizer_ckpt_path=ckpt_path,
+                token_spatial_shape=token_spatial_shape,
+                objective_extra_params={"class_balance_mode": "inverse_sqrt_frequency"},
+            )
+            trainer._trainer = SimpleNamespace(
+                datamodule=SimpleNamespace(datasets={"train": _make_dataset_samples()}),
+                is_global_zero=True,
+                global_rank=0,
+                world_size=1,
+                max_epochs=1,
+                estimated_stepping_batches=1,
+            )
+
+            trainer.on_fit_start()
+
+            self.assertEqual(int(trainer.objective.class_counts.numel()), codebook_size)
+            self.assertGreater(float(trainer.objective.class_counts.sum().item()), 0.0)
+            self.assertEqual(int(trainer.objective.class_weights.numel()), codebook_size)
+            self.assertFalse(bool(trainer.objective.needs_class_count_scan()))
 
     def test_soft_decode_bridge_backpropagates_to_code_logits_only(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -344,6 +389,22 @@ class TokenMaskPriorSmokeTest(unittest.TestCase):
             self.assertEqual(tuple(decoded["codes"].shape), (2, *token_spatial_shape))
             self.assertEqual(tuple(decoded["mask_index"].shape), (2, 16, 16))
             self.assertEqual(tuple(decoded["mask_onehot"].shape), (2, 4, 16, 16))
+
+    def test_validation_sample_metrics_smoke(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path, ckpt_path, token_spatial_shape, _ = _write_tokenizer_artifacts(tmpdir)
+            trainer = _make_prior_trainer(
+                tokenizer_config_path=config_path,
+                tokenizer_ckpt_path=ckpt_path,
+                token_spatial_shape=token_spatial_shape,
+            )
+
+            metrics = trainer._validation_sample_metrics(_make_batch()["mask_index"])
+
+            self.assertIn("sampled_class_hist_l1", metrics)
+            self.assertIn("sampled_pred_majority_class_ratio", metrics)
+            self.assertIn("sampled_unique_class_count_gap", metrics)
+            self.assertIn("sampled_boundary_ratio_gap", metrics)
 
     def test_main_configs_pin_balanced_tokenizer_and_remask_mainline_sampler(self):
         config_paths = [

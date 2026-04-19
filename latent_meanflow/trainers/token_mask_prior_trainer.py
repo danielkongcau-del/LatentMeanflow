@@ -1,8 +1,10 @@
 import math
+import traceback
 from copy import deepcopy
 
 import pytorch_lightning as pl
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 from ldm.util import instantiate_from_config
 from omegaconf import OmegaConf
@@ -35,6 +37,10 @@ class TokenMaskPriorTrainer(pl.LightningModule):
         area_ratio_loss_weight=0.0,
         adjacency_loss_weight=0.0,
         log_sample_nfe=4,
+        enable_validation_sample_metrics=True,
+        validation_sample_batch_size=4,
+        validation_sample_nfe=None,
+        validation_sample_seed=1234,
         monitor="val/base_error_mean",
         mask_key="mask_onehot",
         mask_index_key="mask_index",
@@ -70,6 +76,12 @@ class TokenMaskPriorTrainer(pl.LightningModule):
         self.boundary_loss_weight = float(boundary_loss_weight)
         self.area_ratio_loss_weight = float(area_ratio_loss_weight)
         self.adjacency_loss_weight = float(adjacency_loss_weight)
+        self.enable_validation_sample_metrics = bool(enable_validation_sample_metrics)
+        self.validation_sample_batch_size = max(0, int(validation_sample_batch_size))
+        self.validation_sample_nfe = (
+            int(log_sample_nfe) if validation_sample_nfe is None else max(1, int(validation_sample_nfe))
+        )
+        self.validation_sample_seed = int(validation_sample_seed)
 
         self.tokenizer = SemanticTokenizerAdapter.from_pretrained(
             config_path=self.tokenizer_config_path,
@@ -182,6 +194,144 @@ class TokenMaskPriorTrainer(pl.LightningModule):
         trainer = getattr(self, "trainer", None)
         return trainer is not None and int(getattr(trainer, "world_size", 1)) > 1
 
+    def _is_global_zero(self):
+        trainer = getattr(self, "trainer", None)
+        if trainer is not None and hasattr(trainer, "is_global_zero"):
+            return bool(trainer.is_global_zero)
+        return int(getattr(self, "global_rank", 0)) == 0
+
+    def _log_info(self, message):
+        if self._is_global_zero():
+            print(message)
+
+    def _get_train_dataset(self):
+        trainer = getattr(self, "trainer", None)
+        if trainer is None:
+            raise RuntimeError("TokenMaskPriorTrainer requires an attached trainer to inspect the train dataset.")
+
+        datamodule = getattr(trainer, "datamodule", None)
+        if datamodule is not None:
+            datasets = getattr(datamodule, "datasets", None)
+            if isinstance(datasets, dict) and "train" in datasets:
+                dataset = datasets["train"]
+                if hasattr(dataset, "data") and hasattr(dataset.data, "__len__") and hasattr(dataset.data, "__getitem__"):
+                    return dataset.data
+                return dataset
+
+        train_dataloader = getattr(trainer, "train_dataloader", None)
+        if train_dataloader is not None:
+            if isinstance(train_dataloader, (list, tuple)):
+                train_dataloader = train_dataloader[0]
+            dataset = getattr(train_dataloader, "dataset", None)
+            if dataset is not None:
+                if hasattr(dataset, "data") and hasattr(dataset.data, "__len__") and hasattr(dataset.data, "__getitem__"):
+                    return dataset.data
+                return dataset
+
+        raise RuntimeError("TokenMaskPriorTrainer could not resolve the train dataset for code-count scanning.")
+
+    def _batchify_dataset_sample(self, sample):
+        if not isinstance(sample, dict):
+            raise TypeError(
+                "TokenMaskPriorTrainer class-balance scan expects dataset samples to be dictionaries, "
+                f"got {type(sample).__name__}."
+            )
+
+        batch = {}
+        for key in (self.mask_index_key, self.mask_key, "num_classes"):
+            if key not in sample:
+                continue
+            value = sample[key]
+            if isinstance(value, torch.Tensor):
+                tensor = value
+            else:
+                try:
+                    tensor = torch.as_tensor(value)
+                except Exception:
+                    batch[key] = value
+                    continue
+            batch[key] = tensor.unsqueeze(0).to(device=self.device)
+
+        if self.mask_index_key not in batch and self.mask_key not in batch:
+            raise KeyError(
+                "TokenMaskPriorTrainer class-balance scan requires train dataset samples to include "
+                f"'{self.mask_index_key}' and/or '{self.mask_key}'."
+            )
+        return batch
+
+    def _scan_train_code_counts(self):
+        dataset = self._get_train_dataset()
+        dataset_length = int(len(dataset))
+        counts = torch.zeros(self.codebook_size, dtype=torch.float64)
+        self._log_info(
+            "[TokenMaskPriorTrainer] "
+            f"scanning train tokenizer code counts for class-balanced objective over {dataset_length} samples"
+        )
+        progress_stride = max(min(dataset_length // 4, 500), 100)
+        for sample_idx in range(dataset_length):
+            sample = dataset[sample_idx]
+            encoded = self.tokenizer.encode_batch(self._batchify_dataset_sample(sample), sample_posterior=False)
+            if "codes" not in encoded:
+                raise KeyError(
+                    "Frozen tokenizer did not return 'codes' during class-balance scan; "
+                    "token-code prior balancing requires discrete tokenizer codes."
+                )
+            codes = self._prepare_codes(encoded["codes"]).view(-1)
+            bincount = torch.bincount(codes, minlength=self.codebook_size)
+            counts += bincount[: self.codebook_size].to(dtype=counts.dtype)
+            if (sample_idx + 1) % progress_stride == 0 or (sample_idx + 1) == dataset_length:
+                self._log_info(
+                    "[TokenMaskPriorTrainer] "
+                    f"code-count scan progress {sample_idx + 1}/{dataset_length}"
+                )
+        return counts
+
+    def _broadcast_class_counts(self, class_counts, *, scan_failed=False):
+        device = self.device if isinstance(self.device, torch.device) else torch.device("cpu")
+        if device.type not in {"cpu", "cuda"}:
+            device = torch.device("cpu")
+        status_tensor = torch.ones(1, dtype=torch.int64, device=device)
+        counts_tensor = torch.zeros(self.codebook_size, dtype=torch.float64, device=device)
+        if scan_failed:
+            status_tensor.zero_()
+        elif class_counts is not None:
+            counts_tensor.copy_(class_counts.to(device=device, dtype=torch.float64))
+        if dist.is_available() and dist.is_initialized():
+            dist.broadcast(status_tensor, src=0)
+            if int(status_tensor.item()) == 0:
+                raise RuntimeError(
+                    "TokenMaskPriorTrainer code-count scan failed on global rank 0. "
+                    "See the rank-0 traceback above."
+                )
+            dist.broadcast(counts_tensor, src=0)
+        elif int(status_tensor.item()) == 0:
+            raise RuntimeError("TokenMaskPriorTrainer code-count scan failed.")
+        return counts_tensor.cpu().to(dtype=torch.float32)
+
+    def _maybe_configure_objective_class_balance(self):
+        configure_class_balance = getattr(self.objective, "configure_class_balance", None)
+        needs_class_count_scan = getattr(self.objective, "needs_class_count_scan", None)
+        if not callable(configure_class_balance) or not callable(needs_class_count_scan):
+            return
+        if not bool(needs_class_count_scan()):
+            return
+
+        class_counts = None
+        scan_failed = False
+        if self._is_global_zero():
+            try:
+                class_counts = self._scan_train_code_counts()
+            except Exception:
+                scan_failed = True
+                print("[TokenMaskPriorTrainer] code-count scan failed on global rank 0.", flush=True)
+                traceback.print_exc()
+        class_counts = self._broadcast_class_counts(class_counts, scan_failed=scan_failed)
+        configure_class_balance(class_counts)
+        self._log_info(
+            "[TokenMaskPriorTrainer] "
+            f"objective_code_count_scan active_codes={int((class_counts > 0).sum().item())}/{self.codebook_size}"
+        )
+
     def _configure_objective_training_budget(self):
         objective = getattr(self, "objective", None)
         set_budget = getattr(objective, "set_training_budget", None)
@@ -220,7 +370,8 @@ class TokenMaskPriorTrainer(pl.LightningModule):
     def on_fit_start(self):
         super().on_fit_start()
         self._configure_objective_training_budget()
-        self.print(
+        self._maybe_configure_objective_class_balance()
+        self._log_info(
             "[TokenMaskPriorTrainer] "
             f"tokenizer_config={self.tokenizer_config_path}, tokenizer_ckpt={self.tokenizer_ckpt_path}, "
             f"codebook_size={self.codebook_size}, token_spatial_shape={self.token_spatial_shape}, "
@@ -229,7 +380,10 @@ class TokenMaskPriorTrainer(pl.LightningModule):
             f"semantic_dice_weight={self.semantic_dice_weight:.3f}, "
             f"boundary_loss_weight={self.boundary_loss_weight:.3f}, "
             f"area_ratio_loss_weight={self.area_ratio_loss_weight:.3f}, "
-            f"adjacency_loss_weight={self.adjacency_loss_weight:.3f}"
+            f"adjacency_loss_weight={self.adjacency_loss_weight:.3f}, "
+            f"validation_sample_metrics={self.enable_validation_sample_metrics}, "
+            f"validation_sample_batch_size={self.validation_sample_batch_size}, "
+            f"validation_sample_nfe={self.validation_sample_nfe}"
         )
 
     def _token_usage_metrics(self, codes):
@@ -284,6 +438,59 @@ class TokenMaskPriorTrainer(pl.LightningModule):
             )
         )
 
+    def _prepare_metric_mask_index(self, mask_index):
+        if not isinstance(mask_index, torch.Tensor):
+            mask_index = torch.as_tensor(mask_index)
+        if mask_index.ndim == 4 and int(mask_index.shape[1]) == 1:
+            mask_index = mask_index[:, 0]
+        if mask_index.ndim != 3:
+            raise ValueError(
+                "TokenMaskPriorTrainer semantic diagnostics expect mask_index with shape [B, H, W] or [B, 1, H, W], "
+                f"got {tuple(mask_index.shape)}"
+            )
+        return mask_index.long().contiguous()
+
+    def _mask_distribution_summary(self, mask_index):
+        mask_index = self._prepare_metric_mask_index(mask_index)
+        valid_mask = build_valid_mask(mask_index, ignore_index=self.ignore_index)
+        safe_targets = mask_index.clone()
+        safe_targets[~valid_mask] = 0
+        onehot = F.one_hot(safe_targets, num_classes=self.num_classes).permute(0, 3, 1, 2).float()
+        onehot = onehot * valid_mask.unsqueeze(1).float()
+        class_counts = onehot.sum(dim=(2, 3))
+        valid_counts = valid_mask.view(int(mask_index.shape[0]), -1).sum(dim=1).clamp_min(1).float()
+        class_ratios = class_counts / valid_counts.unsqueeze(1)
+        mean_class_ratios = class_ratios.mean(dim=0)
+        boundary_ratio = mask_index_to_boundary_target(mask_index, ignore_index=self.ignore_index).mean(dim=(1, 2, 3))
+        return {
+            "mean_class_ratios": mean_class_ratios.detach(),
+            "majority_class_ratio_mean": class_ratios.max(dim=1).values.mean().detach(),
+            "unique_class_count_mean": (class_counts > 0).sum(dim=1).float().mean().detach(),
+            "boundary_ratio_mean": boundary_ratio.mean().detach(),
+            "class_entropy": (-(mean_class_ratios * torch.log(mean_class_ratios.clamp_min(1.0e-10))).sum()).detach(),
+        }
+
+    def _mask_distribution_gap_metrics(self, *, pred_mask_index, target_mask_index, prefix):
+        pred_summary = self._mask_distribution_summary(pred_mask_index)
+        target_summary = self._mask_distribution_summary(target_mask_index)
+        return {
+            f"{prefix}_class_hist_l1": (
+                pred_summary["mean_class_ratios"] - target_summary["mean_class_ratios"]
+            ).abs().sum().detach(),
+            f"{prefix}_pred_majority_class_ratio": pred_summary["majority_class_ratio_mean"],
+            f"{prefix}_target_majority_class_ratio": target_summary["majority_class_ratio_mean"],
+            f"{prefix}_pred_unique_class_count": pred_summary["unique_class_count_mean"],
+            f"{prefix}_target_unique_class_count": target_summary["unique_class_count_mean"],
+            f"{prefix}_unique_class_count_gap": (
+                pred_summary["unique_class_count_mean"] - target_summary["unique_class_count_mean"]
+            ).abs().detach(),
+            f"{prefix}_boundary_ratio_gap": (
+                pred_summary["boundary_ratio_mean"] - target_summary["boundary_ratio_mean"]
+            ).abs().detach(),
+            f"{prefix}_pred_class_entropy": pred_summary["class_entropy"],
+            f"{prefix}_target_class_entropy": target_summary["class_entropy"],
+        }
+
     def _decode_semantic_from_code_logits(self, code_logits):
         if tuple(int(v) for v in code_logits.shape[1:]) != (self.codebook_size, *self.token_spatial_shape):
             raise ValueError(
@@ -308,6 +515,13 @@ class TokenMaskPriorTrainer(pl.LightningModule):
                 mask_index=mask_index,
                 mask_logits=decoded["mask_logits"],
             )
+            semantic_metrics.update(
+                self._mask_distribution_gap_metrics(
+                    pred_mask_index=decoded["mask_index"],
+                    target_mask_index=mask_index,
+                    prefix="teacher_forced",
+                )
+            )
         return {
             "decoded": decoded,
             "semantic_ce": semantic_losses["semantic_ce"],
@@ -316,6 +530,11 @@ class TokenMaskPriorTrainer(pl.LightningModule):
             "semantic_metrics": {
                 "semantic_pixel_accuracy": semantic_metrics["pixel_accuracy"].detach(),
                 "semantic_miou": semantic_metrics["miou"].detach(),
+                **{
+                    name: value.detach()
+                    for name, value in semantic_metrics.items()
+                    if name not in {"pixel_accuracy", "miou"}
+                },
             },
         }
 
@@ -504,14 +723,56 @@ class TokenMaskPriorTrainer(pl.LightningModule):
                 batch_size=batch_size,
                 sync_dist=sync_dist,
             )
-        return outputs["loss"], metrics.get(f"{split}/loss", outputs["loss"].detach())
+        return outputs["loss"], metrics.get(f"{split}/loss", outputs["loss"].detach()), outputs
 
     def training_step(self, batch, batch_idx):
-        loss, _ = self.shared_step(batch, split="train")
+        loss, _, _ = self.shared_step(batch, split="train")
         return loss
 
+    @torch.no_grad()
+    def _validation_sample_metrics(self, target_mask_index):
+        if not self.enable_validation_sample_metrics or self.validation_sample_batch_size <= 0:
+            return {}
+
+        batch_size = min(int(target_mask_index.shape[0]), self.validation_sample_batch_size)
+        if batch_size <= 0:
+            return {}
+
+        device = self.device if isinstance(self.device, torch.device) else torch.device("cpu")
+        generator = torch.Generator(device=device) if device.type == "cuda" else torch.Generator()
+        generator.manual_seed(self.validation_sample_seed)
+        noise = torch.randn(
+            (batch_size, self.latent_channels, *self.latent_spatial_shape),
+            generator=generator,
+            device=device,
+        )
+        sampled_codes = self.sample_latents(
+            batch_size=batch_size,
+            nfe=self.validation_sample_nfe,
+            device=device,
+            noise=noise,
+        )
+        sampled = self.decode_latents(sampled_codes)
+        return self._mask_distribution_gap_metrics(
+            pred_mask_index=sampled["mask_index"],
+            target_mask_index=target_mask_index[:batch_size],
+            prefix="sampled",
+        )
+
     def validation_step(self, batch, batch_idx):
-        _, detached_loss = self.shared_step(batch, split="val")
+        _, detached_loss, outputs = self.shared_step(batch, split="val")
+        if batch_idx == 0 and self._is_global_zero():
+            sample_metrics = self._validation_sample_metrics(outputs["mask_index"].detach())
+            if sample_metrics:
+                self.log_dict(
+                    {f"val/{name}": value for name, value in sample_metrics.items()},
+                    prog_bar=False,
+                    logger=True,
+                    on_step=False,
+                    on_epoch=True,
+                    batch_size=min(self._get_log_batch_size(batch), self.validation_sample_batch_size),
+                    sync_dist=False,
+                )
         return detached_loss
 
     def configure_optimizers(self):
