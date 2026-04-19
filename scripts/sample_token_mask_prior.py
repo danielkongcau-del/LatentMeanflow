@@ -32,7 +32,11 @@ from scripts.sample_mask_prior import _prepare_outdir
 DEFAULT_CONFIG = REPO_ROOT / "configs" / "token_mask_prior_vq_sit.yaml"
 DEFAULT_TOKENIZER_CONFIG = REPO_ROOT / "configs" / "semantic_mask_vq_tokenizer_main_balanced_256.yaml"
 DEFAULT_NFE_VALUES = [8, 4, 2, 1]
-TOKEN_MASK_PRIOR_TARGET = "latent_meanflow.trainers.token_mask_prior_trainer.TokenMaskPriorTrainer"
+TOKEN_MASK_PRIOR_TARGETS = {
+    "latent_meanflow.trainers.token_mask_prior_trainer.TokenMaskPriorTrainer",
+    "latent_meanflow.trainers.token_code_autoregressive_prior_trainer.TokenCodeAutoregressivePriorTrainer",
+}
+TOKEN_CODE_AR_TARGET = "latent_meanflow.trainers.token_code_autoregressive_prior_trainer.TokenCodeAutoregressivePriorTrainer"
 
 
 def parse_args():
@@ -79,7 +83,7 @@ def apply_tokenizer_overrides(config, *, tokenizer_config, tokenizer_ckpt):
 
 
 def is_token_mask_prior_route(config):
-    return str(OmegaConf.select(config, "model.target", default="")) == TOKEN_MASK_PRIOR_TARGET
+    return str(OmegaConf.select(config, "model.target", default="")) in TOKEN_MASK_PRIOR_TARGETS
 
 
 def resolve_configured_tokenizer_artifacts(config, *, route_name):
@@ -117,6 +121,48 @@ def validate_token_mask_prior_checkpoint_contract(config, ckpt_path, *, config_p
 
 
 def extract_token_mask_prior_route_metadata(*, config, model=None):
+    route_target = str(OmegaConf.select(config, "model.target", default=""))
+    if route_target == TOKEN_CODE_AR_TARGET or getattr(model, "route_family", None) == "autoregressive":
+        return {
+            "corruption_mode": "next_token_teacher_forcing",
+            "full_mask_batch_fraction": 0.0,
+            "high_mask_batch_fraction": 0.0,
+            "high_mask_min_ratio": 0.0,
+            "refinement_mode": "autoregressive",
+            "final_full_reveal": True,
+            "min_keep_fraction": 1.0,
+            "lock_noise_scale": 0.0,
+            "reveal_noise_scale": 0.0,
+            "sample_temperature": float(
+                getattr(
+                    model,
+                    "sample_temperature",
+                    OmegaConf.select(config, "model.params.sample_temperature", default=1.0),
+                )
+            ),
+            "context_length": int(
+                getattr(
+                    model,
+                    "context_length",
+                    OmegaConf.select(config, "model.params.backbone_config.params.block_size", default=0),
+                )
+            ),
+            "permuter": str(
+                getattr(
+                    model,
+                    "permuter_name",
+                    str(
+                        OmegaConf.select(
+                            config,
+                            "model.params.permuter_config.target",
+                            default="taming.modules.transformer.permuter.Identity",
+                        )
+                    ).rsplit(".", 1)[-1],
+                )
+            ),
+            "nfe_ignored": True,
+        }
+
     objective_cfg = OmegaConf.select(config, "model.params.objective_config.params", default={}) or {}
     sampler_cfg = OmegaConf.select(config, "model.params.sampler_config.params", default={}) or {}
     route = {
