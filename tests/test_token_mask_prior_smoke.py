@@ -155,6 +155,7 @@ def _make_prior_trainer(
     adjacency_loss_weight=0.02,
     enable_validation_sample_metrics=True,
     validation_sample_batch_size=4,
+    validation_sample_metric_batches=4,
     objective_extra_params=None,
 ):
     objective_params = {
@@ -208,6 +209,7 @@ def _make_prior_trainer(
         adjacency_loss_weight=adjacency_loss_weight,
         enable_validation_sample_metrics=enable_validation_sample_metrics,
         validation_sample_batch_size=validation_sample_batch_size,
+        validation_sample_metric_batches=validation_sample_metric_batches,
         log_sample_nfe=2,
     )
 
@@ -451,6 +453,77 @@ class TokenMaskPriorSmokeTest(unittest.TestCase):
             self.assertIn("sampled_unique_class_count_gap", metrics)
             self.assertIn("sampled_boundary_ratio_gap", metrics)
 
+    def test_sampled_monitor_error_includes_majority_and_entropy_gaps(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path, ckpt_path, token_spatial_shape, _ = _write_tokenizer_artifacts(tmpdir)
+            trainer = _make_prior_trainer(
+                tokenizer_config_path=config_path,
+                tokenizer_ckpt_path=ckpt_path,
+                token_spatial_shape=token_spatial_shape,
+            )
+
+            monitor_error = trainer._distribution_monitor_error(
+                class_hist_l1=torch.tensor(1.0),
+                boundary_ratio_gap=torch.tensor(2.0),
+                majority_class_ratio_gap=torch.tensor(3.0),
+                class_entropy_gap=torch.tensor(4.0),
+                unique_class_count_gap=torch.tensor(8.0),
+            )
+
+            self.assertAlmostEqual(float(monitor_error.item()), 12.0)
+
+    def test_validation_sample_metrics_are_averaged_across_prefix_batches(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path, ckpt_path, token_spatial_shape, _ = _write_tokenizer_artifacts(tmpdir)
+            trainer = _make_prior_trainer(
+                tokenizer_config_path=config_path,
+                tokenizer_ckpt_path=ckpt_path,
+                token_spatial_shape=token_spatial_shape,
+                validation_sample_metric_batches=2,
+            )
+            trainer._trainer = SimpleNamespace(
+                is_global_zero=True,
+                global_rank=0,
+                world_size=1,
+            )
+
+            captured = []
+
+            def fake_shared_step(batch, split):
+                del split
+                return torch.tensor(0.0), torch.tensor(0.0), {"mask_index": batch["mask_index"]}
+
+            def fake_validation_sample_metrics(target_mask_index):
+                mean_value = target_mask_index.float().mean()
+                return {
+                    "sampled_monitor_error": mean_value,
+                    "sampled_majority_class_ratio_gap": mean_value + 1.0,
+                }
+
+            def capture_log_dict(metrics, **kwargs):
+                captured.append((metrics, kwargs))
+
+            trainer.shared_step = fake_shared_step
+            trainer._validation_sample_metrics = fake_validation_sample_metrics
+            trainer.log_dict = capture_log_dict
+
+            batch_a = {"mask_index": torch.zeros((2, 16, 16), dtype=torch.long)}
+            batch_b = {"mask_index": torch.full((2, 16, 16), 2, dtype=torch.long)}
+            batch_c = {"mask_index": torch.full((2, 16, 16), 6, dtype=torch.long)}
+
+            trainer.on_validation_epoch_start()
+            trainer.validation_step(batch_a, batch_idx=0)
+            trainer.validation_step(batch_b, batch_idx=1)
+            trainer.validation_step(batch_c, batch_idx=2)
+            trainer.on_validation_epoch_end()
+
+            self.assertEqual(len(captured), 1)
+            logged_metrics, logged_kwargs = captured[0]
+            self.assertAlmostEqual(float(logged_metrics["val/sampled_monitor_error"].item()), 1.0)
+            self.assertAlmostEqual(float(logged_metrics["val/sampled_majority_class_ratio_gap"].item()), 2.0)
+            self.assertEqual(int(logged_kwargs["batch_size"]), 8)
+            self.assertEqual(trainer._validation_sample_metric_batches_seen, 0)
+
     def test_sampled_monitor_requires_validation_sample_metrics(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path, ckpt_path, token_spatial_shape, _ = _write_tokenizer_artifacts(tmpdir)
@@ -460,6 +533,17 @@ class TokenMaskPriorSmokeTest(unittest.TestCase):
                     tokenizer_ckpt_path=ckpt_path,
                     token_spatial_shape=token_spatial_shape,
                     enable_validation_sample_metrics=False,
+                )
+
+    def test_sampled_monitor_requires_positive_validation_sample_metric_batches(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path, ckpt_path, token_spatial_shape, _ = _write_tokenizer_artifacts(tmpdir)
+            with self.assertRaisesRegex(ValueError, "validation_sample_metric_batches > 0"):
+                _make_prior_trainer(
+                    tokenizer_config_path=config_path,
+                    tokenizer_ckpt_path=ckpt_path,
+                    token_spatial_shape=token_spatial_shape,
+                    validation_sample_metric_batches=0,
                 )
 
     def test_main_configs_pin_balanced_tokenizer_and_remask_mainline_sampler(self):

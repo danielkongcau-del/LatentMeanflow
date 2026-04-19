@@ -40,6 +40,7 @@ class TokenMaskPriorTrainer(pl.LightningModule):
         log_sample_nfe=4,
         enable_validation_sample_metrics=True,
         validation_sample_batch_size=4,
+        validation_sample_metric_batches=4,
         validation_sample_nfe=None,
         validation_sample_seed=1234,
         monitor="val/sampled_monitor_error",
@@ -80,17 +81,22 @@ class TokenMaskPriorTrainer(pl.LightningModule):
         self.adjacency_loss_weight = float(adjacency_loss_weight)
         self.enable_validation_sample_metrics = bool(enable_validation_sample_metrics)
         self.validation_sample_batch_size = max(0, int(validation_sample_batch_size))
+        self.validation_sample_metric_batches = max(0, int(validation_sample_metric_batches))
         self.validation_sample_nfe = (
             int(log_sample_nfe) if validation_sample_nfe is None else max(1, int(validation_sample_nfe))
         )
         self.validation_sample_seed = int(validation_sample_seed)
         self.per_class_metric_logging_limit = 32
-        if self.monitor == "val/sampled_monitor_error" and (
-            not self.enable_validation_sample_metrics or self.validation_sample_batch_size <= 0
+        self._reset_validation_sample_metric_state()
+        if self.monitor.startswith("val/sampled_") and (
+            not self.enable_validation_sample_metrics
+            or self.validation_sample_batch_size <= 0
+            or self.validation_sample_metric_batches <= 0
         ):
             raise ValueError(
-                "TokenMaskPriorTrainer monitor=val/sampled_monitor_error requires "
-                "enable_validation_sample_metrics=True and validation_sample_batch_size > 0."
+                f"TokenMaskPriorTrainer monitor={self.monitor} requires "
+                "enable_validation_sample_metrics=True, validation_sample_batch_size > 0, "
+                "and validation_sample_metric_batches > 0."
             )
 
         self.tokenizer = SemanticTokenizerAdapter.from_pretrained(
@@ -481,6 +487,7 @@ class TokenMaskPriorTrainer(pl.LightningModule):
             f"adjacency_loss_weight={self.adjacency_loss_weight:.3f}, "
             f"validation_sample_metrics={self.enable_validation_sample_metrics}, "
             f"validation_sample_batch_size={self.validation_sample_batch_size}, "
+            f"validation_sample_metric_batches={self.validation_sample_metric_batches}, "
             f"validation_sample_nfe={self.validation_sample_nfe}"
         )
 
@@ -570,12 +577,51 @@ class TokenMaskPriorTrainer(pl.LightningModule):
             "class_entropy": (-(mean_class_ratios * torch.log(mean_class_ratios.clamp_min(1.0e-10))).sum()).detach(),
         }
 
-    def _distribution_monitor_error(self, *, class_hist_l1, boundary_ratio_gap, unique_class_count_gap):
+    def _distribution_monitor_error(
+        self,
+        *,
+        class_hist_l1,
+        boundary_ratio_gap,
+        majority_class_ratio_gap,
+        class_entropy_gap,
+        unique_class_count_gap,
+    ):
         return (
             class_hist_l1
             + boundary_ratio_gap
+            + majority_class_ratio_gap
+            + class_entropy_gap
             + (unique_class_count_gap / float(max(self.num_classes, 1)))
         ).detach()
+
+    def _reset_validation_sample_metric_state(self):
+        self._validation_sample_metric_sums = {}
+        self._validation_sample_metric_batches_seen = 0
+
+    def _accumulate_validation_sample_metrics(self, metrics):
+        for name, value in metrics.items():
+            if isinstance(value, torch.Tensor):
+                if value.ndim != 0:
+                    continue
+                scalar = value.detach().to(device=torch.device("cpu"), dtype=torch.float32)
+            elif isinstance(value, (int, float)):
+                scalar = torch.tensor(float(value), dtype=torch.float32)
+            else:
+                continue
+            if name in self._validation_sample_metric_sums:
+                self._validation_sample_metric_sums[name] += scalar
+            else:
+                self._validation_sample_metric_sums[name] = scalar.clone()
+        self._validation_sample_metric_batches_seen += 1
+
+    def _finalize_validation_sample_metrics(self):
+        if self._validation_sample_metric_batches_seen <= 0:
+            return {}
+        denom = float(self._validation_sample_metric_batches_seen)
+        return {
+            f"val/{name}": (value / denom).to(device=self.device)
+            for name, value in self._validation_sample_metric_sums.items()
+        }
 
     def _mask_distribution_gap_metrics(self, *, pred_mask_index, target_mask_index, prefix):
         pred_summary = self._mask_distribution_summary(pred_mask_index)
@@ -611,6 +657,8 @@ class TokenMaskPriorTrainer(pl.LightningModule):
             f"{prefix}_monitor_error": self._distribution_monitor_error(
                 class_hist_l1=class_hist_l1,
                 boundary_ratio_gap=boundary_ratio_gap,
+                majority_class_ratio_gap=majority_class_ratio_gap,
+                class_entropy_gap=class_entropy_gap,
                 unique_class_count_gap=unique_class_count_gap,
             ),
         }
@@ -860,6 +908,10 @@ class TokenMaskPriorTrainer(pl.LightningModule):
         loss, _, _ = self.shared_step(batch, split="train")
         return loss
 
+    def on_validation_epoch_start(self):
+        super().on_validation_epoch_start()
+        self._reset_validation_sample_metric_state()
+
     @torch.no_grad()
     def _validation_sample_metrics(self, target_mask_index):
         if not self.enable_validation_sample_metrics or self.validation_sample_batch_size <= 0:
@@ -892,19 +944,32 @@ class TokenMaskPriorTrainer(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         _, detached_loss, outputs = self.shared_step(batch, split="val")
-        if batch_idx == 0 and self._is_global_zero():
+        if batch_idx < self.validation_sample_metric_batches and self._is_global_zero():
             sample_metrics = self._validation_sample_metrics(outputs["mask_index"].detach())
             if sample_metrics:
+                # Average the sampled proxy over the first few validation batches for a steadier checkpoint signal.
+                self._accumulate_validation_sample_metrics(sample_metrics)
+        return detached_loss
+
+    def on_validation_epoch_end(self):
+        super().on_validation_epoch_end()
+        if self._is_global_zero():
+            sample_metrics = self._finalize_validation_sample_metrics()
+            if sample_metrics:
+                effective_batch_size = max(
+                    1,
+                    int(self._validation_sample_metric_batches_seen) * max(1, self.validation_sample_batch_size),
+                )
                 self.log_dict(
-                    {f"val/{name}": value for name, value in sample_metrics.items()},
+                    sample_metrics,
                     prog_bar=False,
                     logger=True,
                     on_step=False,
                     on_epoch=True,
-                    batch_size=min(self._get_log_batch_size(batch), self.validation_sample_batch_size),
+                    batch_size=effective_batch_size,
                     sync_dist=False,
                 )
-        return detached_loss
+        self._reset_validation_sample_metric_state()
 
     def configure_optimizers(self):
         lr = float(getattr(self, "learning_rate", 1.0e-4))
