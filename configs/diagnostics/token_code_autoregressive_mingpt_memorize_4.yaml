@@ -71,6 +71,8 @@ lightning:
         batch_frequency: 10
         increase_log_steps: false
         max_images: 4
+        log_train: true
+        log_validation: false
         latest_only: true
         ignore_index: -1
   trainer:

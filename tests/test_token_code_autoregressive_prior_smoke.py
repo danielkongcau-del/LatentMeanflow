@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from ldm.util import instantiate_from_config
 from omegaconf import OmegaConf
 
+from latent_meanflow.callbacks.semantic_logger import SemanticPairImageLogger
 from latent_meanflow.models.semantic_mask_vq_autoencoder import SemanticMaskVQAutoencoder
 from latent_meanflow.trainers.token_code_autoregressive_prior_trainer import (
     TokenCodeAutoregressivePriorTrainer,
@@ -218,6 +219,42 @@ class TokenCodeAutoregressivePriorSmokeTest(unittest.TestCase):
             self.assertEqual(tuple(sampled.shape), (1, *token_spatial_shape))
             self.assertTrue(torch.equal(sampled, reference))
 
+    def test_sample_latents_matches_reference_cached_full_context_sampling(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path, ckpt_path, token_spatial_shape, _ = _write_tokenizer_artifacts(tmpdir)
+            full_sequence_length = int(token_spatial_shape[0] * token_spatial_shape[1])
+            trainer = _make_prior_trainer(
+                tokenizer_config_path=config_path,
+                tokenizer_ckpt_path=ckpt_path,
+                block_size=full_sequence_length,
+                sample_greedy=True,
+            )
+            trainer.eval()
+
+            sampled = trainer.sample_latents(
+                batch_size=1,
+                nfe=1,
+                device=torch.device("cpu"),
+            )
+
+            sequence = torch.full(
+                (1, 1),
+                fill_value=trainer.bos_token_id,
+                device=torch.device("cpu"),
+                dtype=torch.long,
+            )
+            for _ in range(trainer.code_sequence_length):
+                context = sequence[:, -trainer.context_length :]
+                logits, _ = trainer.backbone(context, targets=None)
+                next_logits = logits[:, -1, :] / float(max(trainer.sample_temperature, 1.0e-6))
+                next_token = trainer._sample_next_token(next_logits, generator=None)
+                sequence = torch.cat([sequence, next_token], dim=1)
+            reference = trainer._sequence_to_codes(sequence[:, 1:])
+
+            self.assertTrue(trainer._supports_full_context_kv_cache())
+            self.assertEqual(tuple(sampled.shape), (1, *token_spatial_shape))
+            self.assertTrue(torch.equal(sampled, reference))
+
     def test_forward_smoke(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path, ckpt_path, token_spatial_shape, codebook_size = _write_tokenizer_artifacts(tmpdir)
@@ -317,6 +354,49 @@ class TokenCodeAutoregressivePriorSmokeTest(unittest.TestCase):
             self.assertIn("sampled_unique_class_count_gap", metrics)
             self.assertIn("sampled_boundary_ratio_gap", metrics)
 
+    def test_semantic_pair_image_logger_can_skip_validation_sampling(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            callback = SemanticPairImageLogger(
+                batch_frequency=10,
+                max_images=1,
+                increase_log_steps=False,
+                disabled=False,
+                latest_only=True,
+                ignore_index=-1,
+                log_train=True,
+                log_validation=False,
+            )
+            callback.save_local = lambda *args, **kwargs: None
+            logged_splits = []
+
+            class DummyModule:
+                def __init__(self):
+                    self.global_step = 10
+                    self.current_epoch = 0
+                    self.training = True
+                    self.num_classes = 4
+                    self.logger = SimpleNamespace(save_dir=tmpdir)
+
+                def eval(self):
+                    self.training = False
+
+                def train(self):
+                    self.training = True
+
+                def log_images(self, batch, split="train", **kwargs):
+                    del batch, kwargs
+                    logged_splits.append(split)
+                    return {"samples_mask_index": torch.zeros((1, 1, 4, 4), dtype=torch.float32)}
+
+            trainer = SimpleNamespace(is_global_zero=True, log_dir=tmpdir, default_root_dir=tmpdir)
+            module = DummyModule()
+            batch = {"mask_index": torch.zeros((1, 4, 4), dtype=torch.long)}
+
+            callback.on_train_batch_end(trainer, module, outputs=None, batch=batch, batch_idx=0)
+            callback.on_validation_batch_end(trainer, module, outputs=None, batch=batch, batch_idx=0)
+
+            self.assertEqual(logged_splits, ["train"])
+
     def test_validation_sample_metrics_are_averaged_across_prefix_batches(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path, ckpt_path, _, _ = _write_tokenizer_artifacts(tmpdir)
@@ -415,6 +495,8 @@ class TokenCodeAutoregressivePriorSmokeTest(unittest.TestCase):
         self.assertEqual(int(backbone_params.n_layer), 8)
         self.assertEqual(int(backbone_params.n_head), 8)
         self.assertEqual(int(backbone_params.n_embd), 256)
+        self.assertTrue(bool(config.lightning.callbacks.image_logger.params.log_train))
+        self.assertFalse(bool(config.lightning.callbacks.image_logger.params.log_validation))
 
     def test_memorize_configs_use_fixed_subset(self):
         expected_first_n = {
@@ -434,6 +516,8 @@ class TokenCodeAutoregressivePriorSmokeTest(unittest.TestCase):
             self.assertEqual(str(config.model.params.monitor), "val/base_error_mean")
             self.assertFalse(bool(config.model.params.enable_validation_sample_metrics))
             self.assertTrue(bool(config.lightning.callbacks.image_logger.params.disabled))
+            self.assertTrue(bool(config.lightning.callbacks.image_logger.params.log_train))
+            self.assertFalse(bool(config.lightning.callbacks.image_logger.params.log_validation))
 
     def test_config_instantiation_contract(self):
         with tempfile.TemporaryDirectory() as tmpdir:

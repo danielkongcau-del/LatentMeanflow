@@ -54,6 +54,9 @@ class TokenCodeMingptBackbone(nn.Module):
     def forward(self, token_ids, targets=None):
         return self.gpt(token_ids, targets=targets)
 
+    def forward_with_past(self, token_ids, *, targets=None, past=None, past_length=None):
+        return self.gpt.forward_with_past(token_ids, targets=targets, past=past, past_length=past_length)
+
     def optimizer_groups(self, *, weight_decay):
         decay = set()
         no_decay = set()

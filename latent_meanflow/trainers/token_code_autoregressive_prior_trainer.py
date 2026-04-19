@@ -416,6 +416,9 @@ class TokenCodeAutoregressivePriorTrainer(pl.LightningModule):
         probs = torch.softmax(logits, dim=-1)
         return torch.multinomial(probs, num_samples=1, generator=generator)
 
+    def _supports_full_context_kv_cache(self):
+        return int(self.context_length) >= int(self.code_sequence_length)
+
     def encode_batch(self, batch):
         encoded = self.tokenizer.encode_batch(batch, sample_posterior=False)
         if "codes" not in encoded:
@@ -623,18 +626,44 @@ class TokenCodeAutoregressivePriorTrainer(pl.LightningModule):
         if device is None:
             device = self.device
         batch_size = int(batch_size)
-        context_tokens = torch.full(
-            (batch_size, 1),
-            fill_value=self.bos_token_id,
-            device=device,
-            dtype=torch.long,
-        )
         generated_tokens = torch.empty(
             (batch_size, self.code_sequence_length),
             device=device,
             dtype=torch.long,
         )
         generator = self._sample_generator(device=device, noise=noise)
+        if self._supports_full_context_kv_cache():
+            current_token = torch.full(
+                (batch_size, 1),
+                fill_value=self.bos_token_id,
+                device=device,
+                dtype=torch.long,
+            )
+            past = None
+            for step_idx in range(self.code_sequence_length):
+                logits, _, present = self.backbone.forward_with_past(
+                    current_token,
+                    past=past,
+                    past_length=(step_idx if past is not None else None),
+                )
+                next_logits = logits[:, -1, :] / float(max(self.sample_temperature, 1.0e-6))
+                next_token = self._sample_next_token(next_logits, generator=generator)
+                generated_tokens[:, step_idx] = next_token[:, 0]
+                if past is None:
+                    past = [present]
+                else:
+                    past.append(present)
+                current_token = next_token
+            sampled_codes = self._sequence_to_codes(generated_tokens)
+            self._validate_sampled_codes(sampled_codes)
+            return sampled_codes
+
+        context_tokens = torch.full(
+            (batch_size, 1),
+            fill_value=self.bos_token_id,
+            device=device,
+            dtype=torch.long,
+        )
         for step_idx in range(self.code_sequence_length):
             logits, _ = self.backbone(context_tokens, targets=None)
             next_logits = logits[:, -1, :] / float(max(self.sample_temperature, 1.0e-6))

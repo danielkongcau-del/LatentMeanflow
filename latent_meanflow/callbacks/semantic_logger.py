@@ -24,6 +24,8 @@ class SemanticPairImageLogger(Callback):
         log_images_kwargs=None,
         latest_only=False,
         ignore_index=None,
+        log_train=True,
+        log_validation=True,
     ):
         super().__init__()
         self.batch_freq = int(batch_frequency)
@@ -36,6 +38,8 @@ class SemanticPairImageLogger(Callback):
         self.log_images_kwargs = dict(log_images_kwargs or {})
         self.latest_only = bool(latest_only)
         self.ignore_index = None if ignore_index is None else int(ignore_index)
+        self.log_train = bool(log_train)
+        self.log_validation = bool(log_validation)
 
         self.log_steps = [2 ** n for n in range(int(np.log2(self.batch_freq)) + 1)]
         if not increase_log_steps:
@@ -169,7 +173,11 @@ class SemanticPairImageLogger(Callback):
         )
 
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        if not self.log_train:
+            return
         self.log_img(trainer, pl_module, batch, batch_idx, split="train")
 
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
+        if not self.log_validation:
+            return
         self.log_img(trainer, pl_module, batch, batch_idx, split="val")
