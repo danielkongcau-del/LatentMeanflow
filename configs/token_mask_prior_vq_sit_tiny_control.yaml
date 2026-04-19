@@ -2,7 +2,7 @@ model:
   base_learning_rate: 1.0e-4
   target: latent_meanflow.trainers.token_mask_prior_trainer.TokenMaskPriorTrainer
   params:
-    # Tiny/debug old control baseline before the proposal-visible refinement upgrade.
+    # Tiny/debug rollback control that keeps the former proposal-visible mainline semantics.
     objective_name: discrete_mask_diffusion
     monitor: val/base_error_mean
     tokenizer_config_path: configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml
@@ -32,6 +32,10 @@ model:
         time_eps: 1.0e-3
         loss_type: cross_entropy
         mask_schedule: linear
+        corruption_mode: exact_count
+        full_mask_batch_fraction: 0.25
+        high_mask_batch_fraction: 0.50
+        high_mask_min_ratio: 0.85
         min_mask_ratio: 0.0
         max_mask_ratio: 1.0
     sampler_config:
@@ -39,13 +43,13 @@ model:
       params:
         default_nfe: 8
         mask_schedule: linear
-        refinement_mode: progressive_reveal
+        refinement_mode: proposal_visible_refine
         final_full_reveal: true
-        min_keep_fraction: 0.0
+        min_keep_fraction: 0.15
         min_mask_ratio: 0.0
         max_mask_ratio: 1.0
         reveal_noise_scale: 0.15
-        lock_noise_scale: 0.15
+        lock_noise_scale: 0.10
         sample_temperature: 1.0
 
 data:

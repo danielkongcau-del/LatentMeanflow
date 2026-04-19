@@ -3,6 +3,8 @@ model:
   target: latent_meanflow.trainers.token_mask_prior_trainer.TokenMaskPriorTrainer
   params:
     # Deliberate overfit diagnostic for the frozen-tokenizer code prior on a fixed 1-mask bank.
+    # Keeps the exact-count objective package, but switches sampling to progressive reveal
+    # so the diagnostic measures whether the route can recover a known train-bank code layout.
     objective_name: discrete_mask_diffusion
     monitor: val/base_error_mean
     tokenizer_config_path: configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml
@@ -43,9 +45,9 @@ model:
       params:
         default_nfe: 8
         mask_schedule: linear
-        refinement_mode: proposal_visible_refine
+        refinement_mode: progressive_reveal
         final_full_reveal: true
-        min_keep_fraction: 0.15
+        min_keep_fraction: 0.0
         reveal_noise_scale: 0.15
         lock_noise_scale: 0.10
         sample_temperature: 1.0

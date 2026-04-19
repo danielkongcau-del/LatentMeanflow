@@ -50,9 +50,9 @@ model:
       params:
         default_nfe: 8
         mask_schedule: linear
-        refinement_mode: proposal_visible_refine
+        refinement_mode: remask_low_confidence
         final_full_reveal: true
-        min_keep_fraction: 0.15
+        min_keep_fraction: 0.0
         min_mask_ratio: 0.0
         max_mask_ratio: 1.0
         reveal_noise_scale: 0.15

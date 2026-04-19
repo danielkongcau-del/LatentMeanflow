@@ -293,7 +293,7 @@ Route contract:
 - the modeled discrete state is tokenizer code id, not raw semantic class id
 - the absorbing `MASK` token is reserved at `codebook_size`
 
-Current promoted refine mainline:
+Current promoted token-code mainline:
 
 - `configs/token_mask_prior_vq_sit.yaml`
 - `configs/token_mask_prior_vq_sit_tiny.yaml`
@@ -301,14 +301,23 @@ Current promoted refine mainline:
   `corruption_mode=exact_count` with scheduled `full_mask_batch_fraction` and
   `high_mask_batch_fraction`
 - sampler side:
-  `refinement_mode=proposal_visible_refine` with explicit reveal / lock noise
-  controls
+  `refinement_mode=remask_low_confidence` with `min_keep_fraction=0.0` and
+  explicit reveal / lock noise controls
 
-Old control configs kept for apples-to-apples comparison:
+Rollback control configs kept for apples-to-apples comparison with the former
+proposal-visible mainline:
 
 - `configs/token_mask_prior_vq_sit_control.yaml`
 - `configs/token_mask_prior_vq_sit_tiny_control.yaml`
-- keep the earlier progressive-reveal semantics as the control route
+- keep the earlier `proposal_visible_refine` semantics as the control route
+
+Memorize diagnostics:
+
+- `configs/diagnostics/token_mask_prior_vq_sit_memorize_1.yaml`
+- `configs/diagnostics/token_mask_prior_vq_sit_memorize_4.yaml`
+- keep the exact-count objective package but pin `progressive_reveal` so the
+  overfit check emphasizes train-bank recovery instead of unconditional default
+  sampling behavior
 
 Parallel high-fidelity branch for thin structures:
 
@@ -320,7 +329,7 @@ Parallel high-fidelity branch for thin structures:
 - purpose:
   improve thin roads, narrow boundaries, and small-object connectivity
 - this is a parallel fidelity branch, not a replacement for the promoted
-  refine mainline
+  mainline
 
 Train the tiny token-code mask-generator pilot:
 
@@ -334,7 +343,7 @@ Train the main token-code mask-generator baseline:
 python scripts/train_token_mask_prior.py --config configs/token_mask_prior_vq_sit.yaml --tokenizer-ckpt /path/to/semantic_mask_vq_tokenizer_balanced.ckpt --scale-lr true --gpus 0
 ```
 
-Train the old progressive-reveal control baseline:
+Train the proposal-visible rollback control baseline:
 
 ```bash
 python scripts/train_token_mask_prior.py --config configs/token_mask_prior_vq_sit_control.yaml --tokenizer-ckpt /path/to/semantic_mask_vq_tokenizer_balanced.ckpt --scale-lr true --gpus 0

@@ -54,16 +54,16 @@ Tests:
 
 ## Route Semantics
 
-The current promoted mainline is the refinement upgrade:
+The current promoted mainline is the remask-low-confidence refinement route:
 
 - unconditional `p(code_indices)` only
 - project-layer discrete diffusion objective and sampler reused from the older direct-discrete route
 - absorbing `MASK` token at `codebook_size`
 - final sampled grids must contain only valid tokenizer code ids before decode
 - objective-side corruption uses `exact_count`
-- mainline sampler uses `proposal_visible_refine`
-- early proposals can stay visible for later refinement instead of being
-  permanently locked by the first reveal decision
+- mainline sampler uses `remask_low_confidence`
+- low-confidence positions can be revisited across steps instead of staying
+  fixed after an early low-quality proposal
 
 Mainline configs:
 
@@ -87,7 +87,17 @@ Control configs:
 
 - `configs/token_mask_prior_vq_sit_control.yaml`
 - `configs/token_mask_prior_vq_sit_tiny_control.yaml`
-- these keep the older `progressive_reveal` semantics for ablation and rollback
+- these keep the former `proposal_visible_refine` semantics for rollback and
+  apples-to-apples comparison with the old promoted mainline
+
+Memorization diagnostics:
+
+- `configs/diagnostics/token_mask_prior_vq_sit_memorize_1.yaml`
+- `configs/diagnostics/token_mask_prior_vq_sit_memorize_4.yaml`
+- keep the exact-count objective package but switch sampling to
+  `progressive_reveal`
+- intended to answer whether the route can recover a known tiny train-bank code
+  layout, not to define the unconditional sampler default
 
 This route is separate from both:
 
@@ -106,7 +116,7 @@ python scripts/train_token_mask_prior.py \
   --gpus 0
 ```
 
-Train the old progressive-reveal control:
+Train the proposal-visible rollback control:
 
 ```bash
 python scripts/train_token_mask_prior.py \
@@ -141,6 +151,10 @@ python scripts/train_token_mask_prior.py \
   --scale-lr false \
   --gpus 0
 ```
+
+These memorize diagnostics deliberately use `progressive_reveal` instead of the
+unconditional mainline sampler so the overfit check emphasizes train-bank
+recovery rather than diversity-preserving unconditional sampling.
 
 Sample code grids and decode them into semantic masks:
 

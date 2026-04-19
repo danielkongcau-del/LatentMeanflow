@@ -345,10 +345,46 @@ class TokenMaskPriorSmokeTest(unittest.TestCase):
             self.assertEqual(tuple(decoded["mask_index"].shape), (2, 16, 16))
             self.assertEqual(tuple(decoded["mask_onehot"].shape), (2, 4, 16, 16))
 
-    def test_main_and_memorize_configs_pin_balanced_tokenizer(self):
+    def test_main_configs_pin_balanced_tokenizer_and_remask_mainline_sampler(self):
         config_paths = [
             REPO_ROOT / "configs" / "token_mask_prior_vq_sit_tiny.yaml",
             REPO_ROOT / "configs" / "token_mask_prior_vq_sit.yaml",
+        ]
+        for config_path in config_paths:
+            config = OmegaConf.load(config_path)
+            self.assertEqual(
+                config.model.target,
+                "latent_meanflow.trainers.token_mask_prior_trainer.TokenMaskPriorTrainer",
+            )
+            self.assertEqual(
+                str(config.model.params.tokenizer_config_path),
+                "configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml",
+            )
+            self.assertIsNone(config.model.params.tokenizer_ckpt_path)
+            self.assertTrue(bool(config.model.params.freeze_tokenizer))
+            self.assertFalse(bool(config.model.params.tokenizer_sample_posterior))
+            objective_params = config.model.params.objective_config.params
+            sampler_params = config.model.params.sampler_config.params
+            self.assertEqual(str(objective_params.corruption_mode), "exact_count")
+            self.assertAlmostEqual(float(objective_params.full_mask_batch_fraction), 0.25)
+            self.assertAlmostEqual(float(objective_params.high_mask_batch_fraction), 0.50)
+            self.assertAlmostEqual(float(objective_params.high_mask_min_ratio), 0.85)
+            self.assertEqual(str(sampler_params.refinement_mode), "remask_low_confidence")
+            self.assertTrue(bool(sampler_params.final_full_reveal))
+            self.assertAlmostEqual(float(sampler_params.min_keep_fraction), 0.0)
+            self.assertAlmostEqual(float(sampler_params.lock_noise_scale), 0.10)
+            self.assertAlmostEqual(float(sampler_params.reveal_noise_scale), 0.15)
+            self.assertAlmostEqual(float(sampler_params.sample_temperature), 1.0)
+        for config_path in config_paths:
+            config = OmegaConf.load(config_path)
+            self.assertAlmostEqual(float(config.model.params.semantic_ce_weight), 0.2)
+            self.assertAlmostEqual(float(config.model.params.semantic_dice_weight), 0.1)
+            self.assertAlmostEqual(float(config.model.params.boundary_loss_weight), 0.05)
+            self.assertAlmostEqual(float(config.model.params.area_ratio_loss_weight), 0.05)
+            self.assertAlmostEqual(float(config.model.params.adjacency_loss_weight), 0.02)
+
+    def test_memorize_configs_pin_balanced_tokenizer_and_progressive_diagnostic_sampler(self):
+        config_paths = [
             REPO_ROOT / "configs" / "diagnostics" / "token_mask_prior_vq_sit_memorize_1.yaml",
             REPO_ROOT / "configs" / "diagnostics" / "token_mask_prior_vq_sit_memorize_4.yaml",
         ]
@@ -371,14 +407,12 @@ class TokenMaskPriorSmokeTest(unittest.TestCase):
             self.assertAlmostEqual(float(objective_params.full_mask_batch_fraction), 0.25)
             self.assertAlmostEqual(float(objective_params.high_mask_batch_fraction), 0.50)
             self.assertAlmostEqual(float(objective_params.high_mask_min_ratio), 0.85)
-            self.assertEqual(str(sampler_params.refinement_mode), "proposal_visible_refine")
+            self.assertEqual(str(sampler_params.refinement_mode), "progressive_reveal")
             self.assertTrue(bool(sampler_params.final_full_reveal))
-            self.assertAlmostEqual(float(sampler_params.min_keep_fraction), 0.15)
+            self.assertAlmostEqual(float(sampler_params.min_keep_fraction), 0.0)
             self.assertAlmostEqual(float(sampler_params.lock_noise_scale), 0.10)
             self.assertAlmostEqual(float(sampler_params.reveal_noise_scale), 0.15)
             self.assertAlmostEqual(float(sampler_params.sample_temperature), 1.0)
-        for config_path in config_paths:
-            config = OmegaConf.load(config_path)
             self.assertAlmostEqual(float(config.model.params.semantic_ce_weight), 0.2)
             self.assertAlmostEqual(float(config.model.params.semantic_dice_weight), 0.1)
             self.assertAlmostEqual(float(config.model.params.boundary_loss_weight), 0.05)
@@ -413,17 +447,20 @@ class TokenMaskPriorSmokeTest(unittest.TestCase):
             self.assertTrue(bool(config.model.params.freeze_tokenizer))
             self.assertFalse(bool(config.model.params.tokenizer_sample_posterior))
             backbone_params = config.model.params.backbone_config.params
+            sampler_params = config.model.params.sampler_config.params
             self.assertEqual(int(backbone_params.patch_size), expected["patch_size"])
             self.assertEqual(int(backbone_params.hidden_size), expected["hidden_size"])
             self.assertEqual(int(backbone_params.depth), expected["depth"])
             self.assertEqual(int(backbone_params.num_heads), expected["num_heads"])
+            self.assertEqual(str(sampler_params.refinement_mode), "remask_low_confidence")
+            self.assertAlmostEqual(float(sampler_params.min_keep_fraction), 0.0)
             self.assertAlmostEqual(float(config.model.params.semantic_ce_weight), 0.2)
             self.assertAlmostEqual(float(config.model.params.semantic_dice_weight), 0.1)
             self.assertAlmostEqual(float(config.model.params.boundary_loss_weight), 0.05)
             self.assertAlmostEqual(float(config.model.params.area_ratio_loss_weight), 0.05)
             self.assertAlmostEqual(float(config.model.params.adjacency_loss_weight), 0.02)
 
-    def test_control_configs_keep_old_progressive_reveal_semantics(self):
+    def test_control_configs_keep_proposal_visible_rollback_semantics(self):
         config_paths = [
             REPO_ROOT / "configs" / "token_mask_prior_vq_sit_tiny_control.yaml",
             REPO_ROOT / "configs" / "token_mask_prior_vq_sit_control.yaml",
@@ -440,10 +477,13 @@ class TokenMaskPriorSmokeTest(unittest.TestCase):
             )
             objective_params = config.model.params.objective_config.params
             sampler_params = config.model.params.sampler_config.params
-            self.assertFalse(hasattr(objective_params, "corruption_mode"))
-            self.assertEqual(str(sampler_params.refinement_mode), "progressive_reveal")
-            self.assertAlmostEqual(float(sampler_params.min_keep_fraction), 0.0)
-            self.assertAlmostEqual(float(sampler_params.lock_noise_scale), 0.15)
+            self.assertEqual(str(objective_params.corruption_mode), "exact_count")
+            self.assertAlmostEqual(float(objective_params.full_mask_batch_fraction), 0.25)
+            self.assertAlmostEqual(float(objective_params.high_mask_batch_fraction), 0.50)
+            self.assertAlmostEqual(float(objective_params.high_mask_min_ratio), 0.85)
+            self.assertEqual(str(sampler_params.refinement_mode), "proposal_visible_refine")
+            self.assertAlmostEqual(float(sampler_params.min_keep_fraction), 0.15)
+            self.assertAlmostEqual(float(sampler_params.lock_noise_scale), 0.10)
 
     def test_memorize_config_uses_fixed_subset(self):
         config = OmegaConf.load(
@@ -471,7 +511,7 @@ class TokenMaskPriorSmokeTest(unittest.TestCase):
             self.assertIn("area_ratio_loss", outputs["loss_dict"])
             self.assertIn("adjacency_loss", outputs["loss_dict"])
 
-    def test_refine_mainline_config_instantiates_and_samples(self):
+    def test_mainline_config_instantiates_and_samples(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path, ckpt_path, token_spatial_shape, _ = _write_tokenizer_artifacts(tmpdir)
             config = OmegaConf.load(REPO_ROOT / "configs" / "token_mask_prior_vq_sit_tiny.yaml")
@@ -480,7 +520,7 @@ class TokenMaskPriorSmokeTest(unittest.TestCase):
 
             trainer = instantiate_from_config(config.model)
             self.assertEqual(str(trainer.objective.corruption_mode), "exact_count")
-            self.assertEqual(str(trainer.sampler.refinement_mode), "proposal_visible_refine")
+            self.assertEqual(str(trainer.sampler.refinement_mode), "remask_low_confidence")
             sampled = trainer.sample_latents(
                 batch_size=2,
                 nfe=2,

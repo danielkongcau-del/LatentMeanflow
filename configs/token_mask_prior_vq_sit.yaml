@@ -9,7 +9,7 @@ model:
     # - state object: discrete tokenizer code indices with an absorbing MASK token
     # - frozen tokenizer decode converts sampled code grids back into semantic_mask
     # - downstream p(image | semantic_mask) renderer stays frozen infrastructure
-    # - mainline sampler semantics: proposal-visible refinement
+    # - mainline sampler semantics: remask-low-confidence refinement
     objective_name: discrete_mask_diffusion
     monitor: val/base_error_mean
     tokenizer_config_path: configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml
@@ -50,9 +50,9 @@ model:
       params:
         default_nfe: 8
         mask_schedule: linear
-        refinement_mode: proposal_visible_refine
+        refinement_mode: remask_low_confidence
         final_full_reveal: true
-        min_keep_fraction: 0.15
+        min_keep_fraction: 0.0
         min_mask_ratio: 0.0
         max_mask_ratio: 1.0
         reveal_noise_scale: 0.15

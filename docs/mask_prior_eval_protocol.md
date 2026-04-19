@@ -101,10 +101,11 @@ python scripts/eval_token_mask_prior.py \
   --overwrite
 ```
 
-For the current promoted refine mainline, keep
-`configs/token_mask_prior_vq_sit.yaml`. For the old progressive-reveal control,
-swap only the config path to `configs/token_mask_prior_vq_sit_control.yaml`
-while keeping the same frozen balanced tokenizer contract.
+For the current promoted remask-low-confidence mainline, keep
+`configs/token_mask_prior_vq_sit.yaml`. For the proposal-visible rollback
+control, swap only the config path to
+`configs/token_mask_prior_vq_sit_control.yaml` while keeping the same frozen
+balanced tokenizer contract.
 
 To evaluate the older direct pixel-space AlphaFlow control baseline, use the
 legacy evaluator:
