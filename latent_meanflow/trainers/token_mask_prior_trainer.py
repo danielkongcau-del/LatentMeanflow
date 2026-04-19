@@ -21,6 +21,8 @@ class TokenMaskPriorTrainer(pl.LightningModule):
         objective_name=None,
         freeze_tokenizer=True,
         tokenizer_sample_posterior=False,
+        semantic_ce_weight=0.0,
+        semantic_dice_weight=0.0,
         log_sample_nfe=4,
         monitor="val/base_error_mean",
         mask_key="mask_onehot",
@@ -52,6 +54,8 @@ class TokenMaskPriorTrainer(pl.LightningModule):
         self.mask_index_key = str(mask_index_key)
         self.tokenizer_config_path = str(tokenizer_config_path)
         self.tokenizer_ckpt_path = str(tokenizer_ckpt_path)
+        self.semantic_ce_weight = float(semantic_ce_weight)
+        self.semantic_dice_weight = float(semantic_dice_weight)
 
         self.tokenizer = SemanticTokenizerAdapter.from_pretrained(
             config_path=self.tokenizer_config_path,
@@ -205,7 +209,9 @@ class TokenMaskPriorTrainer(pl.LightningModule):
             "[TokenMaskPriorTrainer] "
             f"tokenizer_config={self.tokenizer_config_path}, tokenizer_ckpt={self.tokenizer_ckpt_path}, "
             f"codebook_size={self.codebook_size}, token_spatial_shape={self.token_spatial_shape}, "
-            f"mask_spatial_shape={self.mask_spatial_shape}, objective={self.objective_name}"
+            f"mask_spatial_shape={self.mask_spatial_shape}, objective={self.objective_name}, "
+            f"semantic_ce_weight={self.semantic_ce_weight:.3f}, "
+            f"semantic_dice_weight={self.semantic_dice_weight:.3f}"
         )
 
     def _token_usage_metrics(self, codes):
@@ -248,6 +254,44 @@ class TokenMaskPriorTrainer(pl.LightningModule):
         decoded["codes"] = codes
         return decoded
 
+    def _semantic_auxiliary_enabled(self):
+        return self.semantic_ce_weight > 0.0 or self.semantic_dice_weight > 0.0
+
+    def _decode_semantic_from_code_logits(self, code_logits):
+        if tuple(int(v) for v in code_logits.shape[1:]) != (self.codebook_size, *self.token_spatial_shape):
+            raise ValueError(
+                "TokenMaskPriorTrainer semantic bridge expects code logits with shape "
+                f"[B, {self.codebook_size}, {self.token_spatial_shape[0]}, {self.token_spatial_shape[1]}], "
+                f"got {tuple(code_logits.shape)}"
+            )
+        return self.tokenizer.decode_code_distribution(code_logits=code_logits)
+
+    def _semantic_auxiliary_terms(self, *, code_logits, mask_index):
+        decoded = self._decode_semantic_from_code_logits(code_logits)
+        semantic_losses = self.tokenizer.semantic_auxiliary_losses(
+            mask_logits=decoded["mask_logits"],
+            mask_index=mask_index,
+        )
+        semantic_aux_total = (
+            self.semantic_ce_weight * semantic_losses["semantic_ce"]
+            + self.semantic_dice_weight * semantic_losses["semantic_dice"]
+        )
+        with torch.no_grad():
+            semantic_metrics = self.tokenizer.compute_mask_metrics(
+                mask_index=mask_index,
+                mask_logits=decoded["mask_logits"],
+            )
+        return {
+            "decoded": decoded,
+            "semantic_ce": semantic_losses["semantic_ce"],
+            "semantic_dice": semantic_losses["semantic_dice"],
+            "semantic_aux_total": semantic_aux_total,
+            "semantic_metrics": {
+                "semantic_pixel_accuracy": semantic_metrics["pixel_accuracy"].detach(),
+                "semantic_miou": semantic_metrics["miou"].detach(),
+            },
+        }
+
     def predict_field(self, z_t, t=None, condition=None, r=None, delta_t=None):
         if condition is not None:
             raise ValueError("TokenMaskPriorTrainer is unconditional and does not accept condition.")
@@ -288,12 +332,38 @@ class TokenMaskPriorTrainer(pl.LightningModule):
             global_step=objective_step,
             target_model_fn=self.predict_field,
         )
+        total_loss = objective_outputs["loss"]
+        loss_dict = dict(objective_outputs.get("loss_dict", {}))
+        semantic_bridge_metrics = {}
+        semantic_outputs = {}
+        if self._semantic_auxiliary_enabled():
+            semantic_outputs = self._semantic_auxiliary_terms(
+                code_logits=objective_outputs["pred_field"],
+                mask_index=encoded["mask_index"],
+            )
+            total_loss = total_loss + semantic_outputs["semantic_aux_total"]
+            loss_dict.update(
+                {
+                    "semantic_ce": semantic_outputs["semantic_ce"].detach(),
+                    "semantic_dice": semantic_outputs["semantic_dice"].detach(),
+                    "semantic_aux_total": semantic_outputs["semantic_aux_total"].detach(),
+                }
+            )
+            semantic_bridge_metrics = semantic_outputs["semantic_metrics"]
+        loss_dict["total_loss"] = total_loss.detach()
+        loss_dict["base_error_mean"] = total_loss.detach()
         return {
+            **objective_outputs,
             "code_grid": code_grid,
             "mask_index": encoded["mask_index"],
             "mask_onehot": encoded["mask_onehot"],
             "code_target_stats": self._token_usage_metrics(code_grid),
-            **objective_outputs,
+            "semantic_mask_logits": semantic_outputs.get("decoded", {}).get("mask_logits"),
+            "semantic_mask_probs": semantic_outputs.get("decoded", {}).get("mask_probs"),
+            "semantic_mask_index": semantic_outputs.get("decoded", {}).get("mask_index"),
+            "semantic_bridge_metrics": semantic_bridge_metrics,
+            "loss": total_loss,
+            "loss_dict": loss_dict,
         }
 
     def _collect_log_scalars(self, split, loss_dict):
@@ -312,6 +382,7 @@ class TokenMaskPriorTrainer(pl.LightningModule):
         loss_dict = outputs.get("loss_dict", {"loss": outputs["loss"], "total_loss": outputs["loss"]})
         metrics = self._collect_log_scalars(split, loss_dict)
         metrics.update(self._collect_log_scalars(split, outputs.get("code_target_stats", {})))
+        metrics.update(self._collect_log_scalars(split, outputs.get("semantic_bridge_metrics", {})))
         prog_bar_metrics = {}
         base_error_key = f"{split}/base_error_mean"
         if base_error_key in metrics:

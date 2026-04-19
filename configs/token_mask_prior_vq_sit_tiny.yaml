@@ -9,6 +9,8 @@ model:
     tokenizer_ckpt_path: null
     freeze_tokenizer: true
     tokenizer_sample_posterior: false
+    semantic_ce_weight: 0.2
+    semantic_dice_weight: 0.1
     log_sample_nfe: 8
     backbone_config:
       target: latent_meanflow.models.backbones.latent_interval_sit.LatentIntervalSiT

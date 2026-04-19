@@ -103,7 +103,14 @@ def _write_tokenizer_artifacts(tmpdir):
     return config_path, ckpt_path, tokenizer.latent_spatial_shape, tokenizer.codebook_size
 
 
-def _make_prior_trainer(*, tokenizer_config_path, tokenizer_ckpt_path, token_spatial_shape):
+def _make_prior_trainer(
+    *,
+    tokenizer_config_path,
+    tokenizer_ckpt_path,
+    token_spatial_shape,
+    semantic_ce_weight=0.2,
+    semantic_dice_weight=0.1,
+):
     return TokenMaskPriorTrainer(
         tokenizer_config_path=str(tokenizer_config_path),
         tokenizer_ckpt_path=str(tokenizer_ckpt_path),
@@ -143,6 +150,8 @@ def _make_prior_trainer(*, tokenizer_config_path, tokenizer_ckpt_path, token_spa
         },
         freeze_tokenizer=True,
         tokenizer_sample_posterior=False,
+        semantic_ce_weight=semantic_ce_weight,
+        semantic_dice_weight=semantic_dice_weight,
         log_sample_nfe=2,
     )
 
@@ -175,6 +184,12 @@ class TokenMaskPriorSmokeTest(unittest.TestCase):
             self.assertEqual(tuple(outputs["pred_field"].shape), (2, codebook_size, *token_spatial_shape))
             self.assertEqual(tuple(outputs["code_grid"].shape), (2, *token_spatial_shape))
             self.assertEqual(trainer.mask_token_id, codebook_size)
+            self.assertEqual(tuple(outputs["semantic_mask_logits"].shape), (2, 4, 16, 16))
+            self.assertIn("semantic_ce", outputs["loss_dict"])
+            self.assertIn("semantic_dice", outputs["loss_dict"])
+            self.assertIn("semantic_aux_total", outputs["loss_dict"])
+            self.assertIn("semantic_pixel_accuracy", outputs["semantic_bridge_metrics"])
+            self.assertIn("semantic_miou", outputs["semantic_bridge_metrics"])
 
     def test_tokenizer_is_frozen_and_not_in_optimizer(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -194,6 +209,32 @@ class TokenMaskPriorSmokeTest(unittest.TestCase):
                 for param in group["params"]
             }
             self.assertTrue(tokenizer_param_ids.isdisjoint(optimizer_param_ids))
+
+    def test_soft_decode_bridge_backpropagates_to_code_logits_only(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path, ckpt_path, token_spatial_shape, codebook_size = _write_tokenizer_artifacts(tmpdir)
+            trainer = _make_prior_trainer(
+                tokenizer_config_path=config_path,
+                tokenizer_ckpt_path=ckpt_path,
+                token_spatial_shape=token_spatial_shape,
+            )
+
+            code_logits = torch.randn(
+                (2, codebook_size, *token_spatial_shape),
+                dtype=torch.float32,
+                requires_grad=True,
+            )
+            decoded = trainer.tokenizer.decode_code_distribution(code_logits=code_logits)
+            self.assertEqual(tuple(decoded["mask_logits"].shape), (2, 4, 16, 16))
+            self.assertEqual(tuple(decoded["mask_probs"].shape), (2, 4, 16, 16))
+            self.assertEqual(tuple(decoded["z_q"].shape), (2, 8, *token_spatial_shape))
+
+            bridge_loss = decoded["mask_logits"].square().mean()
+            bridge_loss.backward()
+
+            self.assertIsNotNone(code_logits.grad)
+            self.assertGreater(float(code_logits.grad.abs().sum().item()), 0.0)
+            self.assertTrue(all(param.grad is None for param in trainer.tokenizer.parameters()))
 
     def test_sampled_token_grids_decode_into_valid_semantic_masks(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -240,6 +281,10 @@ class TokenMaskPriorSmokeTest(unittest.TestCase):
             self.assertIsNone(config.model.params.tokenizer_ckpt_path)
             self.assertTrue(bool(config.model.params.freeze_tokenizer))
             self.assertFalse(bool(config.model.params.tokenizer_sample_posterior))
+        for config_path in config_paths[:2]:
+            config = OmegaConf.load(config_path)
+            self.assertAlmostEqual(float(config.model.params.semantic_ce_weight), 0.2)
+            self.assertAlmostEqual(float(config.model.params.semantic_dice_weight), 0.1)
 
     def test_memorize_config_uses_fixed_subset(self):
         config = OmegaConf.load(
@@ -260,6 +305,9 @@ class TokenMaskPriorSmokeTest(unittest.TestCase):
             trainer = instantiate_from_config(config.model)
             outputs = trainer(_make_batch())
             self.assertEqual(outputs["loss"].ndim, 0)
+            self.assertIn("semantic_ce", outputs["loss_dict"])
+            self.assertIn("semantic_dice", outputs["loss_dict"])
+            self.assertIn("semantic_aux_total", outputs["loss_dict"])
 
 
 if __name__ == "__main__":
