@@ -3,13 +3,13 @@
 This document defines the fixed research-style evaluation protocol for the
 project-layer unconditional semantic-mask route:
 
-- upstream route: `p(semantic_mask)`
+- upstream route: `p(semantic_mask)` with the token-code mask generator as the current mainline
 - downstream frozen evaluator: `p(image | semantic_mask)`
 - frozen judge: in-domain segmentation teacher
 
 The project is now operationally decomposed as:
 
-`p(mask) + p(image | mask)`
+`p(mask) + p(image | semantic_mask)`
 
 This protocol does not change training math. It only fixes how `p(mask)` is
 evaluated.
@@ -40,6 +40,8 @@ the renderer.
 
 - Best checkpoint selection must use `val/base_error_mean`.
 - Do not choose checkpoints by latest timestamp or train visuals.
+- `scripts/train_token_mask_prior.py`, `scripts/sample_token_mask_prior.py`, and `scripts/eval_token_mask_prior.py` require an explicit frozen tokenizer checkpoint for the balanced VQ tokenizer.
+- `scripts/sample_token_mask_prior.py` and `scripts/eval_token_mask_prior.py` require explicit token-mask-prior checkpoints and do not fall back to `last.ckpt`.
 - `scripts/sample_mask_prior.py` and `scripts/eval_mask_prior.py` require explicit checkpoint paths and do not fall back to `last.ckpt`.
 - Do not report only `NFE=1`.
 - The default `p(mask)` sweep is `NFE=8/4/2/1`.
@@ -68,6 +70,23 @@ The mask-only protocol reports, for both the real split and generated masks:
 The main script is:
 
 ```bash
+python scripts/eval_token_mask_prior.py \
+  --config configs/token_mask_prior_vq_sit.yaml \
+  --ckpt <best-token-mask-prior-ckpt> \
+  --tokenizer-config configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml \
+  --tokenizer-ckpt <best-balanced-tokenizer-ckpt> \
+  --outdir outputs/token_mask_prior_eval/main \
+  --n-samples 32 \
+  --batch-size 8 \
+  --nfe-values 8 4 2 1 \
+  --seed 23 \
+  --overwrite
+```
+
+To evaluate the older direct pixel-space AlphaFlow control baseline, use the
+legacy evaluator:
+
+```bash
 python scripts/eval_mask_prior.py \
   --config configs/latent_alphaflow_mask_prior_unet.yaml \
   --ckpt <best-mask-prior-ckpt> \
@@ -79,8 +98,8 @@ python scripts/eval_mask_prior.py \
   --overwrite
 ```
 
-To evaluate the SiT-style continuous control baseline, keep the same script and
-swap only the config/checkpoint pair:
+To evaluate the SiT-style continuous control baseline, keep the same legacy
+script and swap only the config/checkpoint pair:
 
 ```bash
 python scripts/eval_mask_prior.py \
@@ -94,8 +113,8 @@ python scripts/eval_mask_prior.py \
   --overwrite
 ```
 
-To evaluate the direct discrete semantic-variable baseline, keep the same
-script and swap only the config/checkpoint pair again:
+To evaluate the direct discrete semantic-variable control baseline, keep the
+same legacy script and swap only the config/checkpoint pair again:
 
 ```bash
 python scripts/eval_mask_prior.py \
@@ -109,7 +128,7 @@ python scripts/eval_mask_prior.py \
   --overwrite
 ```
 
-Outputs:
+Outputs for the token-code mainline:
 
 - `summary.json`
 - `summary.csv`
@@ -144,6 +163,30 @@ The main script is:
 
 ```bash
 python scripts/eval_mask_prior_composed_renderer.py \
+  --mask-config configs/token_mask_prior_vq_sit.yaml \
+  --mask-ckpt <best-token-mask-prior-ckpt> \
+  --mask-tokenizer-config configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml \
+  --mask-tokenizer-ckpt <best-balanced-tokenizer-ckpt> \
+  --renderer-config configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid_boundary_encoder.yaml \
+  --renderer-ckpt <best-renderer-ckpt> \
+  --renderer-tokenizer-config configs/autoencoder_image_lpips_adv_256.yaml \
+  --renderer-tokenizer-ckpt <best-image-tokenizer-ckpt> \
+  --teacher-run-dir logs/segmentation_teacher/<winner_run> \
+  --label-spec configs/label_specs/remote_semantic.yaml \
+  --outdir outputs/token_mask_prior_compose_eval/main \
+  --n-samples 32 \
+  --mask-nfe-values 8 4 2 1 \
+  --renderer-nfe-values 8 4 2 1 \
+  --seed 23 \
+  --overwrite
+```
+
+The same compose evaluator also applies to the older direct pixel-space
+AlphaFlow control baseline by swapping only `--mask-config` and `--mask-ckpt`
+and omitting the tokenizer override flags:
+
+```bash
+python scripts/eval_mask_prior_composed_renderer.py \
   --mask-config configs/latent_alphaflow_mask_prior_unet.yaml \
   --mask-ckpt <best-mask-prior-ckpt> \
   --renderer-config configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid_boundary_encoder.yaml \
@@ -161,7 +204,7 @@ python scripts/eval_mask_prior_composed_renderer.py \
 ```
 
 The same compose evaluator also applies to the SiT-style continuous control
-baseline by swapping only `--mask-config` and `--mask-ckpt`:
+baseline by swapping only `--mask-config` and `--mask-ckpt` again:
 
 ```bash
 python scripts/eval_mask_prior_composed_renderer.py \
@@ -181,7 +224,7 @@ python scripts/eval_mask_prior_composed_renderer.py \
   --overwrite
 ```
 
-The direct discrete semantic-variable baseline uses the same compose evaluator
+The direct discrete semantic-variable control uses the same compose evaluator
 with the same frozen renderer and teacher:
 
 ```bash

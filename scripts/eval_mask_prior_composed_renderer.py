@@ -61,6 +61,8 @@ def parse_args():
     )
     parser.add_argument("--mask-config", type=Path, default=DEFAULT_MASK_CONFIG)
     parser.add_argument("--mask-ckpt", type=Path, default=None)
+    parser.add_argument("--mask-tokenizer-config", type=Path, default=None)
+    parser.add_argument("--mask-tokenizer-ckpt", type=Path, default=None)
     parser.add_argument("--mask-generated-root", type=Path, default=None)
     parser.add_argument("--renderer-config", type=Path, default=DEFAULT_RENDERER_CONFIG)
     parser.add_argument("--renderer-ckpt", type=Path, default=None)
@@ -333,6 +335,11 @@ def main():
     mask_monitor = _check_monitor(mask_config, args.expected_mask_monitor, route_name="mask prior")
     renderer_monitor = _check_monitor(renderer_config, args.expected_renderer_monitor, route_name="renderer")
     apply_tokenizer_overrides(
+        mask_config,
+        tokenizer_config=args.mask_tokenizer_config,
+        tokenizer_ckpt=args.mask_tokenizer_ckpt,
+    )
+    apply_tokenizer_overrides(
         renderer_config,
         tokenizer_config=args.renderer_tokenizer_config,
         tokenizer_ckpt=args.renderer_tokenizer_ckpt,
@@ -485,6 +492,12 @@ def main():
         "task_decomposition": "p(mask) + p(image | semantic_mask)",
         "mask_config": str(args.mask_config.resolve()),
         "mask_checkpoint": None if mask_ckpt_path is None else str(mask_ckpt_path),
+        "mask_tokenizer_config": None
+        if args.mask_tokenizer_config is None
+        else str(args.mask_tokenizer_config.resolve()),
+        "mask_tokenizer_checkpoint": None
+        if args.mask_tokenizer_ckpt is None
+        else str(args.mask_tokenizer_ckpt.resolve()),
         "mask_generated_root": None if mask_generated_root is None else str(mask_generated_root),
         "mask_monitor": mask_monitor,
         "renderer_config": str(args.renderer_config.resolve()),

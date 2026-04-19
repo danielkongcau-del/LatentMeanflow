@@ -1,0 +1,271 @@
+import argparse
+import csv
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
+import torch
+from PIL import Image
+from omegaconf import OmegaConf
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+LDM_ROOT = REPO_ROOT / "third_party" / "latent-diffusion"
+TAMING_ROOT = LDM_ROOT / "taming-transformers"
+
+for path in (REPO_ROOT, LDM_ROOT, TAMING_ROOT):
+    path_str = str(path)
+    if path_str not in sys.path:
+        sys.path.insert(0, path_str)
+
+from latent_meanflow.utils import colorize_mask_index
+from scripts.sample_latent_flow import (
+    load_config,
+    load_model,
+    validate_ckpt_matches_config,
+)
+from scripts.sample_mask_prior import _prepare_outdir
+
+
+DEFAULT_CONFIG = REPO_ROOT / "configs" / "token_mask_prior_vq_sit.yaml"
+DEFAULT_TOKENIZER_CONFIG = REPO_ROOT / "configs" / "semantic_mask_vq_tokenizer_main_balanced_256.yaml"
+DEFAULT_NFE_VALUES = [8, 4, 2, 1]
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description=(
+            "Sample unconditional tokenizer code grids from the project-layer token-code p(mask) route, "
+            "then decode them through the frozen balanced VQ tokenizer into semantic masks."
+        )
+    )
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    parser.add_argument("--ckpt", type=Path, required=True)
+    parser.add_argument("--tokenizer-config", type=Path, default=DEFAULT_TOKENIZER_CONFIG)
+    parser.add_argument("--tokenizer-ckpt", type=Path, required=True)
+    parser.add_argument("--outdir", type=Path, required=True)
+    parser.add_argument("--n-samples", type=int, default=32)
+    parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--nfe-values", type=int, nargs="+", default=DEFAULT_NFE_VALUES)
+    parser.add_argument("--seed", type=int, default=23)
+    parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--set",
+        dest="overrides",
+        action="append",
+        default=[],
+        help="Extra OmegaConf dotlist override. Repeat as needed, without a leading --.",
+    )
+    return parser.parse_args()
+
+
+def apply_tokenizer_overrides(config, *, tokenizer_config, tokenizer_ckpt):
+    OmegaConf.update(
+        config,
+        "model.params.tokenizer_config_path",
+        str(tokenizer_config.resolve()),
+        merge=False,
+    )
+    OmegaConf.update(
+        config,
+        "model.params.tokenizer_ckpt_path",
+        str(tokenizer_ckpt.resolve()),
+        merge=False,
+    )
+    return config
+
+
+def _boundary_map(mask_index):
+    mask_index = np.asarray(mask_index, dtype=np.int64)
+    boundary = np.zeros(mask_index.shape, dtype=np.uint8)
+    vertical = mask_index[1:, :] != mask_index[:-1, :]
+    horizontal = mask_index[:, 1:] != mask_index[:, :-1]
+    boundary[1:, :] |= vertical
+    boundary[:-1, :] |= vertical
+    boundary[:, 1:] |= horizontal
+    boundary[:, :-1] |= horizontal
+    return (boundary * 255).astype(np.uint8)
+
+
+def _make_mask_panel(mask_index, num_classes):
+    mask_index = np.asarray(mask_index, dtype=np.int64)
+    raw = np.zeros(mask_index.shape, dtype=np.uint8)
+    denom = max(int(num_classes) - 1, 1)
+    raw = np.clip(np.round(mask_index.astype(np.float32) * (255.0 / float(denom))), 0.0, 255.0).astype(np.uint8)
+    raw_rgb = np.repeat(raw[:, :, None], 3, axis=2)
+    color = colorize_mask_index(mask_index, num_classes=num_classes)
+    boundary = np.repeat(_boundary_map(mask_index)[:, :, None], 3, axis=2)
+    panel = np.concatenate([raw_rgb, color, boundary], axis=1)
+    return raw_rgb, color, boundary, panel
+
+
+def _save_sample(*, codes, mask_index, outdir, index, num_classes):
+    code_raw_dir = outdir / "code_raw"
+    mask_raw_dir = outdir / "mask_raw"
+    mask_color_dir = outdir / "mask_color"
+    boundary_dir = outdir / "boundary"
+    panel_dir = outdir / "panel"
+    for directory in (code_raw_dir, mask_raw_dir, mask_color_dir, boundary_dir, panel_dir):
+        directory.mkdir(parents=True, exist_ok=True)
+
+    stem = f"{int(index):06}"
+    Image.fromarray(np.asarray(codes, dtype=np.uint16)).save(code_raw_dir / f"{stem}.png")
+    Image.fromarray(np.asarray(mask_index, dtype=np.uint16)).save(mask_raw_dir / f"{stem}.png")
+    _, color, boundary, panel = _make_mask_panel(mask_index, num_classes=num_classes)
+    Image.fromarray(color).save(mask_color_dir / f"{stem}.png")
+    Image.fromarray(boundary).save(boundary_dir / f"{stem}.png")
+    Image.fromarray(panel).save(panel_dir / f"{stem}.png")
+
+
+def _summarize_codes(code_grids, *, codebook_size):
+    flat = np.concatenate([grid.reshape(-1) for grid in code_grids], axis=0)
+    counts = np.bincount(flat.astype(np.int64), minlength=int(codebook_size)).astype(np.float64)
+    probs = counts / max(1.0, float(counts.sum()))
+    unique_per_sample = np.asarray([np.unique(grid).size for grid in code_grids], dtype=np.float64)
+    return {
+        "active_code_count": int((counts > 0).sum()),
+        "active_code_fraction": float((counts > 0).sum() / float(max(int(codebook_size), 1))),
+        "code_perplexity": float(np.exp(-(probs * np.log(np.clip(probs, 1.0e-10, 1.0))).sum())),
+        "unique_code_count_mean": float(unique_per_sample.mean()),
+        "unique_code_count_std": float(unique_per_sample.std()),
+    }
+
+
+@torch.no_grad()
+def generate_token_mask_prior_sweep(*, model, outdir, nfe_values, seed, n_samples, batch_size):
+    device = model.device
+    latent_shape = (model.latent_channels, *model.latent_spatial_shape)
+    generator = torch.Generator(device="cpu")
+    generator.manual_seed(int(seed))
+    noise_bank = torch.randn((int(n_samples), *latent_shape), generator=generator)
+
+    summary_rows = []
+    for nfe in nfe_values:
+        nfe = int(nfe)
+        nfe_dir = outdir / f"nfe{nfe}"
+        _prepare_outdir(nfe_dir, overwrite=True)
+        collected_codes = []
+
+        for start in range(0, int(n_samples), int(batch_size)):
+            current_batch = min(int(batch_size), int(n_samples) - start)
+            noise = noise_bank[start : start + current_batch].to(device)
+            sampled_codes = model.sample_latents(
+                batch_size=current_batch,
+                nfe=nfe,
+                device=device,
+                noise=noise,
+            )
+            decoded = model.decode_latents(sampled_codes)
+            for local_idx in range(current_batch):
+                code_grid = sampled_codes[local_idx].detach().cpu().numpy().astype(np.int64, copy=False)
+                collected_codes.append(code_grid)
+                _save_sample(
+                    codes=code_grid,
+                    mask_index=decoded["mask_index"][local_idx].detach().cpu().numpy().astype(np.int64, copy=False),
+                    outdir=nfe_dir,
+                    index=start + local_idx,
+                    num_classes=model.num_classes,
+                )
+
+        code_summary = _summarize_codes(collected_codes, codebook_size=model.codebook_size)
+        summary_rows.append(
+            {
+                "nfe": nfe,
+                "outdir": str(nfe_dir),
+                "code_raw_count": len(list((nfe_dir / "code_raw").glob("*.png"))),
+                "mask_raw_count": len(list((nfe_dir / "mask_raw").glob("*.png"))),
+                "mask_color_count": len(list((nfe_dir / "mask_color").glob("*.png"))),
+                "boundary_count": len(list((nfe_dir / "boundary").glob("*.png"))),
+                "panel_count": len(list((nfe_dir / "panel").glob("*.png"))),
+                "active_code_count": int(code_summary["active_code_count"]),
+                "active_code_fraction": float(code_summary["active_code_fraction"]),
+                "code_perplexity": float(code_summary["code_perplexity"]),
+                "unique_code_count_mean": float(code_summary["unique_code_count_mean"]),
+                "unique_code_count_std": float(code_summary["unique_code_count_std"]),
+            }
+        )
+    return summary_rows
+
+
+@torch.no_grad()
+def main():
+    args = parse_args()
+    if not args.ckpt.exists():
+        raise FileNotFoundError(f"Token-mask prior checkpoint not found: {args.ckpt}")
+    if not args.tokenizer_ckpt.exists():
+        raise FileNotFoundError(f"Frozen tokenizer checkpoint not found: {args.tokenizer_ckpt}")
+
+    config = load_config(args.config, overrides=args.overrides)
+    apply_tokenizer_overrides(
+        config,
+        tokenizer_config=args.tokenizer_config,
+        tokenizer_ckpt=args.tokenizer_ckpt,
+    )
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    torch.manual_seed(int(args.seed))
+
+    validate_ckpt_matches_config(args.config, args.ckpt.resolve())
+    outdir = args.outdir.resolve()
+    _prepare_outdir(outdir, overwrite=args.overwrite)
+    model = load_model(config, args.ckpt.resolve(), device=device)
+
+    summary_rows = generate_token_mask_prior_sweep(
+        model=model,
+        outdir=outdir,
+        nfe_values=args.nfe_values,
+        seed=args.seed,
+        n_samples=args.n_samples,
+        batch_size=args.batch_size,
+    )
+
+    summary = {
+        "task": "p(token_codes) -> frozen tokenizer decode -> semantic_mask",
+        "config": str(args.config.resolve()),
+        "checkpoint": str(args.ckpt.resolve()),
+        "tokenizer_config": str(args.tokenizer_config.resolve()),
+        "tokenizer_checkpoint": str(args.tokenizer_ckpt.resolve()),
+        "config_overrides": list(args.overrides),
+        "seed": int(args.seed),
+        "n_samples": int(args.n_samples),
+        "batch_size": int(args.batch_size),
+        "nfe_values": [int(value) for value in args.nfe_values],
+        "monitor": getattr(model, "monitor", None),
+        "num_classes": int(model.num_classes),
+        "codebook_size": int(model.codebook_size),
+        "token_spatial_shape": [int(v) for v in model.token_spatial_shape],
+        "mask_spatial_shape": [int(v) for v in model.mask_spatial_shape],
+        "results": summary_rows,
+    }
+
+    summary_json_path = outdir / "summary.json"
+    summary_csv_path = outdir / "summary.csv"
+    summary_json_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    with summary_csv_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "nfe",
+                "outdir",
+                "code_raw_count",
+                "mask_raw_count",
+                "mask_color_count",
+                "boundary_count",
+                "panel_count",
+                "active_code_count",
+                "active_code_fraction",
+                "code_perplexity",
+                "unique_code_count_mean",
+                "unique_code_count_std",
+            ],
+        )
+        writer.writeheader()
+        writer.writerows(summary_rows)
+
+    print(f"Saved token-mask prior sweep to {outdir}")
+    print(f"Summary JSON: {summary_json_path}")
+    print(f"Summary CSV: {summary_csv_path}")
+
+
+if __name__ == "__main__":
+    main()

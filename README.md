@@ -3,20 +3,19 @@
 LatentMeanflow now contains three parallel project-layer routes:
 
 - a legacy binary-mask / 4-channel latent diffusion baseline
-- the current upstream mainline for `p(semantic_mask)`: a mask-only discrete tokenizer for future token priors
+- the current upstream mainline for `p(semantic_mask)`: a frozen balanced discrete tokenizer plus an unconditional token-code mask generator
 - older semantic tokenizer + continuous latent / renderer experiments that remain checked in as controls and side routes
 
 The vendored runtime is still CompVis `latent-diffusion`, but the active
 project-layer upstream direction is now:
 
-`mask-only discrete tokenizer -> token prior`
+`frozen balanced mask tokenizer -> token-code mask generator`
 
-The token prior half is still `not implemented yet`. The older continuous
-mask-only latent-prior route is kept as a negative but informative control
-because it repeated the same failure mode seen in direct continuous-field
-generation.
+The older direct pixel-space and continuous mask-only prior routes are kept as
+negative but informative controls because they repeated the same tiny-bank
+collapse failure mode.
 
-See [docs/latentmeanflow_migration_plan.md](docs/latentmeanflow_migration_plan.md) for the migration roadmap and [docs/semantic_label_spec.md](docs/semantic_label_spec.md) for the semantic mask contract.
+See [docs/latentmeanflow_migration_plan.md](docs/latentmeanflow_migration_plan.md) for the migration roadmap, [docs/semantic_label_spec.md](docs/semantic_label_spec.md) for the semantic mask contract, and [docs/token_mask_prior_mainline.md](docs/token_mask_prior_mainline.md) for the current upstream `p(mask)` baseline.
 
 ## Repository Layout
 
@@ -131,11 +130,16 @@ These commands target the legacy binary / 4-channel baseline only. They do not i
 
 This is the current upstream mainline for `p(semantic_mask)` work:
 
-- it reconstructs `semantic_mask` only
-- it does not read RGB image
-- it uses a VQ / codebook tokenizer rather than a continuous VAE latent
-- it prepares the repo for a later token prior
-- the token prior is still `not implemented yet`
+- tokenizer half:
+  reconstruct `semantic_mask` only
+- tokenizer half:
+  do not read RGB image
+- tokenizer half:
+  use a VQ / codebook tokenizer rather than a continuous VAE latent
+- generator half:
+  model the frozen tokenizer code grid directly
+- generator half:
+  decode sampled code grids back into `semantic_mask`
 
 This route exists because:
 
@@ -170,6 +174,16 @@ Current discrete tokenizer geometry:
 
 Current promoted main config:
 
+- `configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml`
+- balanced quantizer path:
+  cosine matching + EMA codebook update + dead-code refresh
+- balanced loss path:
+  train-set scanned class-balanced CE
+- checkpoint monitor:
+  `val/mask_ce_unweighted`
+
+Stable fallback config:
+
 - `configs/semantic_mask_vq_tokenizer_main_stable_256.yaml`
 - stable quantizer path:
   cosine matching + EMA codebook update + dead-code refresh
@@ -193,7 +207,7 @@ python scripts/train_semantic_mask_vq_tokenizer.py --config configs/semantic_mas
 Train the main discrete tokenizer candidate:
 
 ```bash
-python scripts/train_semantic_mask_vq_tokenizer.py --config configs/semantic_mask_vq_tokenizer_main_stable_256.yaml --scale-lr true --gpus 0
+python scripts/train_semantic_mask_vq_tokenizer.py --config configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml --scale-lr true --gpus 0
 ```
 
 Train the class-balanced main discrete tokenizer candidate:
@@ -229,7 +243,7 @@ Evaluate discrete tokenizer reconstruction and export `input_mask_raw/`,
 `analysis/worst_per_class.json`:
 
 ```bash
-python scripts/eval_semantic_mask_vq_tokenizer.py --config configs/semantic_mask_vq_tokenizer_main_stable_256.yaml --ckpt /path/to/semantic_mask_vq_tokenizer.ckpt --outdir outputs/semantic_mask_vq_tokenizer_eval/main --split validation --n-samples 32 --batch-size 4 --seed 23 --overwrite
+python scripts/eval_semantic_mask_vq_tokenizer.py --config configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml --ckpt /path/to/semantic_mask_vq_tokenizer_balanced.ckpt --outdir outputs/semantic_mask_vq_tokenizer_eval/main_balanced --split validation --n-samples 32 --batch-size 4 --seed 23 --overwrite
 ```
 
 Evaluate the `memorize_4` discrete tokenizer diagnostic:
@@ -247,6 +261,74 @@ python scripts/eval_semantic_mask_vq_tokenizer.py --config configs/diagnostics/s
 This script reports reconstruction metrics such as per-pixel accuracy, mIoU,
 boundary-length gap, and small-region frequency gap. It is tokenizer
 reconstruction evaluation, not unconditional generation evaluation.
+
+#### Token-Code Mask Generator Path
+
+This is the current upstream `p(mask)` baseline on top of the frozen balanced
+tokenizer:
+
+`token-code mask generator -> frozen tokenizer decode -> semantic_mask -> frozen image renderer`
+
+Checked-in project-layer token-generator files:
+
+- `latent_meanflow/trainers/token_mask_prior_trainer.py`
+- `scripts/train_token_mask_prior.py`
+- `scripts/sample_token_mask_prior.py`
+- `scripts/eval_token_mask_prior.py`
+- `configs/token_mask_prior_vq_sit_tiny.yaml`
+- `configs/token_mask_prior_vq_sit.yaml`
+- `configs/diagnostics/token_mask_prior_vq_sit_memorize_1.yaml`
+- `configs/diagnostics/token_mask_prior_vq_sit_memorize_4.yaml`
+- `tests/test_token_mask_prior_smoke.py`
+
+Route contract:
+
+- tokenizer config is pinned to `configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml`
+- tokenizer checkpoint must be passed explicitly to train, sample, and eval
+- tokenizer stays in `eval()` mode with frozen weights
+- the modeled discrete state is tokenizer code id, not raw semantic class id
+- the absorbing `MASK` token is reserved at `codebook_size`
+
+Train the tiny token-code mask-generator pilot:
+
+```bash
+python scripts/train_token_mask_prior.py --config configs/token_mask_prior_vq_sit_tiny.yaml --tokenizer-ckpt /path/to/semantic_mask_vq_tokenizer_balanced.ckpt --scale-lr true --gpus 0
+```
+
+Train the main token-code mask-generator baseline:
+
+```bash
+python scripts/train_token_mask_prior.py --config configs/token_mask_prior_vq_sit.yaml --tokenizer-ckpt /path/to/semantic_mask_vq_tokenizer_balanced.ckpt --scale-lr true --gpus 0
+```
+
+Run the decisive tiny-bank memorize diagnostics:
+
+```bash
+python scripts/train_token_mask_prior.py --config configs/diagnostics/token_mask_prior_vq_sit_memorize_1.yaml --tokenizer-ckpt /path/to/semantic_mask_vq_tokenizer_balanced.ckpt --scale-lr false --gpus 0
+
+python scripts/train_token_mask_prior.py --config configs/diagnostics/token_mask_prior_vq_sit_memorize_4.yaml --tokenizer-ckpt /path/to/semantic_mask_vq_tokenizer_balanced.ckpt --scale-lr false --gpus 0
+```
+
+Sample tokenizer code grids and decode them into semantic masks:
+
+```bash
+python scripts/sample_token_mask_prior.py --config configs/token_mask_prior_vq_sit.yaml --ckpt /path/to/token_mask_prior.ckpt --tokenizer-config configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml --tokenizer-ckpt /path/to/semantic_mask_vq_tokenizer_balanced.ckpt --outdir outputs/token_mask_prior_sample/main --n-samples 32 --batch-size 8 --nfe-values 8 4 2 1 --seed 23 --overwrite
+```
+
+Evaluate decoded semantic-mask distribution quality:
+
+```bash
+python scripts/eval_token_mask_prior.py --config configs/token_mask_prior_vq_sit.yaml --ckpt /path/to/token_mask_prior.ckpt --tokenizer-config configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml --tokenizer-ckpt /path/to/semantic_mask_vq_tokenizer_balanced.ckpt --outdir outputs/token_mask_prior_eval/main --n-samples 32 --batch-size 8 --nfe-values 8 4 2 1 --seed 23 --overwrite
+```
+
+Compose the upstream token-code route through the frozen downstream renderer:
+
+```bash
+python scripts/eval_mask_prior_composed_renderer.py --mask-config configs/token_mask_prior_vq_sit.yaml --mask-ckpt /path/to/token_mask_prior.ckpt --mask-tokenizer-config configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml --mask-tokenizer-ckpt /path/to/semantic_mask_vq_tokenizer_balanced.ckpt --renderer-config configs/ablations/latent_alphaflow_mask2image_unet_fullres_pyramid_boundary_encoder.yaml --renderer-ckpt /path/to/mask_conditioned_renderer.ckpt --renderer-tokenizer-config configs/autoencoder_image_lpips_adv_256.yaml --renderer-tokenizer-ckpt /path/to/image_tokenizer.ckpt --teacher-run-dir logs/segmentation_teacher/<winner_run> --label-spec configs/label_specs/remote_semantic.yaml --outdir outputs/token_mask_prior_compose_eval/main --n-samples 32 --mask-nfe-values 8 4 2 1 --renderer-nfe-values 8 4 2 1 --seed 23 --overwrite
+```
+
+Formal evaluation uses explicit checkpoints. These scripts do not silently
+fallback to `last.ckpt` for reporting.
 
 #### Continuous Mask-Only Semantic Tokenizer Control
 
@@ -362,7 +444,7 @@ python scripts/train_latent_meanflow.py --objective alphaflow --config configs/l
 ### Image-Only Tokenizer Path
 
 The project-layer image-only tokenizer is a parallel route for future
-`p(image | mask)` work.
+`p(image | semantic_mask)` work.
 
 Unlike the joint semantic tokenizer:
 
@@ -991,7 +1073,7 @@ Config intent:
 - `configs/autoencoder_semantic_pair_24gb_lpips_256.yaml`: current semantic tokenizer baseline with LPIPS and `64x64x4` latents
 - `configs/autoencoder_semantic_pair_f8_256.yaml`: stronger semantic tokenizer candidate with `32x32x4` latents
 - `configs/autoencoder_semantic_pair_f8_24gb_lpips_256.yaml`: stronger `f=8` tokenizer candidate with LPIPS
-- `configs/autoencoder_image_256.yaml`: project-layer image-only tokenizer baseline with `64x64x4` latents for future `p(image | mask)` work
+- `configs/autoencoder_image_256.yaml`: project-layer image-only tokenizer baseline with `64x64x4` latents for future `p(image | semantic_mask)` work
 - `configs/autoencoder_image_24gb_lpips_256.yaml`: image-only tokenizer baseline with LPIPS and `64x64x4` latents
 - `configs/autoencoder_image_adv_256.yaml`: stronger base-geometry image-only tokenizer with a lightweight patch discriminator and explicit anti-collapse penalty
 - `configs/autoencoder_image_lpips_adv_256.yaml`: recommended stronger base-geometry image-only tokenizer recipe with LPIPS + adversarial + anti-collapse support
@@ -1028,11 +1110,12 @@ The current promoted downstream chain for `p(image | semantic_mask)` is:
 - image-only tokenizer
 - mask-conditioned image renderer
 
-This pinned route does not yet include an unconditional `p(mask)` prior.
-
-The upstream `p(mask)` route is evaluated separately with the fixed protocol in
+The downstream renderer route stays frozen infrastructure. The upstream
+`p(mask)` route is evaluated separately with the fixed protocol in
 [docs/mask_prior_eval_protocol.md](docs/mask_prior_eval_protocol.md), then
-composed into this frozen downstream chain.
+composed into this frozen downstream chain through the token-code mask
+generator baseline in
+[docs/token_mask_prior_mainline.md](docs/token_mask_prior_mainline.md).
 
 The new project-layer SiT-style diffusion baseline keeps that same frozen
 renderer and teacher protocol. It only changes the upstream `p(mask)`

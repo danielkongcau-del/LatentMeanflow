@@ -16,9 +16,10 @@ Current conclusion:
 
 Next mainline:
 
-- `mask-only discrete tokenizer -> token prior`
-- this patch implements the discrete tokenizer half only
-- token prior is still `not implemented yet`
+- `frozen balanced VQ tokenizer -> token-code mask generator`
+- the tokenizer remains frozen infrastructure
+- the first conservative token-code diffusion baseline is now implemented in the
+  project layer
 
 ## Mask-Only Discrete Tokenizer
 
@@ -35,15 +36,15 @@ Why this route exists:
 - the continuous latent prior repeated the old continuous-field failure mode
 - the next variable to change is state semantics, not another continuous
   objective
-- token prior comes after tokenizer reconstruction passes
+- tokenizer reconstruction was strong enough to freeze and hand off to the next
+  upstream generator stage
 
-This patch does **not** implement:
+The current mainline still does **not** implement:
 
-- token prior
 - token autoregressive prior
-- token-level discrete diffusion prior
+- class-conditional token prior
 - any new continuous latent prior
-- image branch coupling
+- joint image+mask generation
 - structural auxiliary losses
 
 The discrete-tokenizer half now has checked-in project-layer files:
@@ -72,6 +73,16 @@ Current tokenizer geometry:
 - high-fidelity overfit codebook size: `1024`
 
 Current promoted main config:
+
+- `configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml`
+- balanced quantizer path:
+  cosine matching + EMA codebook update + dead-code refresh
+- balanced loss path:
+  train-set scanned class-balanced CE
+- checkpoint monitor:
+  `val/mask_ce_unweighted`
+
+Stable fallback config:
 
 - `configs/semantic_mask_vq_tokenizer_main_stable_256.yaml`
 - stable quantizer path:
@@ -199,8 +210,12 @@ The VQ reconstruction eval also exports class diagnostics:
 - `analysis/worst_miou_panel/`
 - `analysis/worst_per_class_panel/`
 
-These commands evaluate reconstruction only. They do **not** evaluate
-unconditional generation because the token prior is still `not implemented yet`.
+These commands evaluate reconstruction only. Unconditional generation is now
+evaluated separately through the token-code mask-generator scripts:
+
+- `scripts/train_token_mask_prior.py`
+- `scripts/sample_token_mask_prior.py`
+- `scripts/eval_token_mask_prior.py`
 
 ## Compared Routes
 

@@ -81,6 +81,14 @@ class SemanticTokenizerAdapter(torch.nn.Module):
         return int(self.tokenizer.num_classes)
 
     @property
+    def codebook_size(self):
+        if not hasattr(self.tokenizer, "codebook_size"):
+            raise AttributeError(
+                f"Tokenizer '{self.tokenizer.__class__.__name__}' does not expose codebook_size."
+            )
+        return int(self.tokenizer.codebook_size)
+
+    @property
     def latent_channels(self):
         return int(self.tokenizer.latent_channels)
 
@@ -91,14 +99,34 @@ class SemanticTokenizerAdapter(torch.nn.Module):
     def latent_shape(self, batch_size):
         return (int(batch_size), self.latent_channels, *self.latent_spatial_shape)
 
+    def _resolve_latent_key(self, outputs):
+        if "z" in outputs:
+            return "z"
+        if "z_q" in outputs:
+            return "z_q"
+        raise KeyError(
+            "Tokenizer encode_batch() must return either 'z' or 'z_q' so downstream routes can resolve the latent view."
+        )
+
     def encode_batch(self, batch, sample_posterior=False):
         with self._maybe_no_grad():
             outputs = self.tokenizer.encode_batch(batch, sample_posterior=sample_posterior)
+        latent_key = self._resolve_latent_key(outputs)
         if not self.trainable:
-            outputs["z"] = outputs["z"].detach()
+            outputs[latent_key] = outputs[latent_key].detach()
+        outputs["z"] = outputs[latent_key]
         return outputs
 
     def decode_latents(self, z):
         with self._maybe_no_grad():
             outputs = self.tokenizer.decode_latents(z)
+        return outputs
+
+    def decode_codes(self, codes):
+        if not hasattr(self.tokenizer, "decode_codes"):
+            raise AttributeError(
+                f"Tokenizer '{self.tokenizer.__class__.__name__}' does not support decode_codes()."
+            )
+        with self._maybe_no_grad():
+            outputs = self.tokenizer.decode_codes(codes)
         return outputs

@@ -20,9 +20,10 @@ Current conclusion:
 
 Next mainline:
 
-- `mask-only discrete tokenizer -> token prior`
-- this patch implements the discrete tokenizer half only
-- token prior is still `not implemented yet`
+- `frozen balanced VQ tokenizer -> token-code mask generator`
+- the tokenizer is frozen and decoded only as infrastructure
+- the first conservative token-code diffusion baseline is now implemented in the
+  project layer
 
 ## Mask-Only Discrete Tokenizer Mainline
 
@@ -41,15 +42,17 @@ failed:
 - direct pixel-space discrete prior failed at `memorize_4`
 - frozen continuous latent prior repeated the same failure mode in continuous
   latent space
+- therefore the next variable to change was state semantics, not another
+  continuous objective
 
-This patch does **not** implement:
+The current mainline does **not** yet implement:
 
-- token prior
 - token autoregressive prior
-- token-level discrete diffusion prior
+- class-conditional token prior
 - any new continuous latent prior
-- image branch coupling
+- joint image+mask generation
 - boundary / area / adjacency / topology auxiliary losses
+- renderer architecture changes
 
 ## Discrete Tokenizer Deliverables
 
@@ -68,33 +71,49 @@ Project-layer files for the discrete tokenizer baseline:
 - `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_4_hifi_256.yaml`
 - `tests/test_semantic_mask_vq_tokenizer_smoke.py`
 
-This route deliberately stays tokenizer-only:
+Tokenizer reconstruction remains a separate stage from unconditional generation.
+The checked-in upstream token-code generator layer is:
 
-- no token prior is implemented in this patch
-- no generation evaluation is claimed in this patch
+- `latent_meanflow/trainers/token_mask_prior_trainer.py`
+- `scripts/train_token_mask_prior.py`
+- `scripts/sample_token_mask_prior.py`
+- `scripts/eval_token_mask_prior.py`
+- `configs/token_mask_prior_vq_sit_tiny.yaml`
+- `configs/token_mask_prior_vq_sit.yaml`
+- `configs/diagnostics/token_mask_prior_vq_sit_memorize_1.yaml`
+- `configs/diagnostics/token_mask_prior_vq_sit_memorize_4.yaml`
+- `tests/test_token_mask_prior_smoke.py`
 
-## Route Definition
+## Current Mainline Route Definition
 
-This document defines a new project-layer baseline for unconditional semantic-mask generation:
+The current promoted upstream project-layer baseline for unconditional
+semantic-mask generation is:
 
 - route: `p(semantic_mask)`
 - task type: unconditional multi-class semantic layout generation
-- representation: direct `mask_onehot` field during training, `argmax` back to `mask_index` at sampling
+- representation:
+  tokenizer code indices during training and sampling
+- decode contract:
+  sampled code grid -> frozen tokenizer decode -> `semantic_mask`
 
 This route is explicitly separate from the current renderer route:
 
 - `p(mask)` models semantic layout by itself
-- `p(image | mask)` renders an image conditioned on a semantic mask
+- `p(image | semantic_mask)` renders an image conditioned on a semantic mask
 
 The current project decomposition is therefore:
 
-`p(mask) + p(image | mask)`
+`p(mask) + p(image | semantic_mask)`
 
-This document does **not** redefine the current renderer mathematics. It adds a new upstream route in parallel.
+This document does **not** redefine the current renderer mathematics. It keeps
+the downstream renderer frozen and adds the token-code upstream route in
+parallel.
 
-## Why This First Baseline Is Conservative
+## Historical Direct Pixel-Space Control
 
-The first `p(mask)` baseline intentionally does **not** use a mask tokenizer.
+The original direct pixel-space `p(mask)` baseline intentionally did **not** use
+a mask tokenizer. That route remains checked in as a control, not as the
+promoted mainline.
 
 Reasons:
 
@@ -106,12 +125,13 @@ Reasons:
    - thin structures missing
    - collapse or fragmentation under low NFE
 
-The first `p(mask)` baseline also intentionally does **not** model `p(image, mask)` jointly.
+The original direct pixel-space control also intentionally did **not** model
+`p(image, mask)` jointly.
 
 Reasons:
 
 1. Joint modeling would re-couple mask generation with image appearance, making it harder to locate the actual failure source.
-2. The project already has a validated `p(image | mask)` route, so the more natural next step is to solve the missing upstream factor by itself.
+2. The project already has a validated `p(image | semantic_mask)` route, so the more natural next step is to solve the missing upstream factor by itself.
 3. The project goal is now operationally decomposed, not fused.
 
 ## Legacy Baseline Design
@@ -430,14 +450,14 @@ python scripts/eval_semantic_mask_tokenizer.py \
 
 ## Discrete Tokenizer Route
 
-This is the current upstream mainline:
+This tokenizer route is the frozen front half of the current upstream mainline:
 
 - task: reconstruct `semantic_mask`
 - representation during tokenizer training:
   - encoder feature map -> discrete code indices
   - code indices -> quantized embeddings -> decoder
 - no image branch
-- no token prior
+- token-code prior is a separate upstream stage
 - no latent continuous prior
 
 The frozen-tokenizer continuous latent prior remains checked in only as a
@@ -449,6 +469,7 @@ Checked-in configs:
 - `configs/semantic_mask_vq_tokenizer_tiny_256.yaml`
 - `configs/semantic_mask_vq_tokenizer_main_256.yaml`
 - `configs/semantic_mask_vq_tokenizer_main_stable_256.yaml`
+- `configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml`
 - `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_1_256.yaml`
 - `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_4_256.yaml`
 - `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_1_hifi_256.yaml`

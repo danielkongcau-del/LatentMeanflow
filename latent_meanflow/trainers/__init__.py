@@ -7,6 +7,7 @@ from .mask_conditioned_image_trainer import (
     MaskConditionedLatentFlowTrainer,
 )
 from .semantic_mask_latent_prior_trainer import SemanticMaskLatentPriorTrainer
+from .token_mask_prior_trainer import TokenMaskPriorTrainer
 
 __all__ = [
     "DiscreteMaskPriorTrainer",
@@ -16,4 +17,5 @@ __all__ = [
     "MaskConditionedLatentFMTrainer",
     "MaskConditionedLatentFlowTrainer",
     "SemanticMaskLatentPriorTrainer",
+    "TokenMaskPriorTrainer",
 ]
