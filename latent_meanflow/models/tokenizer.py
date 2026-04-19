@@ -226,7 +226,7 @@ class SemanticTokenizerAdapter(torch.nn.Module):
         decoded["z_q"] = distribution["z_q"]
         return decoded
 
-    def semantic_auxiliary_losses(self, *, mask_logits, mask_index):
+    def semantic_auxiliary_losses(self, *, mask_logits, mask_index, use_class_weights=False):
         loss_module = getattr(self.tokenizer, "loss", None)
         if loss_module is None:
             raise AttributeError(
@@ -241,7 +241,7 @@ class SemanticTokenizerAdapter(torch.nn.Module):
                 "CE/Dice helpers required for auxiliary supervision."
             )
         return {
-            "semantic_ce": cross_entropy_fn(mask_logits, mask_index, use_class_weights=False),
+            "semantic_ce": cross_entropy_fn(mask_logits, mask_index, use_class_weights=bool(use_class_weights)),
             "semantic_dice": dice_fn(mask_logits, mask_index),
         }
 

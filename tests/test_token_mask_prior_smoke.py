@@ -67,8 +67,18 @@ def _make_tokenizer_model():
     )
 
 
-def _write_tokenizer_artifacts(tmpdir):
+def _write_tokenizer_artifacts(tmpdir, *, loss_extra_params=None):
     tokenizer = _make_tokenizer_model()
+    loss_params = {
+        "mask_ce_weight": 1.0,
+        "mask_dice_weight": 0.0,
+        "mask_focal_weight": 0.0,
+        "vq_codebook_weight": 1.0,
+        "vq_commit_weight": 0.25,
+        "ignore_index": -1,
+    }
+    if loss_extra_params is not None:
+        loss_params.update(loss_extra_params)
     config = OmegaConf.create(
         {
             "model": {
@@ -79,14 +89,7 @@ def _write_tokenizer_artifacts(tmpdir):
                     "num_classes": 4,
                     "lossconfig": {
                         "target": "latent_meanflow.models.semantic_mask_vq_autoencoder.SemanticMaskVQLoss",
-                        "params": {
-                            "mask_ce_weight": 1.0,
-                            "mask_dice_weight": 0.0,
-                            "mask_focal_weight": 0.0,
-                            "vq_codebook_weight": 1.0,
-                            "vq_commit_weight": 0.25,
-                            "ignore_index": -1,
-                        },
+                        "params": loss_params,
                     },
                     "quantizer_config": {
                         "distance_metric": "cosine",
@@ -144,6 +147,7 @@ def _make_prior_trainer(
     tokenizer_ckpt_path,
     token_spatial_shape,
     semantic_ce_weight=0.2,
+    semantic_ce_use_class_weights=False,
     semantic_dice_weight=0.1,
     boundary_loss_weight=0.05,
     area_ratio_loss_weight=0.05,
@@ -193,6 +197,7 @@ def _make_prior_trainer(
         freeze_tokenizer=True,
         tokenizer_sample_posterior=False,
         semantic_ce_weight=semantic_ce_weight,
+        semantic_ce_use_class_weights=semantic_ce_use_class_weights,
         semantic_dice_weight=semantic_dice_weight,
         boundary_loss_weight=boundary_loss_weight,
         area_ratio_loss_weight=area_ratio_loss_weight,
@@ -304,6 +309,36 @@ class TokenMaskPriorSmokeTest(unittest.TestCase):
             self.assertGreater(float(trainer.objective.class_counts.sum().item()), 0.0)
             self.assertEqual(int(trainer.objective.class_weights.numel()), codebook_size)
             self.assertFalse(bool(trainer.objective.needs_class_count_scan()))
+
+    def test_token_mask_prior_on_fit_start_configures_tokenizer_semantic_class_balance(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path, ckpt_path, token_spatial_shape, _ = _write_tokenizer_artifacts(
+                tmpdir,
+                loss_extra_params={"class_balance_mode": "inverse_sqrt_frequency"},
+            )
+            trainer = _make_prior_trainer(
+                tokenizer_config_path=config_path,
+                tokenizer_ckpt_path=ckpt_path,
+                token_spatial_shape=token_spatial_shape,
+                semantic_ce_use_class_weights=True,
+            )
+            trainer._trainer = SimpleNamespace(
+                datamodule=SimpleNamespace(datasets={"train": _make_dataset_samples()}),
+                is_global_zero=True,
+                global_rank=0,
+                world_size=1,
+                max_epochs=1,
+                estimated_stepping_batches=1,
+            )
+
+            trainer.on_fit_start()
+
+            tokenizer_loss = trainer.tokenizer.tokenizer.loss
+            self.assertEqual(int(tokenizer_loss.class_counts.numel()), trainer.num_classes)
+            self.assertGreater(float(tokenizer_loss.class_counts.sum().item()), 0.0)
+            self.assertEqual(int(tokenizer_loss.class_weights.numel()), trainer.num_classes)
+            self.assertFalse(bool(tokenizer_loss.needs_class_count_scan()))
+            self.assertFalse(bool(torch.allclose(tokenizer_loss.class_weights, torch.ones_like(tokenizer_loss.class_weights))))
 
     def test_soft_decode_bridge_backpropagates_to_code_logits_only(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -430,6 +465,7 @@ class TokenMaskPriorSmokeTest(unittest.TestCase):
             self.assertAlmostEqual(float(objective_params.full_mask_batch_fraction), 0.25)
             self.assertAlmostEqual(float(objective_params.high_mask_batch_fraction), 0.50)
             self.assertAlmostEqual(float(objective_params.high_mask_min_ratio), 0.85)
+            self.assertEqual(str(objective_params.class_balance_mode), "inverse_sqrt_frequency")
             self.assertEqual(str(sampler_params.refinement_mode), "remask_low_confidence")
             self.assertTrue(bool(sampler_params.final_full_reveal))
             self.assertAlmostEqual(float(sampler_params.min_keep_fraction), 0.0)
@@ -439,6 +475,7 @@ class TokenMaskPriorSmokeTest(unittest.TestCase):
         for config_path in config_paths:
             config = OmegaConf.load(config_path)
             self.assertAlmostEqual(float(config.model.params.semantic_ce_weight), 0.2)
+            self.assertTrue(bool(config.model.params.semantic_ce_use_class_weights))
             self.assertAlmostEqual(float(config.model.params.semantic_dice_weight), 0.1)
             self.assertAlmostEqual(float(config.model.params.boundary_loss_weight), 0.05)
             self.assertAlmostEqual(float(config.model.params.area_ratio_loss_weight), 0.05)
@@ -513,9 +550,11 @@ class TokenMaskPriorSmokeTest(unittest.TestCase):
             self.assertEqual(int(backbone_params.hidden_size), expected["hidden_size"])
             self.assertEqual(int(backbone_params.depth), expected["depth"])
             self.assertEqual(int(backbone_params.num_heads), expected["num_heads"])
+            self.assertEqual(str(config.model.params.objective_config.params.class_balance_mode), "inverse_sqrt_frequency")
             self.assertEqual(str(sampler_params.refinement_mode), "remask_low_confidence")
             self.assertAlmostEqual(float(sampler_params.min_keep_fraction), 0.0)
             self.assertAlmostEqual(float(config.model.params.semantic_ce_weight), 0.2)
+            self.assertTrue(bool(config.model.params.semantic_ce_use_class_weights))
             self.assertAlmostEqual(float(config.model.params.semantic_dice_weight), 0.1)
             self.assertAlmostEqual(float(config.model.params.boundary_loss_weight), 0.05)
             self.assertAlmostEqual(float(config.model.params.area_ratio_loss_weight), 0.05)
@@ -542,9 +581,11 @@ class TokenMaskPriorSmokeTest(unittest.TestCase):
             self.assertAlmostEqual(float(objective_params.full_mask_batch_fraction), 0.25)
             self.assertAlmostEqual(float(objective_params.high_mask_batch_fraction), 0.50)
             self.assertAlmostEqual(float(objective_params.high_mask_min_ratio), 0.85)
+            self.assertEqual(str(objective_params.class_balance_mode), "inverse_sqrt_frequency")
             self.assertEqual(str(sampler_params.refinement_mode), "proposal_visible_refine")
             self.assertAlmostEqual(float(sampler_params.min_keep_fraction), 0.15)
             self.assertAlmostEqual(float(sampler_params.lock_noise_scale), 0.10)
+            self.assertTrue(bool(config.model.params.semantic_ce_use_class_weights))
 
     def test_memorize_config_uses_fixed_subset(self):
         config = OmegaConf.load(

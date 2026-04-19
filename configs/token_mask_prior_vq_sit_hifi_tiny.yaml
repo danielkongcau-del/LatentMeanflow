@@ -11,6 +11,7 @@ model:
     freeze_tokenizer: true
     tokenizer_sample_posterior: false
     semantic_ce_weight: 0.2
+    semantic_ce_use_class_weights: true
     semantic_dice_weight: 0.1
     boundary_loss_weight: 0.05
     area_ratio_loss_weight: 0.05
@@ -32,6 +33,7 @@ model:
       params:
         time_eps: 1.0e-3
         loss_type: cross_entropy
+        class_balance_mode: inverse_sqrt_frequency
         mask_schedule: linear
         corruption_mode: exact_count
         full_mask_batch_fraction: 0.25

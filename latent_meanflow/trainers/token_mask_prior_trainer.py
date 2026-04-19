@@ -32,6 +32,7 @@ class TokenMaskPriorTrainer(pl.LightningModule):
         freeze_tokenizer=True,
         tokenizer_sample_posterior=False,
         semantic_ce_weight=0.0,
+        semantic_ce_use_class_weights=False,
         semantic_dice_weight=0.0,
         boundary_loss_weight=0.0,
         area_ratio_loss_weight=0.0,
@@ -72,6 +73,7 @@ class TokenMaskPriorTrainer(pl.LightningModule):
         self.tokenizer_config_path = str(tokenizer_config_path)
         self.tokenizer_ckpt_path = str(tokenizer_ckpt_path)
         self.semantic_ce_weight = float(semantic_ce_weight)
+        self.semantic_ce_use_class_weights = bool(semantic_ce_use_class_weights)
         self.semantic_dice_weight = float(semantic_dice_weight)
         self.boundary_loss_weight = float(boundary_loss_weight)
         self.area_ratio_loss_weight = float(area_ratio_loss_weight)
@@ -259,6 +261,36 @@ class TokenMaskPriorTrainer(pl.LightningModule):
             )
         return batch
 
+    def _scan_train_semantic_class_counts(self):
+        dataset = self._get_train_dataset()
+        dataset_length = int(len(dataset))
+        counts = torch.zeros(self.num_classes, dtype=torch.float64)
+        self._log_info(
+            "[TokenMaskPriorTrainer] "
+            f"scanning train semantic class counts for tokenizer CE over {dataset_length} samples"
+        )
+        progress_stride = max(min(dataset_length // 4, 500), 100)
+        for sample_idx in range(dataset_length):
+            sample = dataset[sample_idx]
+            if self.mask_index_key not in sample:
+                raise KeyError(
+                    "TokenMaskPriorTrainer semantic class-count scan requires train dataset samples to include "
+                    f"'{self.mask_index_key}'."
+                )
+            mask_index = self._prepare_metric_mask_index(sample[self.mask_index_key]).view(-1)
+            if self.ignore_index is not None:
+                mask_index = mask_index[mask_index != int(self.ignore_index)]
+            if int(mask_index.numel()) <= 0:
+                continue
+            bincount = torch.bincount(mask_index.clamp(min=0), minlength=self.num_classes)
+            counts += bincount[: self.num_classes].to(dtype=counts.dtype)
+            if (sample_idx + 1) % progress_stride == 0 or (sample_idx + 1) == dataset_length:
+                self._log_info(
+                    "[TokenMaskPriorTrainer] "
+                    f"semantic class-count scan progress {sample_idx + 1}/{dataset_length}"
+                )
+        return counts
+
     def _scan_train_code_counts(self):
         dataset = self._get_train_dataset()
         dataset_length = int(len(dataset))
@@ -286,27 +318,74 @@ class TokenMaskPriorTrainer(pl.LightningModule):
                 )
         return counts
 
-    def _broadcast_class_counts(self, class_counts, *, scan_failed=False):
+    def _broadcast_count_vector(self, counts, *, vector_length, scan_failed=False, failure_message):
         device = self.device if isinstance(self.device, torch.device) else torch.device("cpu")
         if device.type not in {"cpu", "cuda"}:
             device = torch.device("cpu")
         status_tensor = torch.ones(1, dtype=torch.int64, device=device)
-        counts_tensor = torch.zeros(self.codebook_size, dtype=torch.float64, device=device)
+        counts_tensor = torch.zeros(vector_length, dtype=torch.float64, device=device)
         if scan_failed:
             status_tensor.zero_()
-        elif class_counts is not None:
-            counts_tensor.copy_(class_counts.to(device=device, dtype=torch.float64))
+        elif counts is not None:
+            counts_tensor.copy_(counts.to(device=device, dtype=torch.float64))
         if dist.is_available() and dist.is_initialized():
             dist.broadcast(status_tensor, src=0)
             if int(status_tensor.item()) == 0:
-                raise RuntimeError(
-                    "TokenMaskPriorTrainer code-count scan failed on global rank 0. "
-                    "See the rank-0 traceback above."
-                )
+                raise RuntimeError(failure_message)
             dist.broadcast(counts_tensor, src=0)
         elif int(status_tensor.item()) == 0:
-            raise RuntimeError("TokenMaskPriorTrainer code-count scan failed.")
+            raise RuntimeError(failure_message)
         return counts_tensor.cpu().to(dtype=torch.float32)
+
+    def _get_tokenizer_loss_module(self):
+        return getattr(self.tokenizer.tokenizer, "loss", None)
+
+    def _maybe_configure_tokenizer_loss_class_balance(self):
+        if not self.semantic_ce_use_class_weights:
+            return
+
+        loss_module = self._get_tokenizer_loss_module()
+        configure_class_balance = getattr(loss_module, "configure_class_balance", None)
+        needs_class_count_scan = getattr(loss_module, "needs_class_count_scan", None)
+        if not callable(configure_class_balance) or not callable(needs_class_count_scan):
+            return
+        if not bool(needs_class_count_scan()):
+            return
+
+        class_counts = None
+        scan_failed = False
+        if self._is_global_zero():
+            try:
+                class_counts = self._scan_train_semantic_class_counts()
+            except Exception:
+                scan_failed = True
+                print("[TokenMaskPriorTrainer] tokenizer semantic class-count scan failed on global rank 0.", flush=True)
+                traceback.print_exc()
+        class_counts = self._broadcast_count_vector(
+            class_counts,
+            vector_length=self.num_classes,
+            scan_failed=scan_failed,
+            failure_message=(
+                "TokenMaskPriorTrainer tokenizer semantic class-count scan failed on global rank 0. "
+                "See the rank-0 traceback above."
+            ),
+        )
+        configure_class_balance(class_counts)
+        class_weight_summary = getattr(loss_module, "class_weight_summary", None)
+        weight_summary = class_weight_summary() if callable(class_weight_summary) else None
+        summary_text = ""
+        if isinstance(weight_summary, dict):
+            summary_text = (
+                ", "
+                f"class_weight_min={float(weight_summary['class_weight_min']):.4f}, "
+                f"class_weight_max={float(weight_summary['class_weight_max']):.4f}, "
+                f"class_weight_mean={float(weight_summary['class_weight_mean']):.4f}"
+            )
+        self._log_info(
+            "[TokenMaskPriorTrainer] "
+            f"tokenizer_semantic_class_balance_mode={getattr(loss_module, 'class_balance_mode', 'none')}, "
+            f"class_counts={class_counts.tolist()}{summary_text}"
+        )
 
     def _maybe_configure_objective_class_balance(self):
         configure_class_balance = getattr(self.objective, "configure_class_balance", None)
@@ -325,7 +404,15 @@ class TokenMaskPriorTrainer(pl.LightningModule):
                 scan_failed = True
                 print("[TokenMaskPriorTrainer] code-count scan failed on global rank 0.", flush=True)
                 traceback.print_exc()
-        class_counts = self._broadcast_class_counts(class_counts, scan_failed=scan_failed)
+        class_counts = self._broadcast_count_vector(
+            class_counts,
+            vector_length=self.codebook_size,
+            scan_failed=scan_failed,
+            failure_message=(
+                "TokenMaskPriorTrainer code-count scan failed on global rank 0. "
+                "See the rank-0 traceback above."
+            ),
+        )
         configure_class_balance(class_counts)
         self._log_info(
             "[TokenMaskPriorTrainer] "
@@ -370,6 +457,7 @@ class TokenMaskPriorTrainer(pl.LightningModule):
     def on_fit_start(self):
         super().on_fit_start()
         self._configure_objective_training_budget()
+        self._maybe_configure_tokenizer_loss_class_balance()
         self._maybe_configure_objective_class_balance()
         self._log_info(
             "[TokenMaskPriorTrainer] "
@@ -377,6 +465,7 @@ class TokenMaskPriorTrainer(pl.LightningModule):
             f"codebook_size={self.codebook_size}, token_spatial_shape={self.token_spatial_shape}, "
             f"mask_spatial_shape={self.mask_spatial_shape}, objective={self.objective_name}, "
             f"semantic_ce_weight={self.semantic_ce_weight:.3f}, "
+            f"semantic_ce_use_class_weights={self.semantic_ce_use_class_weights}, "
             f"semantic_dice_weight={self.semantic_dice_weight:.3f}, "
             f"boundary_loss_weight={self.boundary_loss_weight:.3f}, "
             f"area_ratio_loss_weight={self.area_ratio_loss_weight:.3f}, "
@@ -441,6 +530,8 @@ class TokenMaskPriorTrainer(pl.LightningModule):
     def _prepare_metric_mask_index(self, mask_index):
         if not isinstance(mask_index, torch.Tensor):
             mask_index = torch.as_tensor(mask_index)
+        if mask_index.ndim == 2:
+            mask_index = mask_index.unsqueeze(0)
         if mask_index.ndim == 4 and int(mask_index.shape[1]) == 1:
             mask_index = mask_index[:, 0]
         if mask_index.ndim != 3:
@@ -505,6 +596,7 @@ class TokenMaskPriorTrainer(pl.LightningModule):
         semantic_losses = self.tokenizer.semantic_auxiliary_losses(
             mask_logits=decoded["mask_logits"],
             mask_index=mask_index,
+            use_class_weights=self.semantic_ce_use_class_weights,
         )
         semantic_aux_total = (
             self.semantic_ce_weight * semantic_losses["semantic_ce"]
