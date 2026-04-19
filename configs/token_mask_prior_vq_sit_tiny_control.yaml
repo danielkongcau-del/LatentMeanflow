@@ -2,14 +2,7 @@ model:
   base_learning_rate: 1.0e-4
   target: latent_meanflow.trainers.token_mask_prior_trainer.TokenMaskPriorTrainer
   params:
-    # Main project-layer p(code_indices) baseline on top of the frozen balanced discrete VQ tokenizer.
-    #
-    # Route contract:
-    # - task: unconditional tokenizer-code generation
-    # - state object: discrete tokenizer code indices with an absorbing MASK token
-    # - frozen tokenizer decode converts sampled code grids back into semantic_mask
-    # - downstream p(image | semantic_mask) renderer stays frozen infrastructure
-    # - mainline sampler semantics: proposal-visible refinement
+    # Tiny/debug old control baseline before the proposal-visible refinement upgrade.
     objective_name: discrete_mask_diffusion
     monitor: val/base_error_mean
     tokenizer_config_path: configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml
@@ -27,9 +20,9 @@ model:
       params:
         input_size: [64, 64]
         patch_size: 2
-        hidden_size: 384
-        depth: 12
-        num_heads: 6
+        hidden_size: 256
+        depth: 8
+        num_heads: 4
         mlp_ratio: 4.0
         time_conditioning: t
         time_embed_dim: 256
@@ -39,10 +32,6 @@ model:
         time_eps: 1.0e-3
         loss_type: cross_entropy
         mask_schedule: linear
-        corruption_mode: exact_count
-        full_mask_batch_fraction: 0.25
-        high_mask_batch_fraction: 0.50
-        high_mask_min_ratio: 0.85
         min_mask_ratio: 0.0
         max_mask_ratio: 1.0
     sampler_config:
@@ -50,20 +39,20 @@ model:
       params:
         default_nfe: 8
         mask_schedule: linear
-        refinement_mode: proposal_visible_refine
+        refinement_mode: progressive_reveal
         final_full_reveal: true
-        min_keep_fraction: 0.15
+        min_keep_fraction: 0.0
         min_mask_ratio: 0.0
         max_mask_ratio: 1.0
         reveal_noise_scale: 0.15
-        lock_noise_scale: 0.10
+        lock_noise_scale: 0.15
         sample_temperature: 1.0
 
 data:
   target: main.DataModuleFromConfig
   params:
-    batch_size: 4
-    num_workers: 4
+    batch_size: 2
+    num_workers: 0
     wrap: false
     train:
       target: latent_meanflow.data.semantic_mask.MultiSemanticMaskDataset
@@ -92,14 +81,17 @@ lightning:
       target: latent_meanflow.callbacks.semantic_logger.SemanticPairImageLogger
       params:
         disabled: false
-        batch_frequency: 100
+        batch_frequency: 10
         increase_log_steps: false
         max_images: 4
         latest_only: true
         ignore_index: -1
   trainer:
     benchmark: false
-    max_epochs: 300
+    max_epochs: 200
+    limit_train_batches: 32
+    limit_val_batches: 4
     num_sanity_val_steps: 0
+    log_every_n_steps: 1
     accumulate_grad_batches: 1
     strategy: ddp_find_unused_parameters_false

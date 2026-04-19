@@ -277,6 +277,8 @@ Checked-in project-layer token-generator files:
 - `scripts/eval_token_mask_prior.py`
 - `configs/token_mask_prior_vq_sit_tiny.yaml`
 - `configs/token_mask_prior_vq_sit.yaml`
+- `configs/token_mask_prior_vq_sit_tiny_control.yaml`
+- `configs/token_mask_prior_vq_sit_control.yaml`
 - `configs/diagnostics/token_mask_prior_vq_sit_memorize_1.yaml`
 - `configs/diagnostics/token_mask_prior_vq_sit_memorize_4.yaml`
 - `tests/test_token_mask_prior_smoke.py`
@@ -289,6 +291,23 @@ Route contract:
 - the modeled discrete state is tokenizer code id, not raw semantic class id
 - the absorbing `MASK` token is reserved at `codebook_size`
 
+Current promoted refine mainline:
+
+- `configs/token_mask_prior_vq_sit.yaml`
+- `configs/token_mask_prior_vq_sit_tiny.yaml`
+- objective side:
+  `corruption_mode=exact_count` with scheduled `full_mask_batch_fraction` and
+  `high_mask_batch_fraction`
+- sampler side:
+  `refinement_mode=proposal_visible_refine` with explicit reveal / lock noise
+  controls
+
+Old control configs kept for apples-to-apples comparison:
+
+- `configs/token_mask_prior_vq_sit_control.yaml`
+- `configs/token_mask_prior_vq_sit_tiny_control.yaml`
+- keep the earlier progressive-reveal semantics as the control route
+
 Train the tiny token-code mask-generator pilot:
 
 ```bash
@@ -299,6 +318,12 @@ Train the main token-code mask-generator baseline:
 
 ```bash
 python scripts/train_token_mask_prior.py --config configs/token_mask_prior_vq_sit.yaml --tokenizer-ckpt /path/to/semantic_mask_vq_tokenizer_balanced.ckpt --scale-lr true --gpus 0
+```
+
+Train the old progressive-reveal control baseline:
+
+```bash
+python scripts/train_token_mask_prior.py --config configs/token_mask_prior_vq_sit_control.yaml --tokenizer-ckpt /path/to/semantic_mask_vq_tokenizer_balanced.ckpt --scale-lr true --gpus 0
 ```
 
 Run the decisive tiny-bank memorize diagnostics:
@@ -328,7 +353,10 @@ python scripts/eval_mask_prior_composed_renderer.py --mask-config configs/token_
 ```
 
 Formal evaluation uses explicit checkpoints. These scripts do not silently
-fallback to `last.ckpt` for reporting.
+fallback to `last.ckpt` for reporting. Sample and eval summaries now also write
+route metadata such as `refinement_mode`, `corruption_mode`, and the reveal /
+lock-noise settings so refine runs and progressive-reveal controls stay
+distinguishable at the output-directory level.
 
 #### Continuous Mask-Only Semantic Tokenizer Control
 

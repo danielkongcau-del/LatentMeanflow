@@ -83,6 +83,11 @@ python scripts/eval_token_mask_prior.py \
   --overwrite
 ```
 
+For the current promoted refine mainline, keep
+`configs/token_mask_prior_vq_sit.yaml`. For the old progressive-reveal control,
+swap only the config path to `configs/token_mask_prior_vq_sit_control.yaml`
+while keeping the same frozen balanced tokenizer contract.
+
 To evaluate the older direct pixel-space AlphaFlow control baseline, use the
 legacy evaluator:
 
@@ -134,6 +139,11 @@ Outputs for the token-code mainline:
 - `summary.csv`
 - `summary.md`
 
+The token-code summaries also record route metadata such as
+`refinement_mode`, `corruption_mode`, `final_full_reveal`, and the reveal /
+lock-noise settings so refine runs and progressive-reveal controls remain
+separable during reporting.
+
 ## Compose-To-Image Metrics Answer What
 
 Compose metrics answer:
@@ -180,6 +190,10 @@ python scripts/eval_mask_prior_composed_renderer.py \
   --seed 23 \
   --overwrite
 ```
+
+Again, use `configs/token_mask_prior_vq_sit.yaml` for the promoted refine
+mainline and `configs/token_mask_prior_vq_sit_control.yaml` for the old
+progressive-reveal control.
 
 The same compose evaluator also applies to the older direct pixel-space
 AlphaFlow control baseline by swapping only `--mask-config` and `--mask-ckpt`

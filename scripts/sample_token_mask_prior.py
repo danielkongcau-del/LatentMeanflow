@@ -76,6 +76,83 @@ def apply_tokenizer_overrides(config, *, tokenizer_config, tokenizer_ckpt):
     return config
 
 
+def extract_token_mask_prior_route_metadata(*, config, model=None):
+    objective_cfg = OmegaConf.select(config, "model.params.objective_config.params", default={}) or {}
+    sampler_cfg = OmegaConf.select(config, "model.params.sampler_config.params", default={}) or {}
+    route = {
+        "corruption_mode": str(objective_cfg.get("corruption_mode", "bernoulli")),
+        "full_mask_batch_fraction": float(objective_cfg.get("full_mask_batch_fraction", 0.0)),
+        "high_mask_batch_fraction": float(objective_cfg.get("high_mask_batch_fraction", 0.0)),
+        "high_mask_min_ratio": float(objective_cfg.get("high_mask_min_ratio", 0.0)),
+        "refinement_mode": str(sampler_cfg.get("refinement_mode", "progressive_reveal")),
+        "final_full_reveal": bool(sampler_cfg.get("final_full_reveal", True)),
+        "min_keep_fraction": float(sampler_cfg.get("min_keep_fraction", 0.0)),
+        "lock_noise_scale": float(sampler_cfg.get("lock_noise_scale", sampler_cfg.get("reveal_noise_scale", 0.0))),
+        "reveal_noise_scale": float(sampler_cfg.get("reveal_noise_scale", 0.0)),
+        "sample_temperature": float(sampler_cfg.get("sample_temperature", 1.0)),
+    }
+    if model is not None:
+        sampler = getattr(model, "sampler", None)
+        objective = getattr(model, "objective", None)
+        if sampler is not None:
+            route["refinement_mode"] = str(getattr(sampler, "refinement_mode", route["refinement_mode"]))
+            route["final_full_reveal"] = bool(getattr(sampler, "final_full_reveal", route["final_full_reveal"]))
+            route["min_keep_fraction"] = float(getattr(sampler, "min_keep_fraction", route["min_keep_fraction"]))
+            route["lock_noise_scale"] = float(getattr(sampler, "lock_noise_scale", route["lock_noise_scale"]))
+            route["reveal_noise_scale"] = float(getattr(sampler, "reveal_noise_scale", route["reveal_noise_scale"]))
+            route["sample_temperature"] = float(getattr(sampler, "sample_temperature", route["sample_temperature"]))
+        if objective is not None:
+            route["corruption_mode"] = str(getattr(objective, "corruption_mode", route["corruption_mode"]))
+            route["full_mask_batch_fraction"] = float(
+                getattr(objective, "full_mask_batch_fraction", route["full_mask_batch_fraction"])
+            )
+            route["high_mask_batch_fraction"] = float(
+                getattr(objective, "high_mask_batch_fraction", route["high_mask_batch_fraction"])
+            )
+            route["high_mask_min_ratio"] = float(
+                getattr(objective, "high_mask_min_ratio", route["high_mask_min_ratio"])
+            )
+    return route
+
+
+def _write_markdown_report(path, summary):
+    route = summary.get("route_metadata", {})
+    lines = [
+        "# Token Mask Prior Sampling Summary",
+        "",
+        f"- task: `{summary['task']}`",
+        f"- config: `{summary['config']}`",
+        f"- checkpoint: `{summary['checkpoint']}`",
+        f"- tokenizer config: `{summary['tokenizer_config']}`",
+        f"- tokenizer checkpoint: `{summary['tokenizer_checkpoint']}`",
+        f"- refinement mode: `{route.get('refinement_mode', 'unknown')}`",
+        f"- corruption mode: `{route.get('corruption_mode', 'unknown')}`",
+        f"- final full reveal: `{route.get('final_full_reveal', 'unknown')}`",
+        f"- min keep fraction: `{route.get('min_keep_fraction', 'unknown')}`",
+        f"- lock noise scale: `{route.get('lock_noise_scale', 'unknown')}`",
+        f"- reveal noise scale: `{route.get('reveal_noise_scale', 'unknown')}`",
+        f"- sample temperature: `{route.get('sample_temperature', 'unknown')}`",
+        "",
+        "| NFE | active codes | active code fraction | code perplexity | unique codes / sample |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for result in summary["results"]:
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    str(int(result["nfe"])),
+                    str(int(result["active_code_count"])),
+                    f"{float(result['active_code_fraction']):.4f}",
+                    f"{float(result['code_perplexity']):.2f}",
+                    f"{float(result['unique_code_count_mean']):.2f}",
+                ]
+            )
+            + " |"
+        )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def _boundary_map(mask_index):
     mask_index = np.asarray(mask_index, dtype=np.int64)
     boundary = np.zeros(mask_index.shape, dtype=np.uint8)
@@ -209,6 +286,7 @@ def main():
     outdir = args.outdir.resolve()
     _prepare_outdir(outdir, overwrite=args.overwrite)
     model = load_model(config, args.ckpt.resolve(), device=device)
+    route_metadata = extract_token_mask_prior_route_metadata(config=config, model=model)
 
     summary_rows = generate_token_mask_prior_sweep(
         model=model,
@@ -235,11 +313,13 @@ def main():
         "codebook_size": int(model.codebook_size),
         "token_spatial_shape": [int(v) for v in model.token_spatial_shape],
         "mask_spatial_shape": [int(v) for v in model.mask_spatial_shape],
+        "route_metadata": route_metadata,
         "results": summary_rows,
     }
 
     summary_json_path = outdir / "summary.json"
     summary_csv_path = outdir / "summary.csv"
+    summary_md_path = outdir / "summary.md"
     summary_json_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     with summary_csv_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(
@@ -261,10 +341,12 @@ def main():
         )
         writer.writeheader()
         writer.writerows(summary_rows)
+    _write_markdown_report(summary_md_path, summary)
 
     print(f"Saved token-mask prior sweep to {outdir}")
     print(f"Summary JSON: {summary_json_path}")
     print(f"Summary CSV: {summary_csv_path}")
+    print(f"Summary markdown: {summary_md_path}")
 
 
 if __name__ == "__main__":

@@ -31,6 +31,8 @@ Configs:
 
 - `configs/token_mask_prior_vq_sit_tiny.yaml`
 - `configs/token_mask_prior_vq_sit.yaml`
+- `configs/token_mask_prior_vq_sit_tiny_control.yaml`
+- `configs/token_mask_prior_vq_sit_control.yaml`
 - `configs/diagnostics/token_mask_prior_vq_sit_memorize_1.yaml`
 - `configs/diagnostics/token_mask_prior_vq_sit_memorize_4.yaml`
 
@@ -50,12 +52,27 @@ Tests:
 
 ## Route Semantics
 
-The current baseline is intentionally conservative:
+The current promoted mainline is the refinement upgrade:
 
 - unconditional `p(code_indices)` only
 - project-layer discrete diffusion objective and sampler reused from the older direct-discrete route
 - absorbing `MASK` token at `codebook_size`
 - final sampled grids must contain only valid tokenizer code ids before decode
+- objective-side corruption uses `exact_count`
+- mainline sampler uses `proposal_visible_refine`
+- early proposals can stay visible for later refinement instead of being
+  permanently locked by the first reveal decision
+
+Mainline configs:
+
+- `configs/token_mask_prior_vq_sit.yaml`
+- `configs/token_mask_prior_vq_sit_tiny.yaml`
+
+Control configs:
+
+- `configs/token_mask_prior_vq_sit_control.yaml`
+- `configs/token_mask_prior_vq_sit_tiny_control.yaml`
+- these keep the older `progressive_reveal` semantics for ablation and rollback
 
 This route is separate from both:
 
@@ -69,6 +86,16 @@ Train the main token-code baseline:
 ```bash
 python scripts/train_token_mask_prior.py \
   --config configs/token_mask_prior_vq_sit.yaml \
+  --tokenizer-ckpt /path/to/semantic_mask_vq_tokenizer_balanced.ckpt \
+  --scale-lr true \
+  --gpus 0
+```
+
+Train the old progressive-reveal control:
+
+```bash
+python scripts/train_token_mask_prior.py \
+  --config configs/token_mask_prior_vq_sit_control.yaml \
   --tokenizer-ckpt /path/to/semantic_mask_vq_tokenizer_balanced.ckpt \
   --scale-lr true \
   --gpus 0
@@ -155,11 +182,14 @@ Sampling exports:
 - `panel/`
 - `summary.json`
 - `summary.csv`
+- `summary.md`
 
 Evaluation adds:
 
 - decoded semantic-mask distribution summaries
 - token-usage diagnostics such as active-code count and code perplexity
+- route metadata such as `refinement_mode`, `corruption_mode`, and reveal /
+  lock-noise settings
 - compose-to-image metrics through the frozen renderer and frozen teacher
 
 ## Still Not Implemented Yet

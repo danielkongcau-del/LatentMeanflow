@@ -40,6 +40,7 @@ from scripts.sample_token_mask_prior import (
     DEFAULT_NFE_VALUES,
     DEFAULT_TOKENIZER_CONFIG,
     apply_tokenizer_overrides,
+    extract_token_mask_prior_route_metadata,
     generate_token_mask_prior_sweep,
 )
 
@@ -118,6 +119,7 @@ def _summarize_codes(code_grids, *, codebook_size):
 
 
 def _write_markdown_report(path, summary):
+    route = summary.get("route_metadata", {})
     lines = [
         "# Token Mask Prior Evaluation Protocol",
         "",
@@ -129,6 +131,13 @@ def _write_markdown_report(path, summary):
         f"- monitor: `{summary['monitor']}`",
         f"- reference source: `{summary['reference_source']}`",
         f"- small-region threshold ratio: `{summary['small_region_threshold_ratio']}`",
+        f"- refinement mode: `{route.get('refinement_mode', 'unknown')}`",
+        f"- corruption mode: `{route.get('corruption_mode', 'unknown')}`",
+        f"- final full reveal: `{route.get('final_full_reveal', 'unknown')}`",
+        f"- min keep fraction: `{route.get('min_keep_fraction', 'unknown')}`",
+        f"- lock noise scale: `{route.get('lock_noise_scale', 'unknown')}`",
+        f"- reveal noise scale: `{route.get('reveal_noise_scale', 'unknown')}`",
+        f"- sample temperature: `{route.get('sample_temperature', 'unknown')}`",
         "",
         "Primary mask-quality readout stays distributional on the decoded semantic masks. Token diagnostics are secondary and answer whether the frozen-tokenizer code vocabulary is actually being used.",
         "",
@@ -187,6 +196,7 @@ def main():
             raise FileNotFoundError("Token-mask prior checkpoint not found. Pass --ckpt explicitly.")
         validate_ckpt_matches_config(args.config, ckpt_path)
         model = load_model(config, ckpt_path, device=device)
+        route_metadata = extract_token_mask_prior_route_metadata(config=config, model=model)
         generated_root = outdir / "generated"
         _prepare_outdir(generated_root, overwrite=args.overwrite)
         generate_token_mask_prior_sweep(
@@ -201,6 +211,7 @@ def main():
     else:
         tokenizer_config = OmegaConf.load(args.tokenizer_config)
         codebook_size = int(OmegaConf.select(tokenizer_config, "model.params.codebook_size"))
+        route_metadata = extract_token_mask_prior_route_metadata(config=config, model=None)
 
     split_key = _resolve_split_key(config, args.split)
     num_classes, ignore_index = _resolve_label_spec_metadata(args.label_spec)
@@ -293,6 +304,7 @@ def main():
         "label_spec": str(args.label_spec.resolve()),
         "small_region_threshold_ratio": float(args.small_region_threshold_ratio),
         "codebook_size": int(codebook_size),
+        "route_metadata": route_metadata,
         "reference_stats": _to_json_ready(reference_stats),
         "results": results,
     }
