@@ -455,6 +455,132 @@ class TokenCodeAutoregressivePriorTrainer(pl.LightningModule):
     def _supports_full_context_kv_cache(self):
         return int(self.context_length) >= int(self.code_sequence_length)
 
+    @torch.no_grad()
+    def rollout_suffix_from_prefix(self, *, prefix_tokens, rollout_steps, generator=None):
+        if not isinstance(prefix_tokens, torch.Tensor):
+            prefix_tokens = torch.as_tensor(prefix_tokens, device=self.device)
+        if prefix_tokens.ndim != 2:
+            raise ValueError(
+                "TokenCodeAutoregressivePriorTrainer rollout_prefix expects tokens with shape [B, P], "
+                f"got {tuple(prefix_tokens.shape)}"
+            )
+        prefix_tokens = prefix_tokens.long().contiguous()
+        rollout_steps = int(rollout_steps)
+        if rollout_steps < 0 or rollout_steps > self.code_sequence_length:
+            raise ValueError(
+                f"rollout_steps must be in [0, {self.code_sequence_length}], got {rollout_steps}."
+            )
+        expected_prefix_length = int(self.code_sequence_length - rollout_steps)
+        if int(prefix_tokens.shape[1]) != expected_prefix_length:
+            raise ValueError(
+                "TokenCodeAutoregressivePriorTrainer rollout prefix length mismatch: "
+                f"expected {expected_prefix_length}, got {int(prefix_tokens.shape[1])}"
+            )
+        if rollout_steps == 0:
+            return prefix_tokens.new_empty((int(prefix_tokens.shape[0]), 0))
+
+        batch_size = int(prefix_tokens.shape[0])
+        device = prefix_tokens.device
+        generated_tokens = torch.empty((batch_size, rollout_steps), device=device, dtype=torch.long)
+
+        if self._supports_full_context_kv_cache():
+            current_token = torch.full(
+                (batch_size, 1),
+                fill_value=self.bos_token_id,
+                device=device,
+                dtype=torch.long,
+            )
+            past = None
+            for prefix_idx in range(expected_prefix_length):
+                _, _, present = self.backbone.forward_with_past(
+                    current_token,
+                    past=past,
+                    past_length=(len(past) if past is not None else None),
+                )
+                if past is None:
+                    past = [present]
+                else:
+                    past.append(present)
+                current_token = prefix_tokens[:, prefix_idx : prefix_idx + 1]
+
+            for suffix_idx in range(rollout_steps):
+                logits, _, present = self.backbone.forward_with_past(
+                    current_token,
+                    past=past,
+                    past_length=(len(past) if past is not None else None),
+                )
+                next_logits = logits[:, -1, :] / float(max(self.sample_temperature, 1.0e-6))
+                next_token = self._sample_next_token(next_logits, generator=generator)
+                generated_tokens[:, suffix_idx] = next_token[:, 0]
+                if past is None:
+                    past = [present]
+                else:
+                    past.append(present)
+                current_token = next_token
+            return generated_tokens
+
+        context_tokens = torch.full(
+            (batch_size, 1),
+            fill_value=self.bos_token_id,
+            device=device,
+            dtype=torch.long,
+        )
+        if expected_prefix_length > 0:
+            context_tokens = torch.cat([context_tokens, prefix_tokens], dim=1)
+            if int(context_tokens.shape[1]) > self.context_length:
+                context_tokens = context_tokens[:, -self.context_length :]
+
+        for suffix_idx in range(rollout_steps):
+            logits, _ = self.backbone(context_tokens, targets=None)
+            next_logits = logits[:, -1, :] / float(max(self.sample_temperature, 1.0e-6))
+            next_token = self._sample_next_token(next_logits, generator=generator)
+            generated_tokens[:, suffix_idx] = next_token[:, 0]
+            if int(context_tokens.shape[1]) < self.context_length:
+                context_tokens = torch.cat([context_tokens, next_token], dim=1)
+            else:
+                context_tokens = torch.cat([context_tokens[:, 1:], next_token], dim=1)
+        return generated_tokens
+
+    @torch.no_grad()
+    def prefix_conditioned_rollout_metrics(self, *, code_grid, target_mask_index, rollout_steps):
+        rollout_steps = int(rollout_steps)
+        code_grid = self._prepare_codes(code_grid)
+        target_mask_index = self._prepare_metric_mask_index(target_mask_index)
+        code_sequence = self._codes_to_sequence(code_grid)
+        prefix_length = int(self.code_sequence_length - rollout_steps)
+        prefix_tokens = code_sequence[:, :prefix_length]
+        target_suffix_tokens = code_sequence[:, prefix_length:]
+        predicted_suffix_tokens = self.rollout_suffix_from_prefix(
+            prefix_tokens=prefix_tokens,
+            rollout_steps=rollout_steps,
+        )
+        full_predicted_sequence = torch.cat([prefix_tokens, predicted_suffix_tokens], dim=1)
+        predicted_code_grid = self._sequence_to_codes(full_predicted_sequence)
+        decoded_pred = self.decode_latents(predicted_code_grid)
+        prefix = f"prefix_rollout_{rollout_steps:04d}"
+        suffix_accuracy = torch.tensor(1.0, device=code_grid.device)
+        if rollout_steps > 0:
+            suffix_accuracy = (
+                (predicted_suffix_tokens == target_suffix_tokens).float().mean().detach()
+            )
+        metrics = {
+            f"{prefix}_prefix_token_count": torch.tensor(float(prefix_length), device=code_grid.device),
+            f"{prefix}_suffix_token_count": torch.tensor(float(rollout_steps), device=code_grid.device),
+            f"{prefix}_suffix_token_accuracy": suffix_accuracy,
+            f"{prefix}_suffix_token_error_rate": (1.0 - suffix_accuracy).detach(),
+        }
+        if rollout_steps > 0:
+            metrics.update(self._code_usage_metrics(predicted_suffix_tokens, prefix=f"{prefix}_pred_suffix"))
+            metrics.update(self._code_usage_metrics(target_suffix_tokens, prefix=f"{prefix}_target_suffix"))
+        metrics.update(
+            self._mask_distribution_gap_metrics(
+                pred_mask_index=decoded_pred["mask_index"],
+                target_mask_index=target_mask_index,
+                prefix=prefix,
+            )
+        )
+        return metrics
+
     def encode_batch(self, batch):
         encoded = self.tokenizer.encode_batch(batch, sample_posterior=False)
         if "codes" not in encoded:

@@ -255,6 +255,97 @@ class TokenCodeAutoregressivePriorSmokeTest(unittest.TestCase):
             self.assertEqual(tuple(sampled.shape), (1, *token_spatial_shape))
             self.assertTrue(torch.equal(sampled, reference))
 
+    def test_rollout_suffix_from_prefix_matches_reference_cached_full_context_sampling(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path, ckpt_path, token_spatial_shape, _ = _write_tokenizer_artifacts(tmpdir)
+            full_sequence_length = int(token_spatial_shape[0] * token_spatial_shape[1])
+            trainer = _make_prior_trainer(
+                tokenizer_config_path=config_path,
+                tokenizer_ckpt_path=ckpt_path,
+                block_size=full_sequence_length,
+                sample_greedy=True,
+            )
+            trainer.eval()
+
+            code_grid = trainer.encode_batch(_make_batch())["codes"][:1]
+            code_sequence = trainer._codes_to_sequence(code_grid)
+            rollout_steps = 4
+            prefix_tokens = code_sequence[:, :-rollout_steps]
+
+            sampled_suffix = trainer.rollout_suffix_from_prefix(
+                prefix_tokens=prefix_tokens,
+                rollout_steps=rollout_steps,
+            )
+
+            sequence = torch.cat(
+                [
+                    torch.full(
+                        (1, 1),
+                        fill_value=trainer.bos_token_id,
+                        device=torch.device("cpu"),
+                        dtype=torch.long,
+                    ),
+                    prefix_tokens,
+                ],
+                dim=1,
+            )
+            reference_suffix = []
+            for _ in range(rollout_steps):
+                logits, _ = trainer.backbone(sequence, targets=None)
+                next_logits = logits[:, -1, :] / float(max(trainer.sample_temperature, 1.0e-6))
+                next_token = trainer._sample_next_token(next_logits, generator=None)
+                reference_suffix.append(next_token)
+                sequence = torch.cat([sequence, next_token], dim=1)
+            reference_suffix = torch.cat(reference_suffix, dim=1)
+
+            self.assertTrue(trainer._supports_full_context_kv_cache())
+            self.assertTrue(torch.equal(sampled_suffix, reference_suffix))
+
+    def test_rollout_suffix_from_prefix_matches_reference_sliding_window_sampling(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path, ckpt_path, _, _ = _write_tokenizer_artifacts(tmpdir)
+            trainer = _make_prior_trainer(
+                tokenizer_config_path=config_path,
+                tokenizer_ckpt_path=ckpt_path,
+                block_size=4,
+                sample_greedy=True,
+            )
+            trainer.eval()
+
+            code_grid = trainer.encode_batch(_make_batch())["codes"][:1]
+            code_sequence = trainer._codes_to_sequence(code_grid)
+            rollout_steps = 4
+            prefix_tokens = code_sequence[:, :-rollout_steps]
+
+            sampled_suffix = trainer.rollout_suffix_from_prefix(
+                prefix_tokens=prefix_tokens,
+                rollout_steps=rollout_steps,
+            )
+
+            context_tokens = torch.cat(
+                [
+                    torch.full(
+                        (1, 1),
+                        fill_value=trainer.bos_token_id,
+                        device=torch.device("cpu"),
+                        dtype=torch.long,
+                    ),
+                    prefix_tokens,
+                ],
+                dim=1,
+            )[:, -trainer.context_length :]
+            reference_suffix = []
+            for _ in range(rollout_steps):
+                logits, _ = trainer.backbone(context_tokens, targets=None)
+                next_logits = logits[:, -1, :] / float(max(trainer.sample_temperature, 1.0e-6))
+                next_token = trainer._sample_next_token(next_logits, generator=None)
+                reference_suffix.append(next_token)
+                context_tokens = torch.cat([context_tokens[:, 1:], next_token], dim=1)
+            reference_suffix = torch.cat(reference_suffix, dim=1)
+
+            self.assertFalse(trainer._supports_full_context_kv_cache())
+            self.assertTrue(torch.equal(sampled_suffix, reference_suffix))
+
     def test_forward_smoke(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path, ckpt_path, token_spatial_shape, codebook_size = _write_tokenizer_artifacts(tmpdir)
@@ -316,6 +407,30 @@ class TokenCodeAutoregressivePriorSmokeTest(unittest.TestCase):
             self.assertIn("teacher_forced_pred_active_code_fraction", diagnostics)
             self.assertNotIn("teacher_forced_monitor_error", diagnostics)
             self.assertNotIn("teacher_forced_boundary_ratio_gap", diagnostics)
+
+    def test_prefix_conditioned_rollout_metrics_report_suffix_and_mask_gaps(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path, ckpt_path, token_spatial_shape, _ = _write_tokenizer_artifacts(tmpdir)
+            full_sequence_length = int(token_spatial_shape[0] * token_spatial_shape[1])
+            trainer = _make_prior_trainer(
+                tokenizer_config_path=config_path,
+                tokenizer_ckpt_path=ckpt_path,
+                block_size=full_sequence_length,
+            )
+            trainer.eval()
+
+            encoded = trainer.encode_batch(_make_batch())
+            metrics = trainer.prefix_conditioned_rollout_metrics(
+                code_grid=encoded["codes"],
+                target_mask_index=encoded["mask_index"],
+                rollout_steps=4,
+            )
+
+            self.assertIn("prefix_rollout_0004_suffix_token_accuracy", metrics)
+            self.assertIn("prefix_rollout_0004_pred_suffix_code_perplexity", metrics)
+            self.assertIn("prefix_rollout_0004_target_suffix_code_perplexity", metrics)
+            self.assertIn("prefix_rollout_0004_monitor_error", metrics)
+            self.assertIn("prefix_rollout_0004_boundary_ratio_gap", metrics)
 
     def test_context_window_shortens_teacher_forcing_sequence(self):
         with tempfile.TemporaryDirectory() as tmpdir:

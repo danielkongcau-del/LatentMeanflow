@@ -31,9 +31,9 @@ from scripts.sample_token_mask_prior import (
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
-            "Run cheap teacher-forced diagnostics for the token-code autoregressive prior on an existing checkpoint. "
-            "This does not sample autoregressively; it only inspects teacher-forced predictions and their decoded "
-            "semantic-mask statistics."
+            "Run cheap diagnostics for the token-code autoregressive prior on an existing checkpoint. "
+            "This can inspect teacher-forced predictions and optionally run short prefix-conditioned rollout probes "
+            "without paying for a full unconditional 4096-token sample."
         )
     )
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
@@ -45,6 +45,14 @@ def parse_args():
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--num-workers", type=int, default=None)
     parser.add_argument("--limit-batches", type=int, default=None)
+    parser.add_argument(
+        "--prefix-rollout-steps",
+        dest="prefix_rollout_steps",
+        type=int,
+        action="append",
+        default=[],
+        help="Roll out only the last N tokens while conditioning on the true prefix. Repeat as needed.",
+    )
     parser.add_argument("--expected-monitor", type=str, default=None)
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument(
@@ -78,14 +86,16 @@ def _move_to_device(value, device):
     return value
 
 
-def _collect_scalar_metrics(outputs):
+def _collect_scalar_metrics(outputs, *, group_names=None):
     metrics = {}
-    for group_name in (
-        "loss_dict",
-        "code_target_stats",
-        "autoregressive_metrics",
-        "teacher_forced_prediction_stats",
-    ):
+    if group_names is None:
+        group_names = (
+            "loss_dict",
+            "code_target_stats",
+            "autoregressive_metrics",
+            "teacher_forced_prediction_stats",
+        )
+    for group_name in group_names:
         group = outputs.get(group_name, {})
         for name, value in group.items():
             if isinstance(value, torch.Tensor):
@@ -97,10 +107,11 @@ def _collect_scalar_metrics(outputs):
     return metrics
 
 
-def _aggregate_diagnostics(model, dataloader, *, device, limit_batches=None):
+def _aggregate_diagnostics(model, dataloader, *, device, limit_batches=None, prefix_rollout_steps=None):
     metric_sums = {}
     total_examples = 0
     total_batches = 0
+    rollout_steps = sorted({int(step) for step in (prefix_rollout_steps or [])})
 
     with torch.no_grad():
         for batch_idx, batch in enumerate(dataloader):
@@ -110,6 +121,18 @@ def _aggregate_diagnostics(model, dataloader, *, device, limit_batches=None):
             outputs = model(batch)
             batch_size = int(model._get_log_batch_size(batch))
             metrics = _collect_scalar_metrics(outputs)
+            for step in rollout_steps:
+                rollout_metrics = model.prefix_conditioned_rollout_metrics(
+                    code_grid=outputs["code_grid"],
+                    target_mask_index=outputs["mask_index"],
+                    rollout_steps=step,
+                )
+                metrics.update(
+                    _collect_scalar_metrics(
+                        {"prefix_rollout_metrics": rollout_metrics},
+                        group_names=("prefix_rollout_metrics",),
+                    )
+                )
             for name, value in metrics.items():
                 metric_sums[name] = metric_sums.get(name, 0.0) + (float(value) * float(batch_size))
             total_examples += batch_size
@@ -154,7 +177,7 @@ def _resolve_dataloader(datamodule, split_key):
 
 def _write_markdown_report(path, summary):
     lines = [
-        "# Token-Code Prior Teacher-Forced Diagnostics",
+        "# Token-Code Prior Diagnostics",
         "",
         f"- config: `{summary['config']}`",
         f"- checkpoint: `{summary['checkpoint']}`",
@@ -167,6 +190,7 @@ def _write_markdown_report(path, summary):
         f"- context length: `{summary['context_length']}`",
         f"- sequence length: `{summary['sequence_length']}`",
         f"- full-context teacher forcing: `{summary['context_length'] >= summary['sequence_length']}`",
+        f"- prefix rollout steps: `{summary['prefix_rollout_steps']}`",
         "",
         "| metric | value |",
         "| --- | --- |",
@@ -224,6 +248,7 @@ def main():
         dataloader,
         device=device,
         limit_batches=args.limit_batches,
+        prefix_rollout_steps=args.prefix_rollout_steps,
     )
     summary.update(
         {
@@ -235,6 +260,7 @@ def main():
             "monitor": monitor,
             "context_length": int(model.context_length),
             "sequence_length": int(model.code_sequence_length),
+            "prefix_rollout_steps": sorted({int(step) for step in args.prefix_rollout_steps}),
             "config_overrides": list(args.overrides),
         }
     )
