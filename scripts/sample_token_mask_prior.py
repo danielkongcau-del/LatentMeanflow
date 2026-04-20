@@ -35,8 +35,10 @@ DEFAULT_NFE_VALUES = [8, 4, 2, 1]
 TOKEN_MASK_PRIOR_TARGETS = {
     "latent_meanflow.trainers.token_mask_prior_trainer.TokenMaskPriorTrainer",
     "latent_meanflow.trainers.token_code_autoregressive_prior_trainer.TokenCodeAutoregressivePriorTrainer",
+    "latent_meanflow.trainers.token_code_maskgit_prior_trainer.TokenCodeMaskGitPriorTrainer",
 }
 TOKEN_CODE_AR_TARGET = "latent_meanflow.trainers.token_code_autoregressive_prior_trainer.TokenCodeAutoregressivePriorTrainer"
+TOKEN_CODE_MASKGIT_TARGET = "latent_meanflow.trainers.token_code_maskgit_prior_trainer.TokenCodeMaskGitPriorTrainer"
 
 
 def parse_args():
@@ -161,6 +163,61 @@ def extract_token_mask_prior_route_metadata(*, config, model=None):
                 )
             ),
             "nfe_ignored": True,
+        }
+    if route_target == TOKEN_CODE_MASKGIT_TARGET or getattr(model, "route_family", None) == "maskgit":
+        backbone_params = OmegaConf.select(config, "model.params.backbone_config.params", default={}) or {}
+        mask_schedule_type = str(backbone_params.get("mask_schedule_type", "cosine"))
+        return {
+            "corruption_mode": "masked_token_ce",
+            "full_mask_batch_fraction": 0.0,
+            "high_mask_batch_fraction": 0.0,
+            "high_mask_min_ratio": 0.0,
+            "refinement_mode": "canonical_maskgit",
+            "final_full_reveal": True,
+            "min_keep_fraction": 0.0,
+            "lock_noise_scale": 0.0,
+            "reveal_noise_scale": 0.0,
+            "sample_temperature": float(
+                getattr(
+                    model,
+                    "sample_temperature",
+                    OmegaConf.select(config, "model.params.sample_temperature", default=1.0),
+                )
+            ),
+            "sample_top_k": (
+                None
+                if getattr(model, "sample_top_k", OmegaConf.select(config, "model.params.sample_top_k", default=None))
+                in {None, ""}
+                else int(
+                    getattr(
+                        model,
+                        "sample_top_k",
+                        OmegaConf.select(config, "model.params.sample_top_k", default=None),
+                    )
+                )
+            ),
+            "base_gumbel_temp": float(
+                getattr(
+                    model,
+                    "sample_base_gumbel_temp",
+                    OmegaConf.select(config, "model.params.sample_base_gumbel_temp", default=4.5),
+                )
+            ),
+            "mask_schedule_type": str(getattr(getattr(model, "backbone", None), "mask_schedule_type", mask_schedule_type)),
+            "permuter": str(
+                getattr(
+                    model,
+                    "permuter_name",
+                    str(
+                        OmegaConf.select(
+                            config,
+                            "model.params.permuter_config.target",
+                            default="taming.modules.transformer.permuter.Identity",
+                        )
+                    ).rsplit(".", 1)[-1],
+                )
+            ),
+            "nfe_ignored": False,
         }
 
     objective_cfg = OmegaConf.select(config, "model.params.objective_config.params", default={}) or {}
