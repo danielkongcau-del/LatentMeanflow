@@ -147,8 +147,10 @@ class SemanticPairImageLogger(Callback):
         if is_train:
             pl_module.eval()
 
+        log_images_kwargs = dict(self.log_images_kwargs)
+        log_images_kwargs.setdefault("max_images", self.max_images)
         with torch.no_grad():
-            images = pl_module.log_images(batch, split=split, **self.log_images_kwargs)
+            images = pl_module.log_images(batch, split=split, **log_images_kwargs)
 
         if is_train:
             pl_module.train()

@@ -397,6 +397,48 @@ class TokenCodeAutoregressivePriorSmokeTest(unittest.TestCase):
 
             self.assertEqual(logged_splits, ["train"])
 
+    def test_semantic_pair_image_logger_forwards_max_images_to_log_images(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            callback = SemanticPairImageLogger(
+                batch_frequency=10,
+                max_images=1,
+                increase_log_steps=False,
+                disabled=False,
+                latest_only=True,
+                ignore_index=-1,
+                log_train=True,
+                log_validation=False,
+            )
+            callback.save_local = lambda *args, **kwargs: None
+            captured_max_images = []
+
+            class DummyModule:
+                def __init__(self):
+                    self.global_step = 10
+                    self.current_epoch = 0
+                    self.training = True
+                    self.num_classes = 4
+                    self.logger = SimpleNamespace(save_dir=tmpdir)
+
+                def eval(self):
+                    self.training = False
+
+                def train(self):
+                    self.training = True
+
+                def log_images(self, batch, split="train", **kwargs):
+                    del batch, split
+                    captured_max_images.append(kwargs.get("max_images"))
+                    return {"samples_mask_index": torch.zeros((1, 1, 4, 4), dtype=torch.float32)}
+
+            trainer = SimpleNamespace(is_global_zero=True, log_dir=tmpdir, default_root_dir=tmpdir)
+            module = DummyModule()
+            batch = {"mask_index": torch.zeros((1, 4, 4), dtype=torch.long)}
+
+            callback.on_train_batch_end(trainer, module, outputs=None, batch=batch, batch_idx=0)
+
+            self.assertEqual(captured_max_images, [1])
+
     def test_validation_sample_metrics_are_averaged_across_prefix_batches(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path, ckpt_path, _, _ = _write_tokenizer_artifacts(tmpdir)
