@@ -141,6 +141,11 @@ def _make_prior_trainer(
     enable_validation_sample_metrics=True,
     validation_sample_batch_size=4,
     validation_sample_metric_batches=4,
+    validation_prefix_rollout_steps=None,
+    validation_prefix_rollout_batch_size=0,
+    validation_prefix_rollout_metric_batches=0,
+    lr_scheduler_type=None,
+    lr_scheduler_monitor=None,
 ):
     return TokenCodeAutoregressivePriorTrainer(
         tokenizer_config_path=str(tokenizer_config_path),
@@ -167,6 +172,11 @@ def _make_prior_trainer(
         enable_validation_sample_metrics=enable_validation_sample_metrics,
         validation_sample_batch_size=validation_sample_batch_size,
         validation_sample_metric_batches=validation_sample_metric_batches,
+        validation_prefix_rollout_steps=validation_prefix_rollout_steps,
+        validation_prefix_rollout_batch_size=validation_prefix_rollout_batch_size,
+        validation_prefix_rollout_metric_batches=validation_prefix_rollout_metric_batches,
+        lr_scheduler_type=lr_scheduler_type,
+        lr_scheduler_monitor=lr_scheduler_monitor,
         log_sample_nfe=1,
     )
 
@@ -645,6 +655,69 @@ class TokenCodeAutoregressivePriorSmokeTest(unittest.TestCase):
             self.assertEqual(int(logged_kwargs["batch_size"]), 8)
             self.assertEqual(trainer._validation_sample_metric_batches_seen, 0)
 
+    def test_validation_prefix_rollout_metrics_are_averaged_across_prefix_batches(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path, ckpt_path, token_spatial_shape, _ = _write_tokenizer_artifacts(tmpdir)
+            full_sequence_length = int(token_spatial_shape[0] * token_spatial_shape[1])
+            trainer = _make_prior_trainer(
+                tokenizer_config_path=config_path,
+                tokenizer_ckpt_path=ckpt_path,
+                block_size=full_sequence_length,
+                monitor="val/base_error_mean",
+                enable_validation_sample_metrics=False,
+                validation_prefix_rollout_steps=[4],
+                validation_prefix_rollout_batch_size=2,
+                validation_prefix_rollout_metric_batches=2,
+            )
+            trainer._trainer = SimpleNamespace(
+                is_global_zero=True,
+                global_rank=0,
+                world_size=1,
+            )
+
+            captured = []
+
+            def fake_shared_step(batch, split):
+                del split
+                batch_size = int(batch["mask_index"].shape[0])
+                code_grid = torch.zeros((batch_size, *trainer.token_spatial_shape), dtype=torch.long)
+                return torch.tensor(0.0), torch.tensor(0.0), {
+                    "mask_index": batch["mask_index"],
+                    "code_grid": code_grid,
+                }
+
+            def fake_validation_prefix_rollout_metrics(*, code_grid, target_mask_index):
+                del code_grid
+                mean_value = target_mask_index.float().mean()
+                return {
+                    "prefix_rollout_0004_monitor_error": mean_value,
+                    "prefix_rollout_0004_suffix_token_accuracy": mean_value + 1.0,
+                }
+
+            def capture_log_dict(metrics, **kwargs):
+                captured.append((metrics, kwargs))
+
+            trainer.shared_step = fake_shared_step
+            trainer._validation_prefix_rollout_metrics = fake_validation_prefix_rollout_metrics
+            trainer.log_dict = capture_log_dict
+
+            batch_a = {"mask_index": torch.zeros((2, 16, 16), dtype=torch.long)}
+            batch_b = {"mask_index": torch.full((2, 16, 16), 2, dtype=torch.long)}
+            batch_c = {"mask_index": torch.full((2, 16, 16), 6, dtype=torch.long)}
+
+            trainer.on_validation_epoch_start()
+            trainer.validation_step(batch_a, batch_idx=0)
+            trainer.validation_step(batch_b, batch_idx=1)
+            trainer.validation_step(batch_c, batch_idx=2)
+            trainer.on_validation_epoch_end()
+
+            self.assertEqual(len(captured), 1)
+            logged_metrics, logged_kwargs = captured[0]
+            self.assertAlmostEqual(float(logged_metrics["val/prefix_rollout_0004_monitor_error"].item()), 1.0)
+            self.assertAlmostEqual(float(logged_metrics["val/prefix_rollout_0004_suffix_token_accuracy"].item()), 2.0)
+            self.assertEqual(int(logged_kwargs["batch_size"]), 4)
+            self.assertEqual(trainer._validation_prefix_rollout_metric_batches_seen, 0)
+
     def test_sampled_monitor_requires_validation_sample_metrics(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path, ckpt_path, _, _ = _write_tokenizer_artifacts(tmpdir)
@@ -654,6 +727,21 @@ class TokenCodeAutoregressivePriorSmokeTest(unittest.TestCase):
                     tokenizer_ckpt_path=ckpt_path,
                     block_size=4,
                     enable_validation_sample_metrics=False,
+                )
+
+    def test_prefix_rollout_monitor_requires_validation_prefix_rollout_metrics(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path, ckpt_path, token_spatial_shape, _ = _write_tokenizer_artifacts(tmpdir)
+            full_sequence_length = int(token_spatial_shape[0] * token_spatial_shape[1])
+            with self.assertRaisesRegex(ValueError, "monitor=val/prefix_rollout_0256_monitor_error requires"):
+                _make_prior_trainer(
+                    tokenizer_config_path=config_path,
+                    tokenizer_ckpt_path=ckpt_path,
+                    block_size=full_sequence_length,
+                    monitor="val/prefix_rollout_0256_monitor_error",
+                    validation_prefix_rollout_steps=[64],
+                    validation_prefix_rollout_batch_size=2,
+                    validation_prefix_rollout_metric_batches=2,
                 )
 
     def test_sampled_monitor_requires_positive_validation_sample_metric_batches(self):
@@ -666,6 +754,27 @@ class TokenCodeAutoregressivePriorSmokeTest(unittest.TestCase):
                     block_size=4,
                     validation_sample_metric_batches=0,
                 )
+
+    def test_configure_optimizers_supports_plateau_scheduler(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path, ckpt_path, _, _ = _write_tokenizer_artifacts(tmpdir)
+            trainer = _make_prior_trainer(
+                tokenizer_config_path=config_path,
+                tokenizer_ckpt_path=ckpt_path,
+                block_size=4,
+                lr_scheduler_type="plateau",
+                lr_scheduler_monitor="val/prefix_rollout_0256_monitor_error",
+            )
+
+            optimizers = trainer.configure_optimizers()
+
+            self.assertIsInstance(optimizers, dict)
+            self.assertIn("optimizer", optimizers)
+            self.assertIn("lr_scheduler", optimizers)
+            self.assertEqual(
+                optimizers["lr_scheduler"]["monitor"],
+                "val/prefix_rollout_0256_monitor_error",
+            )
 
     def test_main_config_pins_balanced_tokenizer_and_identity_permuter(self):
         config = OmegaConf.load(REPO_ROOT / "configs" / "token_code_autoregressive_mingpt_tiny.yaml")

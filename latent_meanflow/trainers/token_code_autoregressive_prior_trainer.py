@@ -1,4 +1,5 @@
 import hashlib
+import re
 from copy import deepcopy
 
 import pytorch_lightning as pl
@@ -27,6 +28,9 @@ class TokenCodeAutoregressivePriorTrainer(pl.LightningModule):
         validation_sample_metric_batches=4,
         validation_sample_nfe=None,
         validation_sample_seed=1234,
+        validation_prefix_rollout_steps=None,
+        validation_prefix_rollout_batch_size=0,
+        validation_prefix_rollout_metric_batches=0,
         monitor="val/sampled_monitor_error",
         sample_temperature=1.0,
         sample_top_k=None,
@@ -34,6 +38,16 @@ class TokenCodeAutoregressivePriorTrainer(pl.LightningModule):
         weight_decay=0.01,
         optimizer_beta1=0.9,
         optimizer_beta2=0.95,
+        lr_scheduler_type=None,
+        lr_scheduler_monitor=None,
+        lr_scheduler_mode="min",
+        lr_scheduler_frequency=1,
+        lr_scheduler_t_max=None,
+        lr_scheduler_eta_min=0.0,
+        lr_scheduler_patience=10,
+        lr_scheduler_factor=0.5,
+        lr_scheduler_threshold=1.0e-4,
+        lr_scheduler_min_lr=0.0,
         mask_key="mask_onehot",
         mask_index_key="mask_index",
     ):
@@ -71,25 +85,30 @@ class TokenCodeAutoregressivePriorTrainer(pl.LightningModule):
             int(log_sample_nfe) if validation_sample_nfe is None else max(1, int(validation_sample_nfe))
         )
         self.validation_sample_seed = int(validation_sample_seed)
+        self.validation_prefix_rollout_batch_size = max(0, int(validation_prefix_rollout_batch_size))
+        self.validation_prefix_rollout_metric_batches = max(0, int(validation_prefix_rollout_metric_batches))
         self.sample_temperature = float(sample_temperature)
         self.sample_top_k = None if sample_top_k in {None, ""} else max(1, int(sample_top_k))
         self.sample_greedy = bool(sample_greedy)
         self.weight_decay = float(weight_decay)
         self.optimizer_betas = (float(optimizer_beta1), float(optimizer_beta2))
+        self.lr_scheduler_type = (
+            None if lr_scheduler_type in {None, ""} else str(lr_scheduler_type).strip().lower()
+        )
+        self.lr_scheduler_monitor = None if lr_scheduler_monitor in {None, ""} else str(lr_scheduler_monitor)
+        self.lr_scheduler_mode = str(lr_scheduler_mode).strip().lower()
+        self.lr_scheduler_frequency = max(1, int(lr_scheduler_frequency))
+        self.lr_scheduler_t_max = None if lr_scheduler_t_max in {None, ""} else max(1, int(lr_scheduler_t_max))
+        self.lr_scheduler_eta_min = float(lr_scheduler_eta_min)
+        self.lr_scheduler_patience = max(0, int(lr_scheduler_patience))
+        self.lr_scheduler_factor = float(lr_scheduler_factor)
+        self.lr_scheduler_threshold = float(lr_scheduler_threshold)
+        self.lr_scheduler_min_lr = float(lr_scheduler_min_lr)
         self.per_class_metric_logging_limit = 32
         self.supports_nfe_sweep = False
         self.route_family = "autoregressive"
         self._reset_validation_sample_metric_state()
-        if self.monitor.startswith("val/sampled_") and (
-            not self.enable_validation_sample_metrics
-            or self.validation_sample_batch_size <= 0
-            or self.validation_sample_metric_batches <= 0
-        ):
-            raise ValueError(
-                f"TokenCodeAutoregressivePriorTrainer monitor={self.monitor} requires "
-                "enable_validation_sample_metrics=True, validation_sample_batch_size > 0, "
-                "and validation_sample_metric_batches > 0."
-            )
+        self._reset_validation_prefix_rollout_metric_state()
 
         self.tokenizer = SemanticTokenizerAdapter.from_pretrained(
             config_path=self.tokenizer_config_path,
@@ -112,6 +131,7 @@ class TokenCodeAutoregressivePriorTrainer(pl.LightningModule):
         self.mask_spatial_shape = self._infer_mask_spatial_shape()
         self.latent_channels = 1
         self.latent_spatial_shape = tuple(self.token_spatial_shape)
+        self.validation_prefix_rollout_steps = self._normalize_rollout_steps(validation_prefix_rollout_steps)
 
         ensure_taming_transformers_on_path()
         permuter_cfg = deepcopy(permuter_config) if permuter_config is not None else {
@@ -133,6 +153,38 @@ class TokenCodeAutoregressivePriorTrainer(pl.LightningModule):
         self.context_length = int(self.backbone.get_block_size())
         if self.context_length <= 0:
             raise ValueError("TokenCodeAutoregressivePriorTrainer requires backbone block_size > 0.")
+        if self.monitor.startswith("val/sampled_") and (
+            not self.enable_validation_sample_metrics
+            or self.validation_sample_batch_size <= 0
+            or self.validation_sample_metric_batches <= 0
+        ):
+            raise ValueError(
+                f"TokenCodeAutoregressivePriorTrainer monitor={self.monitor} requires "
+                "enable_validation_sample_metrics=True, validation_sample_batch_size > 0, "
+                "and validation_sample_metric_batches > 0."
+            )
+        monitored_prefix_rollout_step = self._parse_prefix_rollout_monitor_step(self.monitor)
+        if monitored_prefix_rollout_step is not None and (
+            self.validation_prefix_rollout_batch_size <= 0
+            or self.validation_prefix_rollout_metric_batches <= 0
+            or monitored_prefix_rollout_step not in self.validation_prefix_rollout_steps
+        ):
+            raise ValueError(
+                f"TokenCodeAutoregressivePriorTrainer monitor={self.monitor} requires "
+                "validation_prefix_rollout_batch_size > 0, validation_prefix_rollout_metric_batches > 0, "
+                "and validation_prefix_rollout_steps to include the monitored rollout length."
+            )
+        if self.lr_scheduler_type not in {None, "cosine", "plateau"}:
+            raise ValueError(
+                "TokenCodeAutoregressivePriorTrainer lr_scheduler_type must be one of "
+                "{None, 'cosine', 'plateau'}."
+            )
+        if self.lr_scheduler_mode not in {"min", "max"}:
+            raise ValueError(
+                "TokenCodeAutoregressivePriorTrainer lr_scheduler_mode must be one of {'min', 'max'}."
+            )
+        if self.lr_scheduler_type == "plateau" and self.lr_scheduler_factor >= 1.0:
+            raise ValueError("TokenCodeAutoregressivePriorTrainer plateau scheduler requires lr_scheduler_factor < 1.0.")
 
     def _infer_mask_spatial_shape(self):
         probe_codes = torch.zeros((1, *self.token_spatial_shape), dtype=torch.long)
@@ -221,6 +273,10 @@ class TokenCodeAutoregressivePriorTrainer(pl.LightningModule):
         self._validation_sample_metric_sums = {}
         self._validation_sample_metric_batches_seen = 0
 
+    def _reset_validation_prefix_rollout_metric_state(self):
+        self._validation_prefix_rollout_metric_sums = {}
+        self._validation_prefix_rollout_metric_batches_seen = 0
+
     def _accumulate_validation_sample_metrics(self, metrics):
         for name, value in metrics.items():
             if isinstance(value, torch.Tensor):
@@ -245,6 +301,54 @@ class TokenCodeAutoregressivePriorTrainer(pl.LightningModule):
             f"val/{name}": (value / denom).to(device=self.device)
             for name, value in self._validation_sample_metric_sums.items()
         }
+
+    def _accumulate_validation_prefix_rollout_metrics(self, metrics):
+        for name, value in metrics.items():
+            if isinstance(value, torch.Tensor):
+                if value.ndim != 0:
+                    continue
+                scalar = value.detach().to(device=torch.device("cpu"), dtype=torch.float32)
+            elif isinstance(value, (int, float)):
+                scalar = torch.tensor(float(value), dtype=torch.float32)
+            else:
+                continue
+            if name in self._validation_prefix_rollout_metric_sums:
+                self._validation_prefix_rollout_metric_sums[name] += scalar
+            else:
+                self._validation_prefix_rollout_metric_sums[name] = scalar.clone()
+        self._validation_prefix_rollout_metric_batches_seen += 1
+
+    def _finalize_validation_prefix_rollout_metrics(self):
+        if self._validation_prefix_rollout_metric_batches_seen <= 0:
+            return {}
+        denom = float(self._validation_prefix_rollout_metric_batches_seen)
+        return {
+            f"val/{name}": (value / denom).to(device=self.device)
+            for name, value in self._validation_prefix_rollout_metric_sums.items()
+        }
+
+    def _normalize_rollout_steps(self, rollout_steps):
+        if rollout_steps is None or rollout_steps == "":
+            return tuple()
+        if isinstance(rollout_steps, (int, float)):
+            values = [int(rollout_steps)]
+        else:
+            values = [int(value) for value in rollout_steps]
+        normalized = tuple(sorted(set(values)))
+        for step in normalized:
+            if step <= 0 or step > self.code_sequence_length:
+                raise ValueError(
+                    "TokenCodeAutoregressivePriorTrainer validation_prefix_rollout_steps entries must be in "
+                    f"[1, {self.code_sequence_length}], got {step}."
+                )
+        return normalized
+
+    @staticmethod
+    def _parse_prefix_rollout_monitor_step(monitor_name):
+        match = re.fullmatch(r"val/prefix_rollout_(\d+)_monitor_error", str(monitor_name))
+        if match is None:
+            return None
+        return int(match.group(1))
 
     def _mask_distribution_gap_metrics(self, *, pred_mask_index, target_mask_index, prefix):
         pred_summary = self._mask_distribution_summary(pred_mask_index)
@@ -484,38 +588,36 @@ class TokenCodeAutoregressivePriorTrainer(pl.LightningModule):
         generated_tokens = torch.empty((batch_size, rollout_steps), device=device, dtype=torch.long)
 
         if self._supports_full_context_kv_cache():
-            current_token = torch.full(
-                (batch_size, 1),
-                fill_value=self.bos_token_id,
-                device=device,
-                dtype=torch.long,
+            conditioning_tokens = torch.cat(
+                [
+                    torch.full(
+                        (batch_size, 1),
+                        fill_value=self.bos_token_id,
+                        device=device,
+                        dtype=torch.long,
+                    ),
+                    prefix_tokens,
+                ],
+                dim=1,
             )
-            past = None
-            for prefix_idx in range(expected_prefix_length):
-                _, _, present = self.backbone.forward_with_past(
-                    current_token,
-                    past=past,
-                    past_length=(len(past) if past is not None else None),
-                )
-                if past is None:
-                    past = [present]
-                else:
-                    past.append(present)
-                current_token = prefix_tokens[:, prefix_idx : prefix_idx + 1]
+            logits, _, present = self.backbone.forward_with_past(conditioning_tokens)
+            past = [present]
+            next_logits = logits[:, -1, :] / float(max(self.sample_temperature, 1.0e-6))
+            next_token = self._sample_next_token(next_logits, generator=generator)
+            generated_tokens[:, 0] = next_token[:, 0]
+            current_token = next_token
+            conditioning_length = int(conditioning_tokens.shape[1])
 
-            for suffix_idx in range(rollout_steps):
+            for suffix_idx in range(1, rollout_steps):
                 logits, _, present = self.backbone.forward_with_past(
                     current_token,
                     past=past,
-                    past_length=(len(past) if past is not None else None),
+                    past_length=(conditioning_length + suffix_idx - 1),
                 )
                 next_logits = logits[:, -1, :] / float(max(self.sample_temperature, 1.0e-6))
                 next_token = self._sample_next_token(next_logits, generator=generator)
                 generated_tokens[:, suffix_idx] = next_token[:, 0]
-                if past is None:
-                    past = [present]
-                else:
-                    past.append(present)
+                past.append(present)
                 current_token = next_token
             return generated_tokens
 
@@ -715,6 +817,7 @@ class TokenCodeAutoregressivePriorTrainer(pl.LightningModule):
     def on_validation_epoch_start(self):
         super().on_validation_epoch_start()
         self._reset_validation_sample_metric_state()
+        self._reset_validation_prefix_rollout_metric_state()
 
     @torch.no_grad()
     def _validation_sample_metrics(self, target_mask_index):
@@ -746,12 +849,45 @@ class TokenCodeAutoregressivePriorTrainer(pl.LightningModule):
             prefix="sampled",
         )
 
+    @torch.no_grad()
+    def _validation_prefix_rollout_metrics(self, *, code_grid, target_mask_index):
+        if (
+            self.validation_prefix_rollout_batch_size <= 0
+            or self.validation_prefix_rollout_metric_batches <= 0
+            or len(self.validation_prefix_rollout_steps) <= 0
+        ):
+            return {}
+
+        batch_size = min(int(code_grid.shape[0]), self.validation_prefix_rollout_batch_size)
+        if batch_size <= 0:
+            return {}
+
+        rollout_metrics = {}
+        rollout_code_grid = code_grid[:batch_size]
+        rollout_target_mask_index = target_mask_index[:batch_size]
+        for rollout_steps in self.validation_prefix_rollout_steps:
+            rollout_metrics.update(
+                self.prefix_conditioned_rollout_metrics(
+                    code_grid=rollout_code_grid,
+                    target_mask_index=rollout_target_mask_index,
+                    rollout_steps=rollout_steps,
+                )
+            )
+        return rollout_metrics
+
     def validation_step(self, batch, batch_idx):
         _, detached_loss, outputs = self.shared_step(batch, split="val")
         if batch_idx < self.validation_sample_metric_batches and self._is_global_zero():
             sample_metrics = self._validation_sample_metrics(outputs["mask_index"].detach())
             if sample_metrics:
                 self._accumulate_validation_sample_metrics(sample_metrics)
+        if batch_idx < self.validation_prefix_rollout_metric_batches and self._is_global_zero():
+            rollout_metrics = self._validation_prefix_rollout_metrics(
+                code_grid=outputs["code_grid"].detach(),
+                target_mask_index=outputs["mask_index"].detach(),
+            )
+            if rollout_metrics:
+                self._accumulate_validation_prefix_rollout_metrics(rollout_metrics)
         return detached_loss
 
     def on_validation_epoch_end(self):
@@ -772,7 +908,24 @@ class TokenCodeAutoregressivePriorTrainer(pl.LightningModule):
                     batch_size=effective_batch_size,
                     sync_dist=False,
                 )
+            prefix_rollout_metrics = self._finalize_validation_prefix_rollout_metrics()
+            if prefix_rollout_metrics:
+                effective_batch_size = max(
+                    1,
+                    int(self._validation_prefix_rollout_metric_batches_seen)
+                    * max(1, self.validation_prefix_rollout_batch_size),
+                )
+                self.log_dict(
+                    prefix_rollout_metrics,
+                    prog_bar=False,
+                    logger=True,
+                    on_step=False,
+                    on_epoch=True,
+                    batch_size=effective_batch_size,
+                    sync_dist=False,
+                )
         self._reset_validation_sample_metric_state()
+        self._reset_validation_prefix_rollout_metric_state()
 
     def on_fit_start(self):
         super().on_fit_start()
@@ -786,7 +939,12 @@ class TokenCodeAutoregressivePriorTrainer(pl.LightningModule):
             f"sample_temperature={self.sample_temperature:.3f}, sample_top_k={self.sample_top_k}, "
             f"sample_greedy={self.sample_greedy}, validation_sample_metrics={self.enable_validation_sample_metrics}, "
             f"validation_sample_batch_size={self.validation_sample_batch_size}, "
-            f"validation_sample_metric_batches={self.validation_sample_metric_batches}"
+            f"validation_sample_metric_batches={self.validation_sample_metric_batches}, "
+            f"validation_prefix_rollout_steps={list(self.validation_prefix_rollout_steps)}, "
+            f"validation_prefix_rollout_batch_size={self.validation_prefix_rollout_batch_size}, "
+            f"validation_prefix_rollout_metric_batches={self.validation_prefix_rollout_metric_batches}, "
+            f"lr_scheduler_type={self.lr_scheduler_type}, "
+            f"lr_scheduler_monitor={self.lr_scheduler_monitor or self.monitor}"
         )
 
     @torch.no_grad()
@@ -853,7 +1011,45 @@ class TokenCodeAutoregressivePriorTrainer(pl.LightningModule):
     def configure_optimizers(self):
         lr = float(getattr(self, "learning_rate", 1.0e-4))
         optimizer_groups = self.backbone.optimizer_groups(weight_decay=self.weight_decay)
-        return torch.optim.AdamW(optimizer_groups, lr=lr, betas=self.optimizer_betas)
+        optimizer = torch.optim.AdamW(optimizer_groups, lr=lr, betas=self.optimizer_betas)
+        if self.lr_scheduler_type is None:
+            return optimizer
+        if self.lr_scheduler_type == "cosine":
+            trainer = getattr(self, "trainer", None)
+            trainer_t_max = getattr(trainer, "max_epochs", None)
+            t_max = self.lr_scheduler_t_max
+            if t_max is None:
+                t_max = max(1, int(trainer_t_max)) if trainer_t_max is not None else 1
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer,
+                T_max=max(1, int(t_max)),
+                eta_min=self.lr_scheduler_eta_min,
+            )
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": {
+                    "scheduler": scheduler,
+                    "interval": "epoch",
+                    "frequency": self.lr_scheduler_frequency,
+                },
+            }
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode=self.lr_scheduler_mode,
+            factor=self.lr_scheduler_factor,
+            patience=self.lr_scheduler_patience,
+            threshold=self.lr_scheduler_threshold,
+            min_lr=self.lr_scheduler_min_lr,
+        )
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "monitor": self.lr_scheduler_monitor or self.monitor,
+                "interval": "epoch",
+                "frequency": self.lr_scheduler_frequency,
+            },
+        }
 
     @torch.no_grad()
     def log_images(self, batch, split="train", **kwargs):
