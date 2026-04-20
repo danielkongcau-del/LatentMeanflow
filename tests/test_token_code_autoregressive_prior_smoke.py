@@ -278,6 +278,45 @@ class TokenCodeAutoregressivePriorSmokeTest(unittest.TestCase):
             self.assertIn("total_loss", outputs["loss_dict"])
             self.assertIn("teacher_forced_token_accuracy", outputs["autoregressive_metrics"])
 
+    def test_eval_forward_reports_teacher_forced_collapse_diagnostics(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path, ckpt_path, token_spatial_shape, _ = _write_tokenizer_artifacts(tmpdir)
+            full_sequence_length = int(token_spatial_shape[0] * token_spatial_shape[1])
+            trainer = _make_prior_trainer(
+                tokenizer_config_path=config_path,
+                tokenizer_ckpt_path=ckpt_path,
+                block_size=full_sequence_length,
+            )
+            trainer.eval()
+
+            outputs = trainer(_make_batch())
+            diagnostics = outputs["teacher_forced_prediction_stats"]
+
+            self.assertIn("teacher_forced_code_accuracy", diagnostics)
+            self.assertIn("teacher_forced_bos_prediction_rate", diagnostics)
+            self.assertIn("teacher_forced_pred_active_code_fraction", diagnostics)
+            self.assertIn("teacher_forced_pred_code_perplexity", diagnostics)
+            self.assertIn("teacher_forced_monitor_error", diagnostics)
+            self.assertIn("teacher_forced_majority_class_ratio_gap", diagnostics)
+
+    def test_eval_forward_short_context_skips_mask_decode_diagnostics(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path, ckpt_path, _, _ = _write_tokenizer_artifacts(tmpdir)
+            trainer = _make_prior_trainer(
+                tokenizer_config_path=config_path,
+                tokenizer_ckpt_path=ckpt_path,
+                block_size=2,
+            )
+            trainer.eval()
+
+            outputs = trainer(_make_batch())
+            diagnostics = outputs["teacher_forced_prediction_stats"]
+
+            self.assertIn("teacher_forced_code_accuracy", diagnostics)
+            self.assertIn("teacher_forced_pred_active_code_fraction", diagnostics)
+            self.assertNotIn("teacher_forced_monitor_error", diagnostics)
+            self.assertNotIn("teacher_forced_boundary_ratio_gap", diagnostics)
+
     def test_context_window_shortens_teacher_forcing_sequence(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path, ckpt_path, token_spatial_shape, _ = _write_tokenizer_artifacts(tmpdir)

@@ -292,23 +292,59 @@ class TokenCodeAutoregressivePriorTrainer(pl.LightningModule):
                 metrics[f"{prefix}_class_ratio_gap_{class_idx}"] = class_ratio_gap[class_idx]
         return metrics
 
-    def _token_usage_metrics(self, codes):
-        flat_codes = codes.reshape(int(codes.shape[0]), -1)
+    def _code_usage_metrics(self, codes, *, prefix):
+        if not isinstance(codes, torch.Tensor):
+            codes = torch.as_tensor(codes)
+        if codes.ndim < 2:
+            raise ValueError(
+                "TokenCodeAutoregressivePriorTrainer code-usage metrics expect a tensor with shape [B, ...], "
+                f"got {tuple(codes.shape)}"
+            )
+        flat_codes = codes.long().reshape(int(codes.shape[0]), -1)
         code_counts = torch.bincount(flat_codes.reshape(-1), minlength=self.codebook_size).to(dtype=torch.float32)
         total = code_counts.sum().clamp_min(1.0)
         probs = code_counts / total
         unique_per_sample = (F.one_hot(flat_codes, num_classes=self.codebook_size).sum(dim=1) > 0).sum(dim=1)
         return {
-            "target_unique_code_count_mean": unique_per_sample.to(dtype=torch.float32).mean().detach(),
-            "target_unique_code_fraction_mean": (
+            f"{prefix}_unique_code_count_mean": unique_per_sample.to(dtype=torch.float32).mean().detach(),
+            f"{prefix}_unique_code_fraction_mean": (
                 unique_per_sample.to(dtype=torch.float32) / float(max(self.codebook_size, 1))
             ).mean().detach(),
-            "target_active_code_count": (code_counts > 0).sum().to(dtype=torch.float32).detach(),
-            "target_active_code_fraction": (
+            f"{prefix}_active_code_count": (code_counts > 0).sum().to(dtype=torch.float32).detach(),
+            f"{prefix}_active_code_fraction": (
                 (code_counts > 0).sum().to(dtype=torch.float32) / float(self.codebook_size)
             ).detach(),
-            "target_code_perplexity": torch.exp(-(probs * torch.log(probs.clamp_min(1.0e-10))).sum()).detach(),
+            f"{prefix}_code_perplexity": torch.exp(-(probs * torch.log(probs.clamp_min(1.0e-10))).sum()).detach(),
         }
+
+    def _token_usage_metrics(self, codes):
+        return self._code_usage_metrics(codes, prefix="target")
+
+    def _teacher_forced_prediction_metrics(self, *, target_tokens, logits, target_mask_index):
+        code_logits = logits[:, :, : self.codebook_size]
+        predicted_tokens = torch.argmax(code_logits, dim=-1)
+        vocab_argmax = torch.argmax(logits, dim=-1)
+        metrics = {
+            "teacher_forced_code_accuracy": (predicted_tokens == target_tokens).float().mean().detach(),
+            "teacher_forced_bos_prediction_rate": (
+                (vocab_argmax == self.bos_token_id).float().mean().detach()
+            ),
+        }
+        metrics.update(self._code_usage_metrics(predicted_tokens, prefix="teacher_forced_pred"))
+
+        if int(target_tokens.shape[1]) != self.code_sequence_length:
+            return metrics
+
+        predicted_code_grid = self._sequence_to_codes(predicted_tokens)
+        decoded_pred = self.decode_latents(predicted_code_grid)
+        metrics.update(
+            self._mask_distribution_gap_metrics(
+                pred_mask_index=decoded_pred["mask_index"],
+                target_mask_index=target_mask_index,
+                prefix="teacher_forced",
+            )
+        )
+        return metrics
 
     def _get_log_batch_size(self, batch):
         if self.mask_index_key in batch:
@@ -468,6 +504,13 @@ class TokenCodeAutoregressivePriorTrainer(pl.LightningModule):
                 torch.tensor(float(input_tokens.shape[1]), device=loss.device) / float(max(self.code_sequence_length, 1))
             ).detach(),
         }
+        teacher_forced_prediction_stats = {}
+        if not self.training:
+            teacher_forced_prediction_stats = self._teacher_forced_prediction_metrics(
+                target_tokens=target_tokens,
+                logits=logits,
+                target_mask_index=encoded["mask_index"],
+            )
         return {
             "loss": loss,
             "loss_dict": loss_dict,
@@ -480,6 +523,7 @@ class TokenCodeAutoregressivePriorTrainer(pl.LightningModule):
             "mask_onehot": encoded["mask_onehot"],
             "code_target_stats": self._token_usage_metrics(code_grid),
             "autoregressive_metrics": autoregressive_metrics,
+            "teacher_forced_prediction_stats": teacher_forced_prediction_stats,
         }
 
     def _collect_log_scalars(self, split, scalars):
@@ -498,6 +542,7 @@ class TokenCodeAutoregressivePriorTrainer(pl.LightningModule):
         metrics = self._collect_log_scalars(split, outputs.get("loss_dict", {}))
         metrics.update(self._collect_log_scalars(split, outputs.get("code_target_stats", {})))
         metrics.update(self._collect_log_scalars(split, outputs.get("autoregressive_metrics", {})))
+        metrics.update(self._collect_log_scalars(split, outputs.get("teacher_forced_prediction_stats", {})))
         prog_bar_metrics = {}
         base_error_key = f"{split}/base_error_mean"
         if base_error_key in metrics:
