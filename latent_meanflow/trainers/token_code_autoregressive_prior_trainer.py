@@ -470,6 +470,35 @@ class TokenCodeAutoregressivePriorTrainer(pl.LightningModule):
             return bool(trainer.is_global_zero)
         return int(getattr(self, "global_rank", 0)) == 0
 
+    def _broadcast_from_rank_zero(self, value):
+        trainer = getattr(self, "trainer", None)
+        strategy = getattr(trainer, "strategy", None) if trainer is not None else None
+        broadcast = getattr(strategy, "broadcast", None) if strategy is not None else None
+        if self._should_sync_dist() and callable(broadcast):
+            return broadcast(value, src=0)
+        return value
+
+    def _broadcast_metric_dict(self, metrics):
+        payload = {}
+        for name, value in dict(metrics or {}).items():
+            if isinstance(value, torch.Tensor):
+                if value.ndim != 0:
+                    continue
+                payload[str(name)] = float(value.detach().to(device=torch.device("cpu")).item())
+            elif isinstance(value, (int, float)):
+                payload[str(name)] = float(value)
+        payload = self._broadcast_from_rank_zero(payload)
+        device = self.device if isinstance(self.device, torch.device) else torch.device("cpu")
+        if device.type not in {"cpu", "cuda"}:
+            device = torch.device("cpu")
+        return {
+            str(name): torch.tensor(float(value), device=device, dtype=torch.float32)
+            for name, value in dict(payload or {}).items()
+        }
+
+    def _broadcast_metric_batch_count(self, batches_seen):
+        return int(self._broadcast_from_rank_zero(int(batches_seen)))
+
     def _log_info(self, message):
         if self._is_global_zero():
             print(message)
@@ -892,38 +921,43 @@ class TokenCodeAutoregressivePriorTrainer(pl.LightningModule):
 
     def on_validation_epoch_end(self):
         super().on_validation_epoch_end()
-        if self._is_global_zero():
-            sample_metrics = self._finalize_validation_sample_metrics()
-            if sample_metrics:
-                effective_batch_size = max(
-                    1,
-                    int(self._validation_sample_metric_batches_seen) * max(1, self.validation_sample_batch_size),
-                )
-                self.log_dict(
-                    sample_metrics,
-                    prog_bar=False,
-                    logger=True,
-                    on_step=False,
-                    on_epoch=True,
-                    batch_size=effective_batch_size,
-                    sync_dist=False,
-                )
-            prefix_rollout_metrics = self._finalize_validation_prefix_rollout_metrics()
-            if prefix_rollout_metrics:
-                effective_batch_size = max(
-                    1,
-                    int(self._validation_prefix_rollout_metric_batches_seen)
-                    * max(1, self.validation_prefix_rollout_batch_size),
-                )
-                self.log_dict(
-                    prefix_rollout_metrics,
-                    prog_bar=False,
-                    logger=True,
-                    on_step=False,
-                    on_epoch=True,
-                    batch_size=effective_batch_size,
-                    sync_dist=False,
-                )
+        sample_metrics = self._broadcast_metric_dict(
+            self._finalize_validation_sample_metrics() if self._is_global_zero() else {}
+        )
+        sample_batches_seen = self._broadcast_metric_batch_count(
+            self._validation_sample_metric_batches_seen if self._is_global_zero() else 0
+        )
+        if sample_metrics:
+            effective_batch_size = max(1, int(sample_batches_seen) * max(1, self.validation_sample_batch_size))
+            self.log_dict(
+                sample_metrics,
+                prog_bar=False,
+                logger=True,
+                on_step=False,
+                on_epoch=True,
+                batch_size=effective_batch_size,
+                sync_dist=False,
+            )
+        prefix_rollout_metrics = self._broadcast_metric_dict(
+            self._finalize_validation_prefix_rollout_metrics() if self._is_global_zero() else {}
+        )
+        prefix_batches_seen = self._broadcast_metric_batch_count(
+            self._validation_prefix_rollout_metric_batches_seen if self._is_global_zero() else 0
+        )
+        if prefix_rollout_metrics:
+            effective_batch_size = max(
+                1,
+                int(prefix_batches_seen) * max(1, self.validation_prefix_rollout_batch_size),
+            )
+            self.log_dict(
+                prefix_rollout_metrics,
+                prog_bar=False,
+                logger=True,
+                on_step=False,
+                on_epoch=True,
+                batch_size=effective_batch_size,
+                sync_dist=False,
+            )
         self._reset_validation_sample_metric_state()
         self._reset_validation_prefix_rollout_metric_state()
 

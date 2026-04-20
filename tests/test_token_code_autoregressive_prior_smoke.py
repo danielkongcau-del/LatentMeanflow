@@ -718,6 +718,60 @@ class TokenCodeAutoregressivePriorSmokeTest(unittest.TestCase):
             self.assertEqual(int(logged_kwargs["batch_size"]), 4)
             self.assertEqual(trainer._validation_prefix_rollout_metric_batches_seen, 0)
 
+    def test_validation_prefix_rollout_metrics_are_broadcast_to_all_ranks(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path, ckpt_path, token_spatial_shape, _ = _write_tokenizer_artifacts(tmpdir)
+            full_sequence_length = int(token_spatial_shape[0] * token_spatial_shape[1])
+            trainer = _make_prior_trainer(
+                tokenizer_config_path=config_path,
+                tokenizer_ckpt_path=ckpt_path,
+                block_size=full_sequence_length,
+                monitor="val/prefix_rollout_0004_monitor_error",
+                enable_validation_sample_metrics=False,
+                validation_prefix_rollout_steps=[4],
+                validation_prefix_rollout_batch_size=2,
+                validation_prefix_rollout_metric_batches=2,
+            )
+
+            class DummyStrategy:
+                def __init__(self):
+                    self.broadcast_values = [
+                        {},
+                        0,
+                        {
+                            "val/prefix_rollout_0004_monitor_error": 1.0,
+                            "val/prefix_rollout_0004_suffix_token_accuracy": 2.0,
+                        },
+                        2,
+                    ]
+
+                def broadcast(self, value, src=0):
+                    del value, src
+                    return self.broadcast_values.pop(0)
+
+            trainer._trainer = SimpleNamespace(
+                is_global_zero=False,
+                global_rank=1,
+                world_size=2,
+                strategy=DummyStrategy(),
+            )
+
+            captured = []
+
+            def capture_log_dict(metrics, **kwargs):
+                captured.append((metrics, kwargs))
+
+            trainer.log_dict = capture_log_dict
+
+            trainer.on_validation_epoch_end()
+
+            self.assertEqual(len(captured), 1)
+            logged_metrics, logged_kwargs = captured[0]
+            self.assertAlmostEqual(float(logged_metrics["val/prefix_rollout_0004_monitor_error"].item()), 1.0)
+            self.assertAlmostEqual(float(logged_metrics["val/prefix_rollout_0004_suffix_token_accuracy"].item()), 2.0)
+            self.assertEqual(int(logged_kwargs["batch_size"]), 4)
+            self.assertEqual(trainer._validation_prefix_rollout_metric_batches_seen, 0)
+
     def test_sampled_monitor_requires_validation_sample_metrics(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path, ckpt_path, _, _ = _write_tokenizer_artifacts(tmpdir)
