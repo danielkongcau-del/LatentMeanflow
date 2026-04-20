@@ -20,7 +20,17 @@ from scripts.sample_token_mask_prior import (
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _make_tokenizer_model():
+def _make_tokenizer_model(*, loss_extra_params=None):
+    loss_params = {
+        "mask_ce_weight": 1.0,
+        "mask_dice_weight": 0.0,
+        "mask_focal_weight": 0.0,
+        "vq_codebook_weight": 1.0,
+        "vq_commit_weight": 0.25,
+        "ignore_index": -1,
+    }
+    if loss_extra_params is not None:
+        loss_params.update(loss_extra_params)
     return SemanticMaskVQAutoencoder(
         ddconfig={
             "double_z": False,
@@ -36,14 +46,7 @@ def _make_tokenizer_model():
         },
         lossconfig={
             "target": "latent_meanflow.models.semantic_mask_vq_autoencoder.SemanticMaskVQLoss",
-            "params": {
-                "mask_ce_weight": 1.0,
-                "mask_dice_weight": 0.0,
-                "mask_focal_weight": 0.0,
-                "vq_codebook_weight": 1.0,
-                "vq_commit_weight": 0.25,
-                "ignore_index": -1,
-            },
+            "params": loss_params,
         },
         embed_dim=8,
         codebook_size=32,
@@ -58,8 +61,18 @@ def _make_tokenizer_model():
     )
 
 
-def _write_tokenizer_artifacts(tmpdir):
-    tokenizer = _make_tokenizer_model()
+def _write_tokenizer_artifacts(tmpdir, *, loss_extra_params=None):
+    tokenizer = _make_tokenizer_model(loss_extra_params=loss_extra_params)
+    loss_params = {
+        "mask_ce_weight": 1.0,
+        "mask_dice_weight": 0.0,
+        "mask_focal_weight": 0.0,
+        "vq_codebook_weight": 1.0,
+        "vq_commit_weight": 0.25,
+        "ignore_index": -1,
+    }
+    if loss_extra_params is not None:
+        loss_params.update(loss_extra_params)
     config = OmegaConf.create(
         {
             "model": {
@@ -70,14 +83,7 @@ def _write_tokenizer_artifacts(tmpdir):
                     "num_classes": 4,
                     "lossconfig": {
                         "target": "latent_meanflow.models.semantic_mask_vq_autoencoder.SemanticMaskVQLoss",
-                        "params": {
-                            "mask_ce_weight": 1.0,
-                            "mask_dice_weight": 0.0,
-                            "mask_focal_weight": 0.0,
-                            "vq_codebook_weight": 1.0,
-                            "vq_commit_weight": 0.25,
-                            "ignore_index": -1,
-                        },
+                        "params": loss_params,
                     },
                     "quantizer_config": {
                         "distance_metric": "cosine",
@@ -137,6 +143,11 @@ def _make_prior_trainer(
     enable_validation_sample_metrics=True,
     validation_sample_batch_size=4,
     validation_sample_metric_batches=4,
+    semantic_ce_use_class_weights=True,
+    corruption_mode="exact_count",
+    full_mask_batch_fraction=0.25,
+    high_mask_batch_fraction=0.50,
+    high_mask_min_ratio=0.85,
 ):
     return TokenCodeMaskGitPriorTrainer(
         tokenizer_config_path=str(tokenizer_config_path),
@@ -158,10 +169,20 @@ def _make_prior_trainer(
         tokenizer_sample_posterior=False,
         monitor=monitor,
         log_sample_nfe=4,
+        corruption_mode=corruption_mode,
+        full_mask_batch_fraction=full_mask_batch_fraction,
+        high_mask_batch_fraction=high_mask_batch_fraction,
+        high_mask_min_ratio=high_mask_min_ratio,
         label_smoothing=0.1,
         sample_temperature=1.0,
         sample_top_k=None,
         sample_base_gumbel_temp=4.5,
+        semantic_ce_weight=1.0,
+        semantic_ce_use_class_weights=semantic_ce_use_class_weights,
+        semantic_dice_weight=0.5,
+        boundary_loss_weight=0.25,
+        area_ratio_loss_weight=0.10,
+        adjacency_loss_weight=0.10,
         enable_validation_sample_metrics=enable_validation_sample_metrics,
         validation_sample_batch_size=validation_sample_batch_size,
         validation_sample_metric_batches=validation_sample_metric_batches,
@@ -179,6 +200,18 @@ def _make_batch():
         "mask_onehot": mask_onehot,
         "num_classes": torch.tensor([4, 4], dtype=torch.long),
     }
+
+
+def _make_dataset_samples():
+    batch = _make_batch()
+    return [
+        {
+            "mask_index": batch["mask_index"][sample_idx],
+            "mask_onehot": batch["mask_onehot"][sample_idx],
+            "num_classes": int(batch["num_classes"][sample_idx].item()),
+        }
+        for sample_idx in range(int(batch["mask_index"].shape[0]))
+    ]
 
 
 class TokenCodeMaskGitPriorSmokeTest(unittest.TestCase):
@@ -201,9 +234,61 @@ class TokenCodeMaskGitPriorSmokeTest(unittest.TestCase):
                 (2, token_spatial_shape[0] * token_spatial_shape[1], codebook_size),
             )
             self.assertIn("maskgit_ce", outputs["loss_dict"])
+            self.assertIn("semantic_ce", outputs["loss_dict"])
+            self.assertIn("semantic_dice", outputs["loss_dict"])
+            self.assertIn("semantic_aux_total", outputs["loss_dict"])
+            self.assertIn("boundary_loss", outputs["loss_dict"])
+            self.assertIn("area_ratio_loss", outputs["loss_dict"])
+            self.assertIn("adjacency_loss", outputs["loss_dict"])
+            self.assertIn("structure_aux_total", outputs["loss_dict"])
             self.assertIn("masked_token_accuracy", outputs["maskgit_metrics"])
             self.assertIn("masked_token_fraction", outputs["maskgit_metrics"])
+            self.assertIn("full_mask_row_fraction", outputs["maskgit_metrics"])
+            self.assertIn("high_mask_row_fraction", outputs["maskgit_metrics"])
+            self.assertIn("effective_mask_ratio_mean", outputs["maskgit_metrics"])
+            self.assertEqual(tuple(outputs["semantic_mask_logits"].shape), (2, 4, 16, 16))
+            self.assertEqual(tuple(outputs["semantic_mask_probs"].shape), (2, 4, 16, 16))
+            self.assertIn("semantic_pixel_accuracy", outputs["semantic_bridge_metrics"])
+            self.assertIn("semantic_miou", outputs["semantic_bridge_metrics"])
+            self.assertIn("teacher_forced_monitor_error", outputs["semantic_bridge_metrics"])
+            self.assertEqual(tuple(outputs["boundary_target"].shape), (2, 1, 16, 16))
+            self.assertEqual(tuple(outputs["boundary_pred"].shape), (2, 1, 16, 16))
+            self.assertEqual(tuple(outputs["pred_area_ratio"].shape), (2, 4))
+            self.assertEqual(tuple(outputs["target_area_ratio"].shape), (2, 4))
+            self.assertEqual(tuple(outputs["pred_adjacency"].shape), (2, 4, 4))
+            self.assertEqual(tuple(outputs["target_adjacency"].shape), (2, 4, 4))
+            self.assertTrue(torch.all(outputs["target_masked_counts"] >= 1))
             self.assertEqual(trainer.mask_token_id, codebook_size)
+
+    def test_full_mask_and_high_mask_paths(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path, ckpt_path, token_spatial_shape, _ = _write_tokenizer_artifacts(tmpdir)
+            sequence_length = int(token_spatial_shape[0] * token_spatial_shape[1])
+            batch = _make_batch()
+
+            full_mask_trainer = _make_prior_trainer(
+                tokenizer_config_path=config_path,
+                tokenizer_ckpt_path=ckpt_path,
+                full_mask_batch_fraction=1.0,
+                high_mask_batch_fraction=0.0,
+            )
+            full_outputs = full_mask_trainer(batch)
+            self.assertTrue(torch.all(full_outputs["full_mask_rows"]))
+            self.assertTrue(torch.all(full_outputs["mask_positions"]))
+            self.assertTrue(torch.all(full_outputs["target_masked_counts"] == sequence_length))
+
+            high_mask_trainer = _make_prior_trainer(
+                tokenizer_config_path=config_path,
+                tokenizer_ckpt_path=ckpt_path,
+                full_mask_batch_fraction=0.0,
+                high_mask_batch_fraction=1.0,
+                high_mask_min_ratio=0.85,
+            )
+            high_outputs = high_mask_trainer(batch)
+            self.assertTrue(torch.all(high_outputs["high_mask_rows"]))
+            observed_ratio = high_outputs["target_masked_counts"].to(dtype=torch.float32) / float(sequence_length)
+            self.assertTrue(torch.all(observed_ratio >= 0.85))
+            self.assertTrue(torch.all(high_outputs["target_masked_counts"] == high_outputs["mask_positions"].sum(dim=1)))
 
     def test_tokenizer_is_frozen_and_not_in_optimizer(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -352,6 +437,35 @@ class TokenCodeMaskGitPriorSmokeTest(unittest.TestCase):
                     enable_validation_sample_metrics=False,
                 )
 
+    def test_on_fit_start_configures_tokenizer_semantic_class_balance(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path, ckpt_path, _, _ = _write_tokenizer_artifacts(
+                tmpdir,
+                loss_extra_params={"class_balance_mode": "inverse_sqrt_frequency"},
+            )
+            trainer = _make_prior_trainer(
+                tokenizer_config_path=config_path,
+                tokenizer_ckpt_path=ckpt_path,
+                semantic_ce_use_class_weights=True,
+            )
+            trainer._trainer = SimpleNamespace(
+                datamodule=SimpleNamespace(datasets={"train": _make_dataset_samples()}),
+                is_global_zero=True,
+                global_rank=0,
+                world_size=1,
+                max_epochs=1,
+                estimated_stepping_batches=1,
+            )
+
+            trainer.on_fit_start()
+
+            tokenizer_loss = trainer.tokenizer.tokenizer.loss
+            self.assertEqual(int(tokenizer_loss.class_counts.numel()), trainer.num_classes)
+            self.assertGreater(float(tokenizer_loss.class_counts.sum().item()), 0.0)
+            self.assertEqual(int(tokenizer_loss.class_weights.numel()), trainer.num_classes)
+            self.assertFalse(bool(tokenizer_loss.needs_class_count_scan()))
+            self.assertFalse(bool(torch.allclose(tokenizer_loss.class_weights, torch.ones_like(tokenizer_loss.class_weights))))
+
     def test_main_configs_pin_balanced_tokenizer_and_identity_permuter(self):
         expected_backbones = {
             REPO_ROOT / "configs" / "token_code_maskgit_tiny.yaml": {
@@ -384,6 +498,16 @@ class TokenCodeMaskGitPriorSmokeTest(unittest.TestCase):
                 str(config.model.params.permuter_config.target),
                 "taming.modules.transformer.permuter.Identity",
             )
+            self.assertEqual(str(config.model.params.corruption_mode), "exact_count")
+            self.assertAlmostEqual(float(config.model.params.full_mask_batch_fraction), 0.25)
+            self.assertAlmostEqual(float(config.model.params.high_mask_batch_fraction), 0.50)
+            self.assertAlmostEqual(float(config.model.params.high_mask_min_ratio), 0.85)
+            self.assertAlmostEqual(float(config.model.params.semantic_ce_weight), 1.0)
+            self.assertTrue(bool(config.model.params.semantic_ce_use_class_weights))
+            self.assertAlmostEqual(float(config.model.params.semantic_dice_weight), 0.5)
+            self.assertAlmostEqual(float(config.model.params.boundary_loss_weight), 0.25)
+            self.assertAlmostEqual(float(config.model.params.area_ratio_loss_weight), 0.10)
+            self.assertAlmostEqual(float(config.model.params.adjacency_loss_weight), 0.10)
             backbone_params = config.model.params.backbone_config.params
             self.assertEqual(int(backbone_params.n_layer), expected["n_layer"])
             self.assertEqual(int(backbone_params.n_head), expected["n_head"])
@@ -414,7 +538,10 @@ class TokenCodeMaskGitPriorSmokeTest(unittest.TestCase):
             metadata = extract_token_mask_prior_route_metadata(config=config, model=trainer)
 
             self.assertEqual(metadata["refinement_mode"], "canonical_maskgit")
-            self.assertEqual(metadata["corruption_mode"], "masked_token_ce")
+            self.assertEqual(metadata["corruption_mode"], "exact_count")
+            self.assertAlmostEqual(float(metadata["full_mask_batch_fraction"]), 0.25)
+            self.assertAlmostEqual(float(metadata["high_mask_batch_fraction"]), 0.50)
+            self.assertAlmostEqual(float(metadata["high_mask_min_ratio"]), 0.85)
             self.assertFalse(bool(metadata["nfe_ignored"]))
             self.assertEqual(metadata["permuter"], "Identity")
 

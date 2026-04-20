@@ -12,10 +12,20 @@ model:
     freeze_tokenizer: true
     tokenizer_sample_posterior: false
     log_sample_nfe: 8
+    corruption_mode: exact_count
+    full_mask_batch_fraction: 0.25
+    high_mask_batch_fraction: 0.50
+    high_mask_min_ratio: 0.85
     label_smoothing: 0.1
     sample_temperature: 1.0
     sample_top_k: null
     sample_base_gumbel_temp: 4.5
+    semantic_ce_weight: 1.0
+    semantic_ce_use_class_weights: true
+    semantic_dice_weight: 0.5
+    boundary_loss_weight: 0.25
+    area_ratio_loss_weight: 0.10
+    adjacency_loss_weight: 0.10
     permuter_config:
       target: taming.modules.transformer.permuter.Identity
     backbone_config:

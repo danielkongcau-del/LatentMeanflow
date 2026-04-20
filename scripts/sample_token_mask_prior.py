@@ -168,10 +168,30 @@ def extract_token_mask_prior_route_metadata(*, config, model=None):
         backbone_params = OmegaConf.select(config, "model.params.backbone_config.params", default={}) or {}
         mask_schedule_type = str(backbone_params.get("mask_schedule_type", "cosine"))
         return {
-            "corruption_mode": "masked_token_ce",
-            "full_mask_batch_fraction": 0.0,
-            "high_mask_batch_fraction": 0.0,
-            "high_mask_min_ratio": 0.0,
+            "corruption_mode": str(
+                getattr(model, "corruption_mode", OmegaConf.select(config, "model.params.corruption_mode", default="exact_count"))
+            ),
+            "full_mask_batch_fraction": float(
+                getattr(
+                    model,
+                    "full_mask_batch_fraction",
+                    OmegaConf.select(config, "model.params.full_mask_batch_fraction", default=0.25),
+                )
+            ),
+            "high_mask_batch_fraction": float(
+                getattr(
+                    model,
+                    "high_mask_batch_fraction",
+                    OmegaConf.select(config, "model.params.high_mask_batch_fraction", default=0.50),
+                )
+            ),
+            "high_mask_min_ratio": float(
+                getattr(
+                    model,
+                    "high_mask_min_ratio",
+                    OmegaConf.select(config, "model.params.high_mask_min_ratio", default=0.85),
+                )
+            ),
             "refinement_mode": "canonical_maskgit",
             "final_full_reveal": True,
             "min_keep_fraction": 0.0,
