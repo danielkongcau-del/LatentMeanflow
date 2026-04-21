@@ -8,6 +8,11 @@ import torch.nn.functional as F
 from ldm.util import instantiate_from_config
 from omegaconf import OmegaConf
 
+from latent_meanflow.losses.semantic_structure import (
+    boundary_target_to_band_mask,
+    mask_index_to_boundary_target,
+    same_region_consistency_l1_loss,
+)
 from latent_meanflow.models.semantic_mask_vq_autoencoder import SemanticMaskVQAutoencoder
 from latent_meanflow.trainers.token_code_maskgit_prior_trainer import TokenCodeMaskGitPriorTrainer
 from scripts.sample_token_mask_prior import (
@@ -148,6 +153,10 @@ def _make_prior_trainer(
     full_mask_batch_fraction=0.25,
     high_mask_batch_fraction=0.50,
     high_mask_min_ratio=0.85,
+    same_region_consistency_weight=0.25,
+    boundary_band_width=2,
+    boundary_band_ce_weight=1.0,
+    boundary_band_dice_weight=0.5,
 ):
     return TokenCodeMaskGitPriorTrainer(
         tokenizer_config_path=str(tokenizer_config_path),
@@ -183,6 +192,10 @@ def _make_prior_trainer(
         boundary_loss_weight=0.25,
         area_ratio_loss_weight=0.10,
         adjacency_loss_weight=0.10,
+        same_region_consistency_weight=same_region_consistency_weight,
+        boundary_band_width=boundary_band_width,
+        boundary_band_ce_weight=boundary_band_ce_weight,
+        boundary_band_dice_weight=boundary_band_dice_weight,
         enable_validation_sample_metrics=enable_validation_sample_metrics,
         validation_sample_batch_size=validation_sample_batch_size,
         validation_sample_metric_batches=validation_sample_metric_batches,
@@ -240,7 +253,11 @@ class TokenCodeMaskGitPriorSmokeTest(unittest.TestCase):
             self.assertIn("boundary_loss", outputs["loss_dict"])
             self.assertIn("area_ratio_loss", outputs["loss_dict"])
             self.assertIn("adjacency_loss", outputs["loss_dict"])
+            self.assertIn("same_region_consistency_loss", outputs["loss_dict"])
             self.assertIn("structure_aux_total", outputs["loss_dict"])
+            self.assertIn("boundary_band_semantic_ce", outputs["loss_dict"])
+            self.assertIn("boundary_band_semantic_dice", outputs["loss_dict"])
+            self.assertIn("boundary_band_aux_total", outputs["loss_dict"])
             self.assertIn("masked_token_accuracy", outputs["maskgit_metrics"])
             self.assertIn("masked_token_fraction", outputs["maskgit_metrics"])
             self.assertIn("full_mask_row_fraction", outputs["maskgit_metrics"])
@@ -257,8 +274,53 @@ class TokenCodeMaskGitPriorSmokeTest(unittest.TestCase):
             self.assertEqual(tuple(outputs["target_area_ratio"].shape), (2, 4))
             self.assertEqual(tuple(outputs["pred_adjacency"].shape), (2, 4, 4))
             self.assertEqual(tuple(outputs["target_adjacency"].shape), (2, 4, 4))
+            self.assertEqual(tuple(outputs["boundary_band_mask"].shape), (2, 16, 16))
+            self.assertTrue(bool(torch.any(outputs["boundary_band_mask"])))
             self.assertTrue(torch.all(outputs["target_masked_counts"] >= 1))
             self.assertEqual(trainer.mask_token_id, codebook_size)
+
+    def test_same_region_consistency_loss_targets_only_same_class_neighbors(self):
+        pred_uniform = torch.tensor(
+            [[
+                [[1.0, 1.0]],
+                [[0.0, 0.0]],
+            ]],
+            dtype=torch.float32,
+        )
+        pred_mismatch = torch.tensor(
+            [[
+                [[1.0, 0.0]],
+                [[0.0, 1.0]],
+            ]],
+            dtype=torch.float32,
+        )
+
+        same_class_target = torch.tensor([[[0, 0]]], dtype=torch.long)
+        cross_class_target = torch.tensor([[[0, 1]]], dtype=torch.long)
+
+        self.assertAlmostEqual(
+            float(same_region_consistency_l1_loss(pred_uniform, same_class_target).item()),
+            0.0,
+            places=6,
+        )
+        self.assertGreater(
+            float(same_region_consistency_l1_loss(pred_mismatch, same_class_target).item()),
+            0.0,
+        )
+        self.assertAlmostEqual(
+            float(same_region_consistency_l1_loss(pred_mismatch, cross_class_target).item()),
+            0.0,
+            places=6,
+        )
+
+    def test_boundary_band_mask_covers_local_boundary_neighborhood(self):
+        mask_index = _make_batch()["mask_index"][:1]
+        boundary_target = mask_index_to_boundary_target(mask_index, ignore_index=-1)
+        band_mask = boundary_target_to_band_mask(boundary_target, width=2, valid_mask=mask_index != -1)
+
+        self.assertEqual(tuple(band_mask.shape), (1, 16, 16))
+        self.assertGreater(int(band_mask.sum().item()), int(boundary_target.sum().item()))
+        self.assertLess(int(band_mask.sum().item()), int(mask_index.numel()))
 
     def test_full_mask_and_high_mask_paths(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -508,6 +570,10 @@ class TokenCodeMaskGitPriorSmokeTest(unittest.TestCase):
             self.assertAlmostEqual(float(config.model.params.boundary_loss_weight), 0.25)
             self.assertAlmostEqual(float(config.model.params.area_ratio_loss_weight), 0.10)
             self.assertAlmostEqual(float(config.model.params.adjacency_loss_weight), 0.10)
+            self.assertAlmostEqual(float(config.model.params.same_region_consistency_weight), 0.25)
+            self.assertEqual(int(config.model.params.boundary_band_width), 2)
+            self.assertAlmostEqual(float(config.model.params.boundary_band_ce_weight), 1.0)
+            self.assertAlmostEqual(float(config.model.params.boundary_band_dice_weight), 0.5)
             backbone_params = config.model.params.backbone_config.params
             self.assertEqual(int(backbone_params.n_layer), expected["n_layer"])
             self.assertEqual(int(backbone_params.n_head), expected["n_head"])

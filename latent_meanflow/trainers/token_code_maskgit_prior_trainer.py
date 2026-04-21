@@ -12,9 +12,11 @@ from ldm.util import instantiate_from_config
 from latent_meanflow.losses.semantic_structure import (
     adjacency_l1_loss,
     area_ratio_l1_loss,
+    boundary_target_to_band_mask,
     boundary_bce_loss,
     build_valid_mask,
     mask_index_to_boundary_target,
+    same_region_consistency_l1_loss,
     semantic_probs_to_soft_boundary,
 )
 from latent_meanflow.models.backbones.token_code_mingpt import ensure_taming_transformers_on_path
@@ -53,6 +55,10 @@ class TokenCodeMaskGitPriorTrainer(pl.LightningModule):
         boundary_loss_weight=0.25,
         area_ratio_loss_weight=0.10,
         adjacency_loss_weight=0.10,
+        same_region_consistency_weight=0.25,
+        boundary_band_width=2,
+        boundary_band_ce_weight=1.0,
+        boundary_band_dice_weight=0.5,
         weight_decay=0.01,
         optimizer_beta1=0.9,
         optimizer_beta2=0.95,
@@ -107,6 +113,10 @@ class TokenCodeMaskGitPriorTrainer(pl.LightningModule):
         self.boundary_loss_weight = float(boundary_loss_weight)
         self.area_ratio_loss_weight = float(area_ratio_loss_weight)
         self.adjacency_loss_weight = float(adjacency_loss_weight)
+        self.same_region_consistency_weight = float(same_region_consistency_weight)
+        self.boundary_band_width = max(0, int(boundary_band_width))
+        self.boundary_band_ce_weight = float(boundary_band_ce_weight)
+        self.boundary_band_dice_weight = float(boundary_band_dice_weight)
         self.weight_decay = float(weight_decay)
         self.optimizer_betas = (float(optimizer_beta1), float(optimizer_beta2))
         self.per_class_metric_logging_limit = 32
@@ -193,6 +203,18 @@ class TokenCodeMaskGitPriorTrainer(pl.LightningModule):
             )
         if not 0.0 <= self.high_mask_min_ratio <= 1.0:
             raise ValueError(f"high_mask_min_ratio must be in [0, 1], got {self.high_mask_min_ratio}")
+        for name, value in (
+            ("semantic_ce_weight", self.semantic_ce_weight),
+            ("semantic_dice_weight", self.semantic_dice_weight),
+            ("boundary_loss_weight", self.boundary_loss_weight),
+            ("area_ratio_loss_weight", self.area_ratio_loss_weight),
+            ("adjacency_loss_weight", self.adjacency_loss_weight),
+            ("same_region_consistency_weight", self.same_region_consistency_weight),
+            ("boundary_band_ce_weight", self.boundary_band_ce_weight),
+            ("boundary_band_dice_weight", self.boundary_band_dice_weight),
+        ):
+            if value < 0.0:
+                raise ValueError(f"{name} must be >= 0, got {value}")
 
     def _infer_mask_spatial_shape(self):
         probe_codes = torch.zeros((1, *self.token_spatial_shape), dtype=torch.long)
@@ -774,6 +796,9 @@ class TokenCodeMaskGitPriorTrainer(pl.LightningModule):
                 self.boundary_loss_weight,
                 self.area_ratio_loss_weight,
                 self.adjacency_loss_weight,
+                self.same_region_consistency_weight,
+                self.boundary_band_ce_weight,
+                self.boundary_band_dice_weight,
             )
         )
 
@@ -844,15 +869,22 @@ class TokenCodeMaskGitPriorTrainer(pl.LightningModule):
             mask_onehot,
             valid_mask=valid_mask,
         )
+        same_region_consistency_loss = same_region_consistency_l1_loss(
+            mask_probs,
+            mask_index,
+            valid_mask=valid_mask,
+        )
         structure_aux_total = (
             self.boundary_loss_weight * boundary_loss
             + self.area_ratio_loss_weight * area_ratio_loss
             + self.adjacency_loss_weight * adjacency_loss
+            + self.same_region_consistency_weight * same_region_consistency_loss
         )
         return {
             "boundary_loss": boundary_loss,
             "area_ratio_loss": area_ratio_loss,
             "adjacency_loss": adjacency_loss,
+            "same_region_consistency_loss": same_region_consistency_loss,
             "structure_aux_total": structure_aux_total,
             "boundary_target": boundary_target.detach(),
             "boundary_pred": boundary_pred.detach(),
@@ -860,6 +892,39 @@ class TokenCodeMaskGitPriorTrainer(pl.LightningModule):
             "target_area_ratio": target_area_ratio.detach(),
             "pred_adjacency": pred_adjacency.detach(),
             "target_adjacency": target_adjacency.detach(),
+        }
+
+    def _boundary_band_terms(self, *, mask_logits, mask_index, boundary_target):
+        if (self.boundary_band_ce_weight + self.boundary_band_dice_weight) <= 0.0:
+            return {
+                "boundary_band_semantic_ce": mask_logits.new_tensor(0.0),
+                "boundary_band_semantic_dice": mask_logits.new_tensor(0.0),
+                "boundary_band_aux_total": mask_logits.new_tensor(0.0),
+                "boundary_band_mask": torch.zeros_like(mask_index, dtype=torch.bool),
+            }
+
+        valid_mask = build_valid_mask(mask_index, ignore_index=self.ignore_index)
+        boundary_band_mask = boundary_target_to_band_mask(
+            boundary_target,
+            width=self.boundary_band_width,
+            valid_mask=valid_mask,
+        )
+        boundary_band_targets = mask_index.clone()
+        boundary_band_targets[~boundary_band_mask] = int(self.ignore_index)
+        band_losses = self.tokenizer.semantic_auxiliary_losses(
+            mask_logits=mask_logits,
+            mask_index=boundary_band_targets,
+            use_class_weights=self.semantic_ce_use_class_weights,
+        )
+        boundary_band_aux_total = (
+            self.boundary_band_ce_weight * band_losses["semantic_ce"]
+            + self.boundary_band_dice_weight * band_losses["semantic_dice"]
+        )
+        return {
+            "boundary_band_semantic_ce": band_losses["semantic_ce"],
+            "boundary_band_semantic_dice": band_losses["semantic_dice"],
+            "boundary_band_aux_total": boundary_band_aux_total,
+            "boundary_band_mask": boundary_band_mask.detach(),
         }
 
     def _sample_sequence_logits(self, token_sequence):
@@ -890,6 +955,7 @@ class TokenCodeMaskGitPriorTrainer(pl.LightningModule):
         semantic_bridge_metrics = {}
         semantic_outputs = {}
         structure_outputs = {}
+        boundary_band_outputs = {}
         if self._semantic_decode_bridge_enabled():
             code_logits = self._sequence_logits_to_code_logits(logits)
             semantic_outputs = self._semantic_auxiliary_terms(
@@ -901,7 +967,17 @@ class TokenCodeMaskGitPriorTrainer(pl.LightningModule):
                 mask_index=encoded["mask_index"],
                 mask_onehot=encoded["mask_onehot"],
             )
-            total_loss = total_loss + semantic_outputs["semantic_aux_total"] + structure_outputs["structure_aux_total"]
+            boundary_band_outputs = self._boundary_band_terms(
+                mask_logits=semantic_outputs["decoded"]["mask_logits"],
+                mask_index=encoded["mask_index"],
+                boundary_target=structure_outputs["boundary_target"],
+            )
+            total_loss = (
+                total_loss
+                + semantic_outputs["semantic_aux_total"]
+                + structure_outputs["structure_aux_total"]
+                + boundary_band_outputs["boundary_band_aux_total"]
+            )
             loss_dict.update(
                 {
                     "semantic_ce": semantic_outputs["semantic_ce"].detach(),
@@ -910,7 +986,11 @@ class TokenCodeMaskGitPriorTrainer(pl.LightningModule):
                     "boundary_loss": structure_outputs["boundary_loss"].detach(),
                     "area_ratio_loss": structure_outputs["area_ratio_loss"].detach(),
                     "adjacency_loss": structure_outputs["adjacency_loss"].detach(),
+                    "same_region_consistency_loss": structure_outputs["same_region_consistency_loss"].detach(),
                     "structure_aux_total": structure_outputs["structure_aux_total"].detach(),
+                    "boundary_band_semantic_ce": boundary_band_outputs["boundary_band_semantic_ce"].detach(),
+                    "boundary_band_semantic_dice": boundary_band_outputs["boundary_band_semantic_dice"].detach(),
+                    "boundary_band_aux_total": boundary_band_outputs["boundary_band_aux_total"].detach(),
                 }
             )
             semantic_bridge_metrics = semantic_outputs["semantic_metrics"]
@@ -959,6 +1039,7 @@ class TokenCodeMaskGitPriorTrainer(pl.LightningModule):
                 else {}
             ),
             **structure_outputs,
+            **boundary_band_outputs,
         }
 
     def _collect_log_scalars(self, split, scalars):
@@ -1105,6 +1186,10 @@ class TokenCodeMaskGitPriorTrainer(pl.LightningModule):
             f"boundary_loss_weight={self.boundary_loss_weight:.3f}, "
             f"area_ratio_loss_weight={self.area_ratio_loss_weight:.3f}, "
             f"adjacency_loss_weight={self.adjacency_loss_weight:.3f}, "
+            f"same_region_consistency_weight={self.same_region_consistency_weight:.3f}, "
+            f"boundary_band_width={self.boundary_band_width}, "
+            f"boundary_band_ce_weight={self.boundary_band_ce_weight:.3f}, "
+            f"boundary_band_dice_weight={self.boundary_band_dice_weight:.3f}, "
             f"validation_sample_metrics={self.enable_validation_sample_metrics}, "
             f"validation_sample_batch_size={self.validation_sample_batch_size}, "
             f"validation_sample_metric_batches={self.validation_sample_metric_batches}"

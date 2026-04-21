@@ -26,6 +26,10 @@ model:
     boundary_loss_weight: 0.25
     area_ratio_loss_weight: 0.10
     adjacency_loss_weight: 0.10
+    same_region_consistency_weight: 0.25
+    boundary_band_width: 2
+    boundary_band_ce_weight: 1.0
+    boundary_band_dice_weight: 0.5
     permuter_config:
       target: taming.modules.transformer.permuter.Identity
     backbone_config:

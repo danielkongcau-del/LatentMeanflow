@@ -108,6 +108,91 @@ def boundary_bce_loss(pred_boundary, target_boundary, valid_mask=None):
     return (loss * weight).sum() / weight.sum().clamp_min(1.0)
 
 
+def boundary_target_to_band_mask(boundary_target, *, width=2, valid_mask=None):
+    boundary_target = torch.as_tensor(boundary_target)
+    if boundary_target.ndim != 4 or int(boundary_target.shape[1]) != 1:
+        raise ValueError(
+            f"Expected boundary_target with shape [B, 1, H, W], got {tuple(boundary_target.shape)}"
+        )
+    width = max(0, int(width))
+    if valid_mask is None:
+        valid_mask = torch.ones(
+            (int(boundary_target.shape[0]), int(boundary_target.shape[2]), int(boundary_target.shape[3])),
+            device=boundary_target.device,
+            dtype=torch.bool,
+        )
+    else:
+        valid_mask = build_valid_mask(valid_mask, ignore_index=None)
+
+    if width <= 0:
+        return boundary_target.squeeze(1).to(dtype=torch.bool) & valid_mask
+
+    kernel_size = 2 * width + 1
+    band = F.max_pool2d(
+        boundary_target.to(dtype=torch.float32),
+        kernel_size=kernel_size,
+        stride=1,
+        padding=width,
+    )
+    return band.squeeze(1).gt(0.0) & valid_mask
+
+
+def same_region_consistency_l1_loss(pred_distribution, target_index, valid_mask=None):
+    pred_distribution = torch.as_tensor(pred_distribution)
+    target_index = torch.as_tensor(target_index, device=pred_distribution.device)
+    if pred_distribution.ndim != 4:
+        raise ValueError(
+            f"Expected pred_distribution with shape [B, K, H, W], got {tuple(pred_distribution.shape)}"
+        )
+    if target_index.ndim != 3:
+        raise ValueError(f"Expected target_index with shape [B, H, W], got {tuple(target_index.shape)}")
+    if tuple(target_index.shape) != (
+        int(pred_distribution.shape[0]),
+        int(pred_distribution.shape[2]),
+        int(pred_distribution.shape[3]),
+    ):
+        raise ValueError(
+            "Predicted distribution / target index shape mismatch: "
+            f"{tuple(pred_distribution.shape)} vs {tuple(target_index.shape)}"
+        )
+
+    if valid_mask is None:
+        valid_mask = torch.ones_like(target_index, dtype=torch.bool)
+    else:
+        valid_mask = build_valid_mask(valid_mask, ignore_index=None)
+
+    total_loss = pred_distribution.new_tensor(0.0)
+    total_weight = pred_distribution.new_tensor(0.0)
+
+    if int(pred_distribution.shape[-1]) > 1:
+        horizontal_mask = (
+            valid_mask[:, :, :-1]
+            & valid_mask[:, :, 1:]
+            & target_index[:, :, :-1].eq(target_index[:, :, 1:])
+        )
+        horizontal_diff = (
+            pred_distribution[:, :, :, :-1] - pred_distribution[:, :, :, 1:]
+        ).abs().mean(dim=1)
+        horizontal_weight = horizontal_mask.to(dtype=horizontal_diff.dtype)
+        total_loss = total_loss + (horizontal_diff * horizontal_weight).sum()
+        total_weight = total_weight + horizontal_weight.sum()
+
+    if int(pred_distribution.shape[-2]) > 1:
+        vertical_mask = (
+            valid_mask[:, :-1, :]
+            & valid_mask[:, 1:, :]
+            & target_index[:, :-1, :].eq(target_index[:, 1:, :])
+        )
+        vertical_diff = (
+            pred_distribution[:, :, :-1, :] - pred_distribution[:, :, 1:, :]
+        ).abs().mean(dim=1)
+        vertical_weight = vertical_mask.to(dtype=vertical_diff.dtype)
+        total_loss = total_loss + (vertical_diff * vertical_weight).sum()
+        total_weight = total_weight + vertical_weight.sum()
+
+    return total_loss / total_weight.clamp_min(1.0)
+
+
 def compute_class_area_ratios(mask_distribution, valid_mask=None):
     mask_distribution = torch.as_tensor(mask_distribution)
     if mask_distribution.ndim != 4:
