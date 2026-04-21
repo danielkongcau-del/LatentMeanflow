@@ -1,0 +1,78 @@
+model:
+  base_learning_rate: 1.0e-4
+  target: latent_meanflow.models.maskgit_palette_vq_tokenizer.MaskGitPaletteVQTokenizer
+  params:
+    # Diagnostic stage-1 route: fine-tune the pretrained MaskGIT image VQ tokenizer on
+    # palette-rendered semantic_mask data, then test whether the original short-token
+    # image-tokenizer logic is more prior-friendly than the project-layer semantic VQ tokenizer.
+    monitor: "val/semantic_ce"
+    pretrained_weight_path: data/maskgit_ckpts/maskgit-vqgan-imagenet-f16-256.bin
+    resolution: 256
+    num_classes: 7
+    ignore_index: -1
+    hidden_channels: 128
+    channel_mult: [1, 1, 2, 2, 4]
+    num_res_blocks: 2
+    z_channels: 256
+    codebook_size: 1024
+    codebook_dim: 256
+    commitment_cost: 0.25
+    rgb_l1_weight: 1.0
+    semantic_ce_weight: 1.0
+    semantic_dice_weight: 0.5
+    boundary_loss_weight: 0.25
+    vq_loss_weight: 1.0
+    palette_logit_scale: 64.0
+    weight_decay: 0.01
+    optimizer_beta1: 0.9
+    optimizer_beta2: 0.95
+
+data:
+  target: main.DataModuleFromConfig
+  params:
+    batch_size: 8
+    num_workers: 4
+    wrap: false
+    train:
+      target: latent_meanflow.data.semantic_palette.MultiSemanticPaletteMaskDataset
+      params:
+        roots:
+          - outputs/segmentation_teacher_data/remote_semantic_indexed
+        split: train
+        size: 256
+        mask_dir: masks
+        gray_to_class_id: configs/label_specs/remote_semantic.yaml
+        ignore_index: -1
+    validation:
+      target: latent_meanflow.data.semantic_palette.MultiSemanticPaletteMaskDataset
+      params:
+        roots:
+          - outputs/segmentation_teacher_data/remote_semantic_indexed
+        split: val
+        size: 256
+        mask_dir: masks
+        gray_to_class_id: configs/label_specs/remote_semantic.yaml
+        ignore_index: -1
+
+lightning:
+  callbacks:
+    image_logger:
+      target: latent_meanflow.callbacks.semantic_logger.SemanticPairImageLogger
+      params:
+        disabled: false
+        batch_frequency: 100
+        increase_log_steps: false
+        max_images: 4
+        log_train: true
+        log_validation: false
+        latest_only: true
+        ignore_index: -1
+  trainer:
+    benchmark: false
+    max_epochs: 200
+    limit_train_batches: 32
+    limit_val_batches: 4
+    num_sanity_val_steps: 0
+    log_every_n_steps: 1
+    accumulate_grad_batches: 1
+    strategy: ddp_find_unused_parameters_false
