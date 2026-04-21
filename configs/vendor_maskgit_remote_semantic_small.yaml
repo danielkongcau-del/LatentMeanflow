@@ -47,6 +47,7 @@ train:
     enabled: true
     num_classes: 7
     ignore_index: -1
+    supervision_size: 128
     palette_logit_scale: 64.0
     semantic_ce_weight: 0.50
     semantic_dice_weight: 0.25
