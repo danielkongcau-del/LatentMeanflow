@@ -82,7 +82,7 @@ def semantic_probs_to_soft_boundary(mask_probs, valid_mask=None):
 
 def boundary_bce_loss(pred_boundary, target_boundary, valid_mask=None):
     pred_boundary = torch.as_tensor(pred_boundary)
-    target_boundary = torch.as_tensor(target_boundary, device=pred_boundary.device, dtype=pred_boundary.dtype)
+    target_boundary = torch.as_tensor(target_boundary, device=pred_boundary.device)
     if pred_boundary.shape != target_boundary.shape:
         raise ValueError(
             f"Boundary prediction/target shape mismatch: {tuple(pred_boundary.shape)} vs {tuple(target_boundary.shape)}"
@@ -100,12 +100,20 @@ def boundary_bce_loss(pred_boundary, target_boundary, valid_mask=None):
             dtype=pred_boundary.dtype,
         )
 
-    loss = F.binary_cross_entropy(
-        pred_boundary.clamp(min=1.0e-6, max=1.0 - 1.0e-6),
-        target_boundary.clamp(min=0.0, max=1.0),
-        reduction="none",
-    )
-    return (loss * weight).sum() / weight.sum().clamp_min(1.0)
+    # BCE on probabilities is not autocast-safe; force this small block to float32.
+    with torch.autocast(device_type=pred_boundary.device.type, enabled=False):
+        pred_boundary_fp32 = pred_boundary.to(dtype=torch.float32).clamp(min=1.0e-6, max=1.0 - 1.0e-6)
+        target_boundary_fp32 = target_boundary.to(device=pred_boundary.device, dtype=torch.float32).clamp(
+            min=0.0,
+            max=1.0,
+        )
+        weight_fp32 = weight.to(dtype=torch.float32)
+        loss = F.binary_cross_entropy(
+            pred_boundary_fp32,
+            target_boundary_fp32,
+            reduction="none",
+        )
+    return (loss * weight_fp32).sum() / weight_fp32.sum().clamp_min(1.0)
 
 
 def boundary_target_to_band_mask(boundary_target, *, width=2, valid_mask=None):
