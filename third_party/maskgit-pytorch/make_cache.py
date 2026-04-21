@@ -66,7 +66,6 @@ def main():
         semantic_aux = SemanticMaskAuxiliaryLoss(
             num_classes=int(semantic_aux_conf.num_classes),
             ignore_index=semantic_aux_conf.get('ignore_index', None),
-            supervision_size=semantic_aux_conf.get('supervision_size', None),
             palette_logit_scale=float(semantic_aux_conf.get('palette_logit_scale', 64.0)),
             semantic_ce_weight=0.0,
             semantic_dice_weight=0.0,
