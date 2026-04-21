@@ -144,7 +144,11 @@ class SemanticMaskAuxiliaryLoss(nn.Module):
     def presence_losses(self, mask_probs, mask_onehot):
         pred_presence = mask_probs.amax(dim=(2, 3)).clamp(1.0e-6, 1.0 - 1.0e-6)
         target_presence = mask_onehot.amax(dim=(2, 3))
-        presence_loss = F.binary_cross_entropy(pred_presence, target_presence)
+        # BCE on probabilities is not autocast-safe; force this small block to float32.
+        with torch.autocast(device_type=pred_presence.device.type, enabled=False):
+            pred_presence_fp32 = pred_presence.to(dtype=torch.float32)
+            target_presence_fp32 = target_presence.to(device=pred_presence.device, dtype=torch.float32)
+            presence_loss = F.binary_cross_entropy(pred_presence_fp32, target_presence_fp32)
         richness_loss = torch.abs(pred_presence.sum(dim=1) - target_presence.sum(dim=1)).mean()
         return {
             "presence_loss": presence_loss,
