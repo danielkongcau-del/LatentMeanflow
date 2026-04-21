@@ -1,3 +1,4 @@
+import math
 import warnings
 from typing import Tuple, Union
 from omegaconf import OmegaConf
@@ -7,7 +8,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor, FloatTensor
 
-from diffusers import VQModel as aMUSEdVQModel
 from .maskgit.tokenizer import PretrainedTokenizer as MaskGITVQModel
 from .taming.vqmodel import VQModel as TamingVQModel
 from .llamagen.vq_model import VQModel as LlamaGenVQModel, ModelArgs as LlamaGenModelArgs
@@ -78,6 +78,7 @@ def make_vqmodel(name: str):
         return model
 
     elif 'amused' in name:
+        from diffusers import VQModel as aMUSEdVQModel
         # build model & load weights
         vq_model = aMUSEdVQModel.from_pretrained(name, subfolder='vqvae')
         # wrap model
@@ -145,6 +146,47 @@ class MaskGITVQModelWrapper(nn.Module):
         dec = self.vqmodel.decode(indices)
         return dec * 2 - 1
 
+    def decode_code_distribution(self, code_logits: Tensor = None, code_probs: Tensor = None, shape: Tuple[int, ...] = None):
+        if (code_logits is None) == (code_probs is None):
+            raise ValueError("Pass exactly one of code_logits or code_probs.")
+
+        if code_logits is not None:
+            probs = torch.softmax(code_logits.to(dtype=torch.float32), dim=-1)
+        else:
+            probs = code_probs.to(dtype=torch.float32)
+            probs = probs / probs.sum(dim=-1, keepdim=True).clamp_min(1.0e-8)
+
+        if probs.ndim != 3:
+            raise ValueError(f"Expected code distribution with shape [B, L, K], got {tuple(probs.shape)}")
+
+        batch_size, num_tokens, codebook_size = probs.shape
+        embedding = self.vqmodel.quantize.embedding.weight.to(device=probs.device, dtype=probs.dtype)
+        if int(embedding.shape[0]) != int(codebook_size):
+            raise ValueError(
+                f"Codebook size mismatch: distribution has {codebook_size} channels, "
+                f"but tokenizer embedding exposes {int(embedding.shape[0])} entries."
+            )
+
+        if shape is None:
+            side = int(math.sqrt(num_tokens))
+            if side * side != int(num_tokens):
+                raise ValueError(
+                    "Could not infer square token grid from code distribution. "
+                    f"Got num_tokens={num_tokens}."
+                )
+            height, width = side, side
+        else:
+            if len(shape) == 4:
+                _, height, width, _ = shape
+            elif len(shape) == 3:
+                _, height, width = shape
+            else:
+                raise ValueError(f"Unsupported shape for decode_code_distribution: {shape}")
+
+        quantized = torch.einsum("blk,ke->ble", probs, embedding)
+        quantized = quantized.view(batch_size, int(height), int(width), -1).permute(0, 3, 1, 2).contiguous()
+        return self.decode(quantized)
+
 
 class LlamaGenVQModelWrapper(nn.Module):
     def __init__(self, vqmodel: LlamaGenVQModel):
@@ -177,7 +219,7 @@ class LlamaGenVQModelWrapper(nn.Module):
 
 
 class aMUSEdVQModelWrapper(nn.Module):
-    def __init__(self, vqmodel: aMUSEdVQModel):
+    def __init__(self, vqmodel):
         super().__init__()
         self.vqmodel = vqmodel
 

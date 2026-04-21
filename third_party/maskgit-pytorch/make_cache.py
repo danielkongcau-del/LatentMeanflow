@@ -11,6 +11,7 @@ torch.backends.cudnn.benchmark = True
 
 from models import make_vqmodel
 from utils.data import load_data
+from utils.semantic_aux import SemanticMaskAuxiliaryLoss
 from utils.logger import get_logger
 from utils.misc import set_seed
 from utils.distributed import init_distributed_mode, is_main_process, is_dist_avail_and_initialized
@@ -59,6 +60,28 @@ def main():
     logger.info(f'Batch size per process: {args.bspp}')
     logger.info(f'Total batch size: {args.bspp * get_world_size()}')
 
+    semantic_aux_conf = OmegaConf.select(conf, 'train.semantic_aux', default=None)
+    semantic_aux = None
+    if semantic_aux_conf is not None and bool(semantic_aux_conf.get('enabled', False)):
+        semantic_aux = SemanticMaskAuxiliaryLoss(
+            num_classes=int(semantic_aux_conf.num_classes),
+            ignore_index=semantic_aux_conf.get('ignore_index', None),
+            palette_logit_scale=float(semantic_aux_conf.get('palette_logit_scale', 64.0)),
+            semantic_ce_weight=0.0,
+            semantic_dice_weight=0.0,
+            boundary_loss_weight=0.0,
+            area_ratio_loss_weight=0.0,
+            adjacency_loss_weight=0.0,
+            same_region_consistency_weight=0.0,
+            presence_loss_weight=0.0,
+            richness_loss_weight=0.0,
+            use_class_weights=False,
+        ).to(device)
+        logger.info(
+            f"Semantic cache enabled: num_classes={semantic_aux.num_classes}, "
+            f"ignore_index={semantic_aux.ignore_index}"
+        )
+
     # LOAD PRETRAINED VQMODEL
     with main_process_first():
         vqmodel = make_vqmodel(conf.vqmodel.model_name)
@@ -83,6 +106,12 @@ def main():
             B = x.shape[0]
             N = conf.data.img_size // vqmodel.downsample_factor
 
+            mask_index = None
+            mask_index_flip = None
+            if semantic_aux is not None:
+                mask_index = semantic_aux.image_to_mask_index(x)
+                mask_index_flip = mask_index.flip(dims=[2])
+
             # encode image
             enc = vqmodel.encode(x)
             h, quant, idx = enc['h'], enc['quant'], enc['indices'].reshape(B, N * N)
@@ -98,6 +127,9 @@ def main():
             h_flip = torch.cat(gather_tensor(h_flip), dim=0)
             quant_flip = torch.cat(gather_tensor(quant_flip), dim=0)
             idx_flip = torch.cat(gather_tensor(idx_flip), dim=0)
+            if mask_index is not None:
+                mask_index = torch.cat(gather_tensor(mask_index), dim=0)
+                mask_index_flip = torch.cat(gather_tensor(mask_index_flip), dim=0)
             if y is not None:
                 y = torch.cat(gather_tensor(y), dim=0)
 
@@ -109,6 +141,11 @@ def main():
                         idx=idx[i].cpu().numpy(),
                         idx_flip=idx_flip[i].cpu().numpy(),
                     )
+                    if mask_index is not None:
+                        data.update(
+                            mask_index=mask_index[i].cpu().numpy(),
+                            mask_index_flip=mask_index_flip[i].cpu().numpy(),
+                        )
                     if args.full:
                         data.update(
                             h=h[i].cpu().numpy(),

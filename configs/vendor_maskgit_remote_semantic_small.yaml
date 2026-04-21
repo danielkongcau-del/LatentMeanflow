@@ -1,0 +1,71 @@
+seed: 8888
+
+data:
+  name: cached
+  root: ../../outputs/vendor_maskgit_remote_cache
+  img_size: 256
+
+dataloader:
+  num_workers: 4
+  pin_memory: true
+  prefetch_factor: 2
+
+vqmodel:
+  model_name: maskgit-vqgan-imagenet-f16-256
+
+transformer:
+  target: models.stage2.transformer.MaskTransformer
+  params:
+    vocab_size: 1024
+    embed_dim: 512
+    n_heads: 8
+    n_layers: 8
+    n_tokens: 256
+    n_classes: 0
+    dropout: 0.1
+    mask_schedule_type: cosine
+
+train:
+  n_steps: 20000
+  batch_size: 256
+  micro_batch_size: 128
+
+  label_smoothing: 0.0
+  keep_latest_ckpt_only: true
+
+  ema:
+    decay: 0.9999
+    ema_warmup_type: crowsonkb
+    power: 0.75
+
+  print_freq: 100
+  save_freq: 1000
+  sample_freq: 200
+  n_samples: 9
+
+  semantic_aux:
+    enabled: true
+    num_classes: 7
+    ignore_index: -1
+    palette_logit_scale: 64.0
+    semantic_ce_weight: 0.50
+    semantic_dice_weight: 0.25
+    boundary_loss_weight: 0.10
+    area_ratio_loss_weight: 0.10
+    adjacency_loss_weight: 0.05
+    same_region_consistency_weight: 0.10
+    presence_loss_weight: 0.10
+    richness_loss_weight: 0.05
+    use_class_weights: true
+
+  optim:
+    target: torch.optim.AdamW
+    params:
+      lr: 0.0001
+      betas: [0.9, 0.96]
+      weight_decay: 0.045
+
+  sched:
+    target: utils.scheduler.ConstantWarmupLR
+    params:
+      warmup_steps: 1000

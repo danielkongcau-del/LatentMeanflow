@@ -17,6 +17,7 @@ from datasets import CachedFolder
 from models import make_vqmodel, EMA, MaskGITSampler
 from utils.data import load_data
 from utils.logger import get_logger
+from utils.semantic_aux import SemanticMaskAuxiliaryLoss
 from utils.tracker import StatusTracker
 from utils.misc import get_time_str, check_freq, set_seed
 from utils.experiment import create_exp_dir, find_resume_checkpoint, instantiate_from_config, discard_label
@@ -110,6 +111,39 @@ def main():
     logger.info(f'Successfully load pretrained vqmodel: {conf.vqmodel.model_name}')
     logger.info(f'Number of parameters of vqmodel: {sum(p.numel() for p in vqmodel.parameters()):,}')
 
+    semantic_aux_conf = OmegaConf.select(conf, 'train.semantic_aux', default=None)
+    semantic_aux = None
+    if semantic_aux_conf is not None and bool(semantic_aux_conf.get('enabled', False)):
+        semantic_aux = SemanticMaskAuxiliaryLoss(
+            num_classes=int(semantic_aux_conf.num_classes),
+            ignore_index=semantic_aux_conf.get('ignore_index', None),
+            palette_logit_scale=float(semantic_aux_conf.get('palette_logit_scale', 64.0)),
+            semantic_ce_weight=float(semantic_aux_conf.get('semantic_ce_weight', 1.0)),
+            semantic_dice_weight=float(semantic_aux_conf.get('semantic_dice_weight', 0.25)),
+            boundary_loss_weight=float(semantic_aux_conf.get('boundary_loss_weight', 0.10)),
+            area_ratio_loss_weight=float(semantic_aux_conf.get('area_ratio_loss_weight', 0.10)),
+            adjacency_loss_weight=float(semantic_aux_conf.get('adjacency_loss_weight', 0.10)),
+            same_region_consistency_weight=float(
+                semantic_aux_conf.get('same_region_consistency_weight', 0.10)
+            ),
+            presence_loss_weight=float(semantic_aux_conf.get('presence_loss_weight', 0.10)),
+            richness_loss_weight=float(semantic_aux_conf.get('richness_loss_weight', 0.05)),
+            use_class_weights=bool(semantic_aux_conf.get('use_class_weights', True)),
+        ).to(device)
+        logger.info(
+            'Semantic aux enabled: '
+            f'num_classes={semantic_aux.num_classes}, '
+            f'palette_logit_scale={semantic_aux.palette_logit_scale:.2f}, '
+            f'semantic_ce={semantic_aux.semantic_ce_weight:.3f}, '
+            f'semantic_dice={semantic_aux.semantic_dice_weight:.3f}, '
+            f'boundary={semantic_aux.boundary_loss_weight:.3f}, '
+            f'area_ratio={semantic_aux.area_ratio_loss_weight:.3f}, '
+            f'adjacency={semantic_aux.adjacency_loss_weight:.3f}, '
+            f'same_region={semantic_aux.same_region_consistency_weight:.3f}, '
+            f'presence={semantic_aux.presence_loss_weight:.3f}, '
+            f'richness={semantic_aux.richness_loss_weight:.3f}'
+        )
+
     # BUILD MODEL AND OPTIMIZERS
     model = instantiate_from_config(conf.transformer).to(device)
     ema = EMA(model.parameters(), **getattr(conf.train, 'ema', dict()))
@@ -122,6 +156,7 @@ def main():
     # BUILD SAMPLER
     fm_size = conf.data.img_size // vqmodel.downsample_factor  # feature map size
     sampler = MaskGITSampler(model=model, sequence_length=fm_size ** 2, sampling_steps=8, device=device)
+    keep_latest_ckpt_only = bool(conf.train.get('keep_latest_ckpt_only', False))
 
     # RESUME TRAINING
     step, epoch = 0, 0
@@ -155,6 +190,7 @@ def main():
     @on_main_process
     def save_ckpt(save_path: str):
         os.makedirs(save_path, exist_ok=True)
+        ckpt_root = os.path.dirname(save_path)
         # save model and ema model
         torch.save(dict(model=model_wo_ddp.state_dict()), os.path.join(save_path, 'model.pt'))
         with ema.scope(model.parameters()):
@@ -168,8 +204,33 @@ def main():
             step=step,
             epoch=epoch,
         ), os.path.join(save_path, 'training_states.pt'))
+        if keep_latest_ckpt_only:
+            keep_name = os.path.basename(save_path)
+            for name in os.listdir(ckpt_root):
+                candidate = os.path.join(ckpt_root, name)
+                if name == keep_name or not os.path.isdir(candidate) or not name.startswith('step'):
+                    continue
+                for root, dirs, files in os.walk(candidate, topdown=False):
+                    for file in files:
+                        os.remove(os.path.join(root, file))
+                    for directory in dirs:
+                        os.rmdir(os.path.join(root, directory))
+                os.rmdir(candidate)
 
-    def train_micro_batch(micro_batch, loss_scale, no_sync):
+    def resolve_target_mask_index(batch, *, idx=None, x=None):
+        if semantic_aux is None:
+            return None
+        if isinstance(batch, dict) and batch.get('mask_index') is not None:
+            return batch['mask_index'].long().to(device)
+        if x is not None:
+            return semantic_aux.image_to_mask_index(x).long()
+        if idx is not None:
+            with torch.no_grad():
+                target_image = vqmodel.decode_indices(idx, shape=(idx.shape[0], fm_size, fm_size, -1)).clamp(-1, 1)
+            return semantic_aux.image_to_mask_index(target_image).long()
+        return None
+
+    def train_micro_batch(micro_batch, target_mask_micro_batch, loss_scale, no_sync):
         idx = micro_batch
         B, L = idx.shape
         with model.no_sync() if no_sync else nullcontext():
@@ -177,22 +238,41 @@ def main():
                 # transformer forward
                 mask = model_wo_ddp.get_random_mask(B, L)                           # (B, L)
                 masked_idx = torch.where(mask, model_wo_ddp.mask_token_id, idx)     # (B, L)
-                preds = model(masked_idx).reshape(B * L, -1)                        # (B * L, C)
+                token_logits = model(masked_idx)                                     # (B, L, C)
+                preds = token_logits.reshape(B * L, -1)                             # (B * L, C)
                 mask = mask.reshape(B * L)                                          # (B * L)
                 # cross-entropy loss
                 target = idx.reshape(-1)                                            # (B * L)
                 target = torch.where(mask, target, -100)
-                loss = F.cross_entropy(
+                code_loss = F.cross_entropy(
                     input=preds, target=target, ignore_index=-100,
                     label_smoothing=conf.train.label_smoothing,
                 )
-                loss = loss * loss_scale
+                total_loss = code_loss
+                detached_status = {
+                    'maskgit_ce': code_loss.detach(),
+                }
+                if semantic_aux is not None and target_mask_micro_batch is not None:
+                    pred_image = vqmodel.decode_code_distribution(
+                        code_logits=token_logits,
+                        shape=(B, fm_size, fm_size, -1),
+                    ).clamp(-1, 1)
+                    semantic_outputs = semantic_aux(
+                        pred_image=pred_image,
+                        target_mask_index=target_mask_micro_batch,
+                    )
+                    total_loss = total_loss + semantic_outputs['semantic_aux_total']
+                    detached_status.update(semantic_outputs['loss_dict'])
+                    detached_status.update(semantic_outputs['metrics'])
+                loss = total_loss * loss_scale
             # backward
             scaler.scale(loss).backward()
-        return loss
+        detached_status['loss'] = total_loss.detach()
+        return loss, detached_status
 
     def train_step(batch):
         # get data
+        x = None
         if isinstance(train_set, CachedFolder):
             idx = batch['idx'].long().to(device)
             B, L = idx.shape
@@ -203,18 +283,30 @@ def main():
             # vqmodel encode
             with torch.no_grad():
                 idx = vqmodel.encode(x)['indices'].reshape(B, L)
+        target_mask_index = resolve_target_mask_index(batch, idx=idx, x=x)
 
         # zero the gradients
         optimizer.zero_grad()
 
         # forward and backward with gradient accumulation
         loss = torch.tensor(0., device=device)
+        aggregated_status = {}
         for i in range(0, B, micro_batch_size):
             idx_micro_batch = idx[i:i+micro_batch_size]
+            target_mask_micro_batch = None if target_mask_index is None else target_mask_index[i:i+micro_batch_size]
             loss_scale = idx_micro_batch.shape[0] / B
             no_sync = i + micro_batch_size < B and is_dist_avail_and_initialized()
-            loss_micro_batch = train_micro_batch(idx_micro_batch, loss_scale, no_sync)
+            loss_micro_batch, status_micro_batch = train_micro_batch(
+                idx_micro_batch,
+                target_mask_micro_batch,
+                loss_scale,
+                no_sync,
+            )
             loss = loss + loss_micro_batch
+            for name, value in status_micro_batch.items():
+                if isinstance(value, torch.Tensor):
+                    value = float(value.detach().cpu().item())
+                aggregated_status[name] = aggregated_status.get(name, 0.0) + float(value) * loss_scale
 
         # optimize
         if conf.train.get('clip_grad_norm', None):
@@ -224,7 +316,9 @@ def main():
         scaler.update()
         ema.update(model.parameters())
         scheduler.step()
-        return dict(loss=loss.item(), lr=optimizer.param_groups[0]['lr'])
+        aggregated_status['loss'] = aggregated_status.get('loss', float(loss.detach().cpu().item()))
+        aggregated_status['lr'] = optimizer.param_groups[0]['lr']
+        return aggregated_status
 
     @torch.no_grad()
     def sample(savepath):

@@ -22,9 +22,11 @@ class CachedFolder(Dataset):
         data = np.load(os.path.join(self.root, self.files[index]), allow_pickle=True)
         if np.random.random() < 0.5:
             h, quant, idx = data.get('h'), data.get('quant'), data.get('idx')
+            mask_index = data.get('mask_index')
         else:
             h, quant, idx = data.get('h_flip'), data.get('quant_flip'), data.get('idx_flip')
+            mask_index = data.get('mask_index_flip')
         y = data.get('y')
-        data = dict(y=y, h=h, quant=quant, idx=idx)
+        data = dict(y=y, h=h, quant=quant, idx=idx, mask_index=mask_index)
         data = {k: v for k, v in data.items() if v is not None}
         return data
