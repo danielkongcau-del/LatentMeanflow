@@ -113,7 +113,9 @@ def main():
 
     semantic_aux_conf = OmegaConf.select(conf, 'train.semantic_aux', default=None)
     semantic_aux = None
+    semantic_aux_interval = 1
     if semantic_aux_conf is not None and bool(semantic_aux_conf.get('enabled', False)):
+        semantic_aux_interval = max(1, int(semantic_aux_conf.get('interval', 1)))
         semantic_aux = SemanticMaskAuxiliaryLoss(
             num_classes=int(semantic_aux_conf.num_classes),
             ignore_index=semantic_aux_conf.get('ignore_index', None),
@@ -135,6 +137,7 @@ def main():
             'Semantic aux enabled: '
             f'num_classes={semantic_aux.num_classes}, '
             f'supervision_size={semantic_aux.supervision_size}, '
+            f'interval={semantic_aux_interval}, '
             f'palette_logit_scale={semantic_aux.palette_logit_scale:.2f}, '
             f'semantic_ce={semantic_aux.semantic_ce_weight:.3f}, '
             f'semantic_dice={semantic_aux.semantic_dice_weight:.3f}, '
@@ -232,7 +235,7 @@ def main():
             return semantic_aux.image_to_mask_index(target_image).long()
         return None
 
-    def train_micro_batch(micro_batch, target_mask_micro_batch, loss_scale, no_sync):
+    def train_micro_batch(micro_batch, target_mask_micro_batch, loss_scale, no_sync, apply_semantic_aux):
         idx = micro_batch
         B, L = idx.shape
         with model.no_sync() if no_sync else nullcontext():
@@ -254,7 +257,7 @@ def main():
                 detached_status = {
                     'maskgit_ce': code_loss.detach(),
                 }
-                if semantic_aux is not None and target_mask_micro_batch is not None:
+                if apply_semantic_aux and semantic_aux is not None and target_mask_micro_batch is not None:
                     pred_image = vqmodel.decode_code_distribution(
                         code_logits=token_logits,
                         shape=(B, fm_size, fm_size, -1),
@@ -293,6 +296,7 @@ def main():
         # forward and backward with gradient accumulation
         loss = torch.tensor(0., device=device)
         aggregated_status = {}
+        apply_semantic_aux = semantic_aux is not None and (step % semantic_aux_interval == 0)
         for i in range(0, B, micro_batch_size):
             idx_micro_batch = idx[i:i+micro_batch_size]
             target_mask_micro_batch = None if target_mask_index is None else target_mask_index[i:i+micro_batch_size]
@@ -303,6 +307,7 @@ def main():
                 target_mask_micro_batch,
                 loss_scale,
                 no_sync,
+                apply_semantic_aux,
             )
             loss = loss + loss_micro_batch
             for name, value in status_micro_batch.items():

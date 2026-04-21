@@ -45,6 +45,7 @@ train:
 
   semantic_aux:
     enabled: true
+    interval: 4
     num_classes: 7
     ignore_index: -1
     supervision_size: 128
