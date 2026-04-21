@@ -27,8 +27,8 @@ transformer:
 
 train:
   n_steps: 20000
-  batch_size: 256
-  micro_batch_size: 128
+  batch_size: 128
+  micro_batch_size: 16
 
   label_smoothing: 0.0
   keep_latest_ckpt_only: true
@@ -41,12 +41,13 @@ train:
   print_freq: 100
   save_freq: 1000
   sample_freq: 200
-  n_samples: 9
+  n_samples: 4
 
   semantic_aux:
     enabled: true
     num_classes: 7
     ignore_index: -1
+    supervision_size: 128
     palette_logit_scale: 64.0
     semantic_ce_weight: 0.50
     semantic_dice_weight: 0.25

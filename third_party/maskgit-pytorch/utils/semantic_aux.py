@@ -29,6 +29,7 @@ class SemanticMaskAuxiliaryLoss(nn.Module):
             *,
             num_classes: int,
             ignore_index: int = None,
+            supervision_size: int = None,
             palette_logit_scale: float = 64.0,
             semantic_ce_weight: float = 1.0,
             semantic_dice_weight: float = 0.25,
@@ -43,6 +44,7 @@ class SemanticMaskAuxiliaryLoss(nn.Module):
         super().__init__()
         self.num_classes = int(num_classes)
         self.ignore_index = None if ignore_index is None else int(ignore_index)
+        self.supervision_size = None if supervision_size is None else int(supervision_size)
         self.palette_logit_scale = float(palette_logit_scale)
         self.semantic_ce_weight = float(semantic_ce_weight)
         self.semantic_dice_weight = float(semantic_dice_weight)
@@ -76,7 +78,8 @@ class SemanticMaskAuxiliaryLoss(nn.Module):
 
     def image_norm_to_unit(self, image):
         image = torch.as_tensor(image)
-        image = image.to(dtype=torch.float32)
+        if not image.is_floating_point():
+            image = image.to(dtype=torch.float32)
         if image.ndim != 4 or int(image.shape[1]) != 3:
             raise ValueError(f"Expected image with shape [B, 3, H, W], got {tuple(image.shape)}")
         if float(image.min().detach().item()) < 0.0:
@@ -92,6 +95,35 @@ class SemanticMaskAuxiliaryLoss(nn.Module):
     def image_to_mask_index(self, image):
         logits = self.image_to_mask_logits(image)
         return torch.argmax(logits, dim=1)
+
+    def prepare_supervision_inputs(self, pred_image, target_mask_index):
+        pred_image = self.image_norm_to_unit(pred_image)
+        target_mask_index = torch.as_tensor(target_mask_index, device=pred_image.device)
+        if target_mask_index.ndim != 3:
+            raise ValueError(
+                f"Expected target_mask_index with shape [B, H, W], got {tuple(target_mask_index.shape)}"
+            )
+
+        if self.supervision_size is None:
+            return pred_image, target_mask_index.long()
+
+        current_size = int(pred_image.shape[-1])
+        if current_size == self.supervision_size and int(pred_image.shape[-2]) == self.supervision_size:
+            return pred_image, target_mask_index.long()
+
+        pred_image = F.interpolate(
+            pred_image,
+            size=(self.supervision_size, self.supervision_size),
+            mode="bilinear",
+            align_corners=False,
+            antialias=True,
+        )
+        target_mask_index = F.interpolate(
+            target_mask_index.unsqueeze(1).to(dtype=torch.float32),
+            size=(self.supervision_size, self.supervision_size),
+            mode="nearest",
+        ).squeeze(1).long()
+        return pred_image, target_mask_index
 
     def mask_index_to_onehot(self, mask_index):
         mask_index = torch.as_tensor(mask_index)
@@ -192,6 +224,7 @@ class SemanticMaskAuxiliaryLoss(nn.Module):
         }
 
     def forward(self, *, pred_image, target_mask_index):
+        pred_image, target_mask_index = self.prepare_supervision_inputs(pred_image, target_mask_index)
         mask_logits = self.image_to_mask_logits(pred_image)
         mask_probs = torch.softmax(mask_logits, dim=1)
         mask_onehot = self.mask_index_to_onehot(target_mask_index)
@@ -248,14 +281,4 @@ class SemanticMaskAuxiliaryLoss(nn.Module):
                 "semantic_aux_total": semantic_aux_total.detach(),
             },
             "metrics": metrics,
-            "artifacts": {
-                "boundary_pred": boundary_pred.detach(),
-                "boundary_target": boundary_target.detach(),
-                "pred_area_ratio": pred_area_ratio.detach(),
-                "target_area_ratio": target_area_ratio.detach(),
-                "pred_adjacency": pred_adjacency.detach(),
-                "target_adjacency": target_adjacency.detach(),
-                "pred_presence": presence_outputs["pred_presence"],
-                "target_presence": presence_outputs["target_presence"],
-            },
         }

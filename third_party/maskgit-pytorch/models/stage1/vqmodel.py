@@ -151,9 +151,9 @@ class MaskGITVQModelWrapper(nn.Module):
             raise ValueError("Pass exactly one of code_logits or code_probs.")
 
         if code_logits is not None:
-            probs = torch.softmax(code_logits.to(dtype=torch.float32), dim=-1)
+            probs = torch.softmax(code_logits, dim=-1)
         else:
-            probs = code_probs.to(dtype=torch.float32)
+            probs = code_probs
             probs = probs / probs.sum(dim=-1, keepdim=True).clamp_min(1.0e-8)
 
         if probs.ndim != 3:
