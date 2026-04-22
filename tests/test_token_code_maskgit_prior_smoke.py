@@ -548,6 +548,18 @@ class TokenCodeMaskGitPriorSmokeTest(unittest.TestCase):
                 "n_head": 8,
                 "n_embd": 256,
             },
+            REPO_ROOT / "configs" / "token_code_maskgit_f16_cb256.yaml": {
+                "tokenizer_config_path": "configs/semantic_mask_vq_tokenizer_main_balanced_f16_cb256_256.yaml",
+                "n_layer": 8,
+                "n_head": 8,
+                "n_embd": 256,
+            },
+            REPO_ROOT / "configs" / "token_code_maskgit_f16_cb128.yaml": {
+                "tokenizer_config_path": "configs/semantic_mask_vq_tokenizer_main_balanced_f16_cb128_256.yaml",
+                "n_layer": 8,
+                "n_head": 8,
+                "n_embd": 256,
+            },
         }
         for config_path, expected in expected_backbones.items():
             config = OmegaConf.load(config_path)

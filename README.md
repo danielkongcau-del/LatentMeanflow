@@ -157,6 +157,8 @@ Checked-in discrete tokenizer configs:
 - `configs/semantic_mask_vq_tokenizer_main_stable_256.yaml`
 - `configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml`
 - `configs/semantic_mask_vq_tokenizer_main_balanced_f16_256.yaml`
+- `configs/semantic_mask_vq_tokenizer_main_balanced_f16_cb256_256.yaml`
+- `configs/semantic_mask_vq_tokenizer_main_balanced_f16_cb128_256.yaml`
 - `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_1_256.yaml`
 - `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_4_256.yaml`
 - `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_1_hifi_256.yaml`
@@ -211,6 +213,17 @@ Compressed prior-friendly config:
 - checkpoint monitor:
   `val/mask_ce_unweighted`
 
+Smaller-codebook f16 ablations:
+
+- `configs/semantic_mask_vq_tokenizer_main_balanced_f16_cb256_256.yaml`
+- same `16x16` code grid as the f16 route, but `codebook_size=256`
+- first test of whether a smaller semantic vocabulary makes the downstream
+  prior easier to learn without collapsing reconstruction
+
+- `configs/semantic_mask_vq_tokenizer_main_balanced_f16_cb128_256.yaml`
+- same `16x16` code grid as the f16 route, but `codebook_size=128`
+- stronger simplification test for the prior-friendly tokenizer hypothesis
+
 Train the tiny discrete tokenizer sanity route:
 
 ```bash
@@ -233,6 +246,14 @@ Train the compressed prior-friendly discrete tokenizer candidate:
 
 ```bash
 python scripts/train_semantic_mask_vq_tokenizer.py --config configs/semantic_mask_vq_tokenizer_main_balanced_f16_256.yaml --scale-lr true --gpus 0
+```
+
+Train the smaller-codebook f16 tokenizer ablations:
+
+```bash
+python scripts/train_semantic_mask_vq_tokenizer.py --config configs/semantic_mask_vq_tokenizer_main_balanced_f16_cb256_256.yaml --scale-lr true --gpus 0
+
+python scripts/train_semantic_mask_vq_tokenizer.py --config configs/semantic_mask_vq_tokenizer_main_balanced_f16_cb128_256.yaml --scale-lr true --gpus 0
 ```
 
 Train the deliberate overfit `memorize_1` discrete tokenizer diagnostic:
@@ -423,6 +444,8 @@ parallel control:
 - `configs/token_code_maskgit_tiny.yaml`
 - `configs/token_code_maskgit.yaml`
 - `configs/token_code_maskgit_f16.yaml`
+- `configs/token_code_maskgit_f16_cb256.yaml`
+- `configs/token_code_maskgit_f16_cb128.yaml`
 
 The new `f16` pairing keeps the self-authored semantic tokenizer contract but
 switches the frozen tokenizer to the `16x16` code-grid variant so the MaskGIT
@@ -432,6 +455,14 @@ Train the `f16` MaskGIT token-code pilot:
 
 ```bash
 python scripts/train_token_code_maskgit_prior.py --config configs/token_code_maskgit_f16.yaml --tokenizer-config configs/semantic_mask_vq_tokenizer_main_balanced_f16_256.yaml --tokenizer-ckpt /path/to/semantic_mask_vq_tokenizer_balanced_f16.ckpt --scale-lr true --gpus 0
+```
+
+Train the smaller-codebook f16 MaskGIT ablations:
+
+```bash
+python scripts/train_token_code_maskgit_prior.py --config configs/token_code_maskgit_f16_cb256.yaml --tokenizer-config configs/semantic_mask_vq_tokenizer_main_balanced_f16_cb256_256.yaml --tokenizer-ckpt /path/to/semantic_mask_vq_tokenizer_balanced_f16_cb256.ckpt --scale-lr true --gpus 0
+
+python scripts/train_token_code_maskgit_prior.py --config configs/token_code_maskgit_f16_cb128.yaml --tokenizer-config configs/semantic_mask_vq_tokenizer_main_balanced_f16_cb128_256.yaml --tokenizer-ckpt /path/to/semantic_mask_vq_tokenizer_balanced_f16_cb128.ckpt --scale-lr true --gpus 0
 ```
 
 #### Continuous Mask-Only Semantic Tokenizer Control

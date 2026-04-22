@@ -1,0 +1,92 @@
+model:
+  base_learning_rate: 1.0e-4
+  target: latent_meanflow.trainers.token_code_maskgit_prior_trainer.TokenCodeMaskGitPriorTrainer
+  params:
+    # Canonical MaskGIT-style prior paired with the f16 cb128 semantic tokenizer.
+    objective_name: token_code_maskgit
+    monitor: val/sampled_monitor_error
+    tokenizer_config_path: configs/semantic_mask_vq_tokenizer_main_balanced_f16_cb128_256.yaml
+    tokenizer_ckpt_path: null
+    freeze_tokenizer: true
+    tokenizer_sample_posterior: false
+    log_sample_nfe: 8
+    corruption_mode: exact_count
+    full_mask_batch_fraction: 0.25
+    high_mask_batch_fraction: 0.50
+    high_mask_min_ratio: 0.85
+    label_smoothing: 0.1
+    sample_temperature: 1.0
+    sample_top_k: null
+    sample_base_gumbel_temp: 4.5
+    semantic_ce_weight: 1.0
+    semantic_ce_use_class_weights: true
+    semantic_dice_weight: 0.5
+    boundary_loss_weight: 0.25
+    area_ratio_loss_weight: 0.10
+    adjacency_loss_weight: 0.10
+    same_region_consistency_weight: 0.25
+    boundary_band_width: 2
+    boundary_band_ce_weight: 1.0
+    boundary_band_dice_weight: 0.5
+    permuter_config:
+      target: taming.modules.transformer.permuter.Identity
+    backbone_config:
+      target: latent_meanflow.models.backbones.token_code_maskgit_transformer.TokenCodeMaskGitTransformerBackbone
+      params:
+        n_layer: 8
+        n_head: 8
+        n_embd: 256
+        embd_pdrop: 0.0
+        resid_pdrop: 0.0
+        attn_pdrop: 0.0
+        mask_schedule_type: cosine
+
+data:
+  target: main.DataModuleFromConfig
+  params:
+    batch_size: 2
+    num_workers: 0
+    wrap: false
+    train:
+      target: latent_meanflow.data.semantic_mask.MultiSemanticMaskDataset
+      params:
+        roots:
+          - outputs/segmentation_teacher_data/remote_semantic_indexed
+        split: train
+        size: 256
+        mask_dir: masks
+        gray_to_class_id: configs/label_specs/remote_semantic.yaml
+        ignore_index: -1
+    validation:
+      target: latent_meanflow.data.semantic_mask.MultiSemanticMaskDataset
+      params:
+        roots:
+          - outputs/segmentation_teacher_data/remote_semantic_indexed
+        split: val
+        size: 256
+        mask_dir: masks
+        gray_to_class_id: configs/label_specs/remote_semantic.yaml
+        ignore_index: -1
+
+lightning:
+  callbacks:
+    image_logger:
+      target: latent_meanflow.callbacks.semantic_logger.SemanticPairImageLogger
+      params:
+        disabled: false
+        batch_frequency: 100
+        increase_log_steps: false
+        max_images: 4
+        log_train: true
+        log_validation: false
+        latest_only: true
+        ignore_index: -1
+  trainer:
+    benchmark: false
+    max_epochs: 200
+    limit_train_batches: 32
+    limit_val_batches: 4
+    num_sanity_val_steps: 0
+    log_every_n_steps: 1
+    accumulate_grad_batches: 1
+    strategy: ddp_find_unused_parameters_false
