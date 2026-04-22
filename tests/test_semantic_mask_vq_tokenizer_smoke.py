@@ -250,6 +250,24 @@ class SemanticMaskVQTokenizerSmokeTest(unittest.TestCase):
         self.assertEqual(model.latent_spatial_shape, (64, 64))
         self.assertEqual(str(model.loss.class_balance_mode), "inverse_sqrt_frequency")
 
+    def test_main_balanced_f16_config_contract(self):
+        config = OmegaConf.load(REPO_ROOT / "configs" / "semantic_mask_vq_tokenizer_main_balanced_f16_256.yaml")
+        self.assertEqual(
+            config.model.target,
+            "latent_meanflow.models.semantic_mask_vq_autoencoder.SemanticMaskVQAutoencoder",
+        )
+        self.assertEqual(str(config.model.params.monitor), "val/mask_ce_unweighted")
+        self.assertEqual(int(config.model.params.codebook_size), 512)
+        self.assertEqual(list(config.model.params.ddconfig.ch_mult), [1, 2, 4, 4, 4])
+        self.assertEqual(int(config.model.params.ddconfig.num_res_blocks), 2)
+        self.assertEqual(str(config.model.params.lossconfig.params.class_balance_mode), "inverse_sqrt_frequency")
+        self.assertTrue(bool(config.model.params.ddconfig.use_linear_attn))
+
+        model = instantiate_from_config(config.model)
+        self.assertEqual(model.codebook_size, 512)
+        self.assertEqual(model.latent_spatial_shape, (16, 16))
+        self.assertEqual(str(model.loss.class_balance_mode), "inverse_sqrt_frequency")
+
     def test_hifi_memorize_config_contract(self):
         config = OmegaConf.load(REPO_ROOT / "configs" / "diagnostics" / "semantic_mask_vq_tokenizer_memorize_4_hifi_256.yaml")
         self.assertEqual(

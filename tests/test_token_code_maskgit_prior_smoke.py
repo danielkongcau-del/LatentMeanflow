@@ -531,11 +531,19 @@ class TokenCodeMaskGitPriorSmokeTest(unittest.TestCase):
     def test_main_configs_pin_balanced_tokenizer_and_identity_permuter(self):
         expected_backbones = {
             REPO_ROOT / "configs" / "token_code_maskgit_tiny.yaml": {
+                "tokenizer_config_path": "configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml",
                 "n_layer": 4,
                 "n_head": 4,
                 "n_embd": 128,
             },
             REPO_ROOT / "configs" / "token_code_maskgit.yaml": {
+                "tokenizer_config_path": "configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml",
+                "n_layer": 8,
+                "n_head": 8,
+                "n_embd": 256,
+            },
+            REPO_ROOT / "configs" / "token_code_maskgit_f16.yaml": {
+                "tokenizer_config_path": "configs/semantic_mask_vq_tokenizer_main_balanced_f16_256.yaml",
                 "n_layer": 8,
                 "n_head": 8,
                 "n_embd": 256,
@@ -549,7 +557,7 @@ class TokenCodeMaskGitPriorSmokeTest(unittest.TestCase):
             )
             self.assertEqual(
                 str(config.model.params.tokenizer_config_path),
-                "configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml",
+                expected["tokenizer_config_path"],
             )
             self.assertEqual(str(config.model.params.monitor), "val/sampled_monitor_error")
             self.assertIsNone(config.model.params.tokenizer_ckpt_path)

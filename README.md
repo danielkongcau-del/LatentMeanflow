@@ -156,6 +156,7 @@ Checked-in discrete tokenizer configs:
 - `configs/semantic_mask_vq_tokenizer_main_256.yaml`
 - `configs/semantic_mask_vq_tokenizer_main_stable_256.yaml`
 - `configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml`
+- `configs/semantic_mask_vq_tokenizer_main_balanced_f16_256.yaml`
 - `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_1_256.yaml`
 - `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_4_256.yaml`
 - `configs/diagnostics/semantic_mask_vq_tokenizer_memorize_1_hifi_256.yaml`
@@ -166,6 +167,8 @@ Current discrete tokenizer geometry:
 - tiny token grid: `64x64`
 - main token grid: `64x64`
 - token sequence length: `4096`
+- compressed prior-friendly token grid: `16x16`
+- compressed prior-friendly sequence length: `256`
 - tiny codebook size: `64`
 - main codebook size: `512`
 - high-fidelity overfit token grid: `128x128`
@@ -198,6 +201,16 @@ Tail-aware main config:
 - checkpoint monitor:
   `val/mask_ce_unweighted`
 
+Compressed prior-friendly config:
+
+- `configs/semantic_mask_vq_tokenizer_main_balanced_f16_256.yaml`
+- keeps the same stabilized balanced VQ path and codebook size
+- increases tokenizer downsampling to `f16`, producing a `16x16` code grid
+- intended for MaskGIT-style priors that struggled with `64x64 / 4096` token
+  sequences
+- checkpoint monitor:
+  `val/mask_ce_unweighted`
+
 Train the tiny discrete tokenizer sanity route:
 
 ```bash
@@ -214,6 +227,12 @@ Train the class-balanced main discrete tokenizer candidate:
 
 ```bash
 python scripts/train_semantic_mask_vq_tokenizer.py --config configs/semantic_mask_vq_tokenizer_main_balanced_256.yaml --scale-lr true --gpus 0
+```
+
+Train the compressed prior-friendly discrete tokenizer candidate:
+
+```bash
+python scripts/train_semantic_mask_vq_tokenizer.py --config configs/semantic_mask_vq_tokenizer_main_balanced_f16_256.yaml --scale-lr true --gpus 0
 ```
 
 Train the deliberate overfit `memorize_1` discrete tokenizer diagnostic:
@@ -395,6 +414,25 @@ fallback to `last.ckpt` for reporting. Sample and eval summaries now also write
 route metadata such as `refinement_mode`, `corruption_mode`, and the reveal /
 lock-noise settings so refine runs and progressive-reveal controls stay
 distinguishable at the output-directory level.
+
+#### Canonical MaskGIT Token-Code Pilot
+
+The project layer also keeps a canonical MaskGIT-style token prior as a
+parallel control:
+
+- `configs/token_code_maskgit_tiny.yaml`
+- `configs/token_code_maskgit.yaml`
+- `configs/token_code_maskgit_f16.yaml`
+
+The new `f16` pairing keeps the self-authored semantic tokenizer contract but
+switches the frozen tokenizer to the `16x16` code-grid variant so the MaskGIT
+prior only models `256` positions instead of `4096`.
+
+Train the `f16` MaskGIT token-code pilot:
+
+```bash
+python scripts/train_token_code_maskgit_prior.py --config configs/token_code_maskgit_f16.yaml --tokenizer-config configs/semantic_mask_vq_tokenizer_main_balanced_f16_256.yaml --tokenizer-ckpt /path/to/semantic_mask_vq_tokenizer_balanced_f16.ckpt --scale-lr true --gpus 0
+```
 
 #### Continuous Mask-Only Semantic Tokenizer Control
 
